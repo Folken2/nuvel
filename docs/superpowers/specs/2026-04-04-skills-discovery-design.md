@@ -11,7 +11,7 @@ Community skills follow the agentskills.io spec (designed for Claude Code, Curso
 Three new tools in `meta_agent/tools/skills_tools.py`:
 
 ### search_skills(query)
-- Runs `npx skills find <query>` and parses the output
+- Calls `GET https://skills.sh/api/search?q=<query>` — returns structured JSON (no CLI needed)
 - **Security gate:** Filters results to >= 1,000 installs only
 - Returns a list of matching skills with: name, package identifier (`owner/repo@skill`), install count, URL
 - The meta-agent uses this to discover relevant skills before writing from scratch
@@ -100,8 +100,9 @@ The pipeline is implemented as a pure function: `adapt_skill_for_adk(source_dir)
 - scaffold.py, templates, plugins, config, agent.py, or any other existing files
 
 ### Dependencies
-- `npx skills` CLI must be available (Node.js runtime)
-- No new Python packages — we shell out to the CLI and parse output
+- `npx skills` CLI must be available (Node.js runtime) — used by `install_skill` and `read_skill_context` for downloading
+- `search_skills` uses the skills.sh HTTP API directly (no CLI needed)
+- No new Python packages — we use `urllib` for the API and shell out to the CLI for downloads
 
 ## System Prompt Addition
 
