@@ -1,0 +1,42 @@
+"""
+Agent instruction builder for {{agent_name}}.
+"""
+
+import logging
+from pathlib import Path
+
+from ..utils.date_utils import get_current_date_info, format_current_date
+
+logger = logging.getLogger(__name__)
+
+_CONTEXTS_DIR = Path(__file__).parent.parent / "contexts"
+
+
+def _load_context() -> str:
+    """Load context files from the contexts/ directory."""
+    if not _CONTEXTS_DIR.is_dir():
+        return ""
+    parts = []
+    for ctx_file in sorted(_CONTEXTS_DIR.glob("*.md")):
+        try:
+            content = ctx_file.read_text(encoding="utf-8").strip()
+            if content:
+                parts.append(content)
+        except Exception as e:
+            logger.warning("Failed to read context %s: %s", ctx_file.name, e)
+    return "\n\n".join(parts)
+
+
+async def get_agent_instruction(ctx) -> str:
+    """Generate agent instruction. ADK InstructionProvider callback."""
+    formatted_date = format_current_date()
+    context = _load_context()
+
+    context_block = ""
+    if context:
+        context_block = f"\n\n# Domain Knowledge\n\n{context}"
+
+    return f"""{{agent_system_prompt}}
+
+Today's date: {formatted_date}
+{context_block}"""

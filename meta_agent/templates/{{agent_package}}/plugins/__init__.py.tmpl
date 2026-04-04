@@ -1,0 +1,62 @@
+"""
+Plugins for the agent.
+
+Uses Google ADK's plugin system (BasePlugin) for cross-cutting concerns:
+caching, tracing, and error recovery.
+
+Pre-configured instances are exposed as module-level variables so that
+``get_fast_api_app(extra_plugins=[...])`` can load them via dotted paths.
+ADK's plugin loader checks ``isinstance(obj, BasePlugin)`` and uses
+instances directly without re-instantiating.
+"""
+
+import os
+
+from google.adk.plugins.context_filter_plugin import ContextFilterPlugin
+from google.adk.plugins.reflect_retry_tool_plugin import (
+    ReflectAndRetryToolPlugin,
+    TrackingScope,
+)
+
+from .cache_plugin import CachePlugin
+from .console_logger_plugin import ConsoleLoggerPlugin
+from .tool_events import ToolEventsPlugin
+from .resilience_plugin import ResiliencePlugin
+from .trace_plugin import TracePlugin
+
+# ── Pre-configured instances (importable as dotted paths by ADK) ─────
+
+trace = TracePlugin()
+context_filter = ContextFilterPlugin(
+    num_invocations_to_keep=int(os.getenv("CONTEXT_FILTER_KEEP", "10")),
+)
+console_logger = ConsoleLoggerPlugin()
+tool_events = ToolEventsPlugin()
+resilience = ResiliencePlugin()
+cache = CachePlugin()
+self_healing = ReflectAndRetryToolPlugin(
+    name="self_healing",
+    max_retries=3,
+    throw_exception_if_retry_exceeded=False,
+    tracking_scope=TrackingScope.INVOCATION,
+)
+
+# Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
+PLUGIN_PATHS = [
+    "{{agent_package}}.plugins.trace",
+    "{{agent_package}}.plugins.context_filter",
+    "{{agent_package}}.plugins.console_logger",
+    "{{agent_package}}.plugins.tool_events",
+    "{{agent_package}}.plugins.resilience",
+    "{{agent_package}}.plugins.cache",
+    "{{agent_package}}.plugins.self_healing",
+]
+
+__all__ = [
+    "CachePlugin",
+    "ConsoleLoggerPlugin",
+    "ToolEventsPlugin",
+    "ResiliencePlugin",
+    "TracePlugin",
+    "PLUGIN_PATHS",
+]
