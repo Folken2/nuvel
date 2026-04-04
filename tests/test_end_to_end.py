@@ -90,3 +90,32 @@ class TestEndToEnd:
         v2 = _validate_agent_impl(os.path.join(self.tmpdir, "agent-two"))
         assert v1["status"] == "ok"
         assert v2["status"] == "ok"
+
+    def test_scaffold_includes_soul_md(self):
+        """Scaffolded agents have soul/SOUL.md with correct content."""
+        scaffold_agent("soul-test-agent", output_dir=self.tmpdir, description="A soulful agent")
+        agent_dir = os.path.join(self.tmpdir, "soul-test-agent")
+
+        soul_path = os.path.join(agent_dir, "soul_test_agent", "soul", "SOUL.md")
+        assert os.path.isfile(soul_path), "soul/SOUL.md not found"
+
+        content = open(soul_path, encoding="utf-8").read()
+        assert "soul-test-agent" in content
+        assert "# Identity" in content
+        assert "# Personality" in content
+        assert "# Values" in content
+        assert "# Boundaries" in content
+        assert "# Evolution" in content
+        assert "{{" not in content  # No unresolved placeholders
+
+    def test_scaffold_prompt_loads_soul(self):
+        """Scaffolded agent's instructions.py has _load_soul function."""
+        scaffold_agent("prompt-soul-agent", output_dir=self.tmpdir)
+        agent_dir = os.path.join(self.tmpdir, "prompt-soul-agent")
+
+        instructions = open(
+            os.path.join(agent_dir, "prompt_soul_agent", "prompt", "instructions.py"),
+            encoding="utf-8",
+        ).read()
+        assert "_load_soul" in instructions
+        assert "soul" in instructions.lower()
