@@ -7,4 +7,3 @@ generated-agents/*/
 *.egg-info/
 .pytest_cache/
 data-analysis-agent/
-idees_albert/
