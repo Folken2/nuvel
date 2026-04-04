@@ -103,6 +103,11 @@ def _validate_agent_impl(agent_dir: str) -> dict:
                 if not os.path.isfile(os.path.join(skill_path, "SKILL.md")):
                     warnings.append(f"Skill directory {entry}/ missing SKILL.md")
 
+    # 7. SOUL.md should exist (warning, not error)
+    soul_file = os.path.join(package_dir, "soul", "SOUL.md")
+    if not os.path.isfile(soul_file):
+        warnings.append("Missing soul/SOUL.md — agent has no identity layer")
+
     status = "ok" if not errors else "error"
     return {
         "status": status,

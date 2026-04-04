@@ -76,6 +76,9 @@ d. `<package>/skills/<name>/SKILL.md` — Domain skills with references/
 e. `<package>/contexts/<name>.md` — Domain knowledge files
 f. `<package>/agent.py` — Wire tools + SkillToolset + prompt together
 g. `.env.example` — Update with agent-specific env vars
+h. `<package>/soul/SOUL.md` — Agent identity: personality, values, boundaries.
+   Write a SOUL.md that defines who this agent is, not what it does (that's the system prompt's job).
+   Sections: Identity (mission), Personality (tone/style), Values (priorities), Boundaries (limits), Evolution (future growth).
 
 ## 4b. Discover Existing Skills (optional)
 Before writing skills from scratch, search for community skills on skills.sh:

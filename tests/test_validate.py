@@ -45,6 +45,16 @@ class TestValidateAgentImpl(unittest.TestCase):
         self.assertTrue(any("not found" in e.lower() or "does not exist" in e.lower()
                             for e in result["errors"]))
 
+    def test_missing_soul_md_warns(self):
+        """Missing soul/SOUL.md produces a warning, not an error."""
+        soul_path = os.path.join(self.agent_dir, "test_agent", "soul", "SOUL.md")
+        if os.path.isfile(soul_path):
+            os.remove(soul_path)
+
+        result = _validate_agent_impl(self.agent_dir)
+        self.assertEqual(result["status"], "ok")  # Not an error
+        self.assertTrue(any("SOUL.md" in w for w in result["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()
