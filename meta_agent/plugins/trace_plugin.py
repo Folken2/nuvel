@@ -592,12 +592,14 @@ class TracePlugin(BasePlugin):
 
         # Update model/system_prompt on first LLM call
         if self._llm_call_index == 1:
-            self._conversation_writer._model = llm_response.model_version or ""
-            self._conversation_writer._system_prompt = self._first_system_prompt
-            self._conversation_writer._tools_available = self._first_tools_available
+            self._conversation_writer.update_run_metadata(
+                model=llm_response.model_version or "",
+                system_prompt=self._first_system_prompt,
+                tools_available=self._first_tools_available,
+            )
 
         self._conversation_writer.add_llm_call(
-            thinking=_extract_thinking(llm_response.content),
+            thinking=thinking,
             response=text,
             function_calls=function_calls,
             usage=usage,

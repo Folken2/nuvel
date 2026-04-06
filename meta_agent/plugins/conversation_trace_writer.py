@@ -77,6 +77,21 @@ class ConversationTraceWriter:
         self._timestamp_start = datetime.now(timezone.utc).isoformat()
         self._run_start = time.monotonic()
 
+    def update_run_metadata(
+        self,
+        *,
+        model: str = "",
+        system_prompt: str = "",
+        tools_available: Optional[list[str]] = None,
+    ) -> None:
+        """Update metadata that wasn't available at start_run time."""
+        if model:
+            self._model = model
+        if system_prompt:
+            self._system_prompt = system_prompt[:_MAX_SYSTEM_PROMPT_CHARS]
+        if tools_available is not None:
+            self._tools_available = tools_available
+
     def add_user_turn(self, user_input: str) -> None:
         # Close any unclosed previous turn
         if self._current_turn is not None:
