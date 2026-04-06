@@ -70,11 +70,54 @@ def _parse_ts(value: str) -> datetime:
 
 
 def _extract_text(content: Optional[types.Content]) -> Optional[str]:
-    """Extract concatenated text from a Content object."""
+    """Extract concatenated text from a Content object (excludes thinking parts)."""
     if not content or not content.parts:
         return None
-    texts = [p.text for p in content.parts if p.text]
+    texts = [p.text for p in content.parts if p.text and not p.thought]
     return "\n".join(texts) if texts else None
+
+
+def _extract_thinking(content: Optional[types.Content]) -> Optional[str]:
+    """Extract thinking/reasoning text from a Content object.
+
+    Returns text from parts marked as thought (part.thought == True).
+    Returns None if no thinking parts found.
+    """
+    if not content or not content.parts:
+        return None
+    thoughts = [p.text for p in content.parts if p.thought and p.text]
+    return "\n".join(thoughts) if thoughts else None
+
+
+def _extract_system_instruction(llm_request: LlmRequest) -> Optional[str]:
+    """Extract full system instruction text from an LLM request."""
+    if not llm_request.config or not llm_request.config.system_instruction:
+        return None
+    si = llm_request.config.system_instruction
+    if isinstance(si, str):
+        return si[:50_000]
+    if hasattr(si, "parts") and si.parts:
+        text = "\n".join(p.text or "" for p in si.parts)
+        return text[:50_000] if text else None
+    return None
+
+
+def _extract_messages(contents: Optional[list[types.Content]]) -> list[dict]:
+    """Extract message history as a list of {role, content_preview} dicts."""
+    if not contents:
+        return []
+    messages = []
+    for content in contents:
+        role = content.role or "user"
+        text = _extract_text(content)
+        fn_calls = _extract_function_calls(content)
+        preview = text[:500] if text else None
+        messages.append({
+            "role": role,
+            "content_preview": preview,
+            "has_function_calls": len(fn_calls) > 0,
+        })
+    return messages
 
 
 def _extract_function_calls(content: Optional[types.Content]) -> list[dict]:
@@ -375,6 +418,8 @@ class TracePlugin(BasePlugin):
         self._llm_count: int = 0
         self._total_prompt_tokens: int = 0
         self._total_completion_tokens: int = 0
+        self._first_system_prompt: str = ""
+        self._first_tools_available: list[str] = []
 
         if _TRACE_DB:
             logger.info("[TracePlugin] DB tracing enabled (TRACE_DB=true)")
@@ -470,22 +515,22 @@ class TracePlugin(BasePlugin):
         self._llm_starts[agent_name] = time.monotonic()
 
         tools_available = list(llm_request.tools_dict.keys()) if llm_request.tools_dict else []
-        n_messages = len(llm_request.contents) if llm_request.contents else 0
+        system_instruction = _extract_system_instruction(llm_request)
+        messages = _extract_messages(llm_request.contents)
 
-        system_instruction_chars = 0
-        if llm_request.config and llm_request.config.system_instruction:
-            si = llm_request.config.system_instruction
-            if isinstance(si, str):
-                system_instruction_chars = len(si)
-            elif hasattr(si, "parts") and si.parts:
-                system_instruction_chars = sum(len(p.text or "") for p in si.parts)
+        # Capture system prompt on first LLM call for the conversation writer
+        if self._llm_call_index == 1 and system_instruction:
+            self._first_system_prompt = system_instruction
+            self._first_tools_available = tools_available
 
         self._record("llm_request", {
             "call_index": self._llm_call_index,
             "model": llm_request.model,
-            "message_count": n_messages,
+            "message_count": len(messages),
+            "messages": messages,
             "tools_available": tools_available,
-            "system_instruction_chars": system_instruction_chars,
+            "system_instruction": _safe_serialize(system_instruction, max_len=50_000),
+            "system_instruction_chars": len(system_instruction) if system_instruction else 0,
         })
         return None
 
@@ -506,6 +551,7 @@ class TracePlugin(BasePlugin):
             self._total_completion_tokens += usage.get("completion_tokens") or 0
 
         text = _extract_text(llm_response.content)
+        thinking = _extract_thinking(llm_response.content)
         function_calls = _extract_function_calls(llm_response.content)
 
         self._record("llm_response", {
@@ -515,6 +561,7 @@ class TracePlugin(BasePlugin):
             "turn_complete": llm_response.turn_complete,
             "finish_reason": str(llm_response.finish_reason) if llm_response.finish_reason else None,
             "usage": usage,
+            "thinking": _safe_serialize(thinking, max_len=10_000),
             "response_text": _safe_serialize(text, max_len=10_000),
             "function_calls": function_calls,
         })
