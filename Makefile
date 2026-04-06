@@ -9,7 +9,9 @@ PLUGIN_FLAGS = \
 	--extra_plugins meta_agent.plugins.resilience \
 	--extra_plugins meta_agent.plugins.cache \
 	--extra_plugins meta_agent.plugins.self_healing \
-	--extra_plugins meta_agent.plugins.save_files
+	--extra_plugins meta_agent.plugins.save_files \
+	--extra_plugins meta_agent.plugins.recordings \
+	--extra_plugins meta_agent.plugins.replay
 
 .PHONY: dev dev-ui run test
 

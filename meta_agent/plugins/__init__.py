@@ -20,6 +20,8 @@ from google.adk.plugins.reflect_retry_tool_plugin import (
 from google.adk.plugins.save_files_as_artifacts_plugin import (
     SaveFilesAsArtifactsPlugin,
 )
+from google.adk.cli.plugins.recordings_plugin import RecordingsPlugin
+from google.adk.cli.plugins.replay_plugin import ReplayPlugin
 
 from .cache_plugin import CachePlugin
 from .console_logger_plugin import ConsoleLoggerPlugin
@@ -46,6 +48,8 @@ self_healing = ReflectAndRetryToolPlugin(
     tracking_scope=TrackingScope.INVOCATION,
 )
 save_files = SaveFilesAsArtifactsPlugin()
+recordings = RecordingsPlugin()
+replay = ReplayPlugin()
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
 PLUGIN_PATHS = [
@@ -58,6 +62,8 @@ PLUGIN_PATHS = [
     "meta_agent.plugins.cache",
     "meta_agent.plugins.self_healing",
     "meta_agent.plugins.save_files",
+    "meta_agent.plugins.recordings",
+    "meta_agent.plugins.replay",
 ]
 
 __all__ = [
