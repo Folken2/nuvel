@@ -7,7 +7,8 @@ PLUGIN_FLAGS = \
 	--extra_plugins meta_agent.plugins.tool_events \
 	--extra_plugins meta_agent.plugins.resilience \
 	--extra_plugins meta_agent.plugins.cache \
-	--extra_plugins meta_agent.plugins.self_healing
+	--extra_plugins meta_agent.plugins.self_healing \
+	--extra_plugins meta_agent.plugins.save_files
 
 .PHONY: dev dev-ui run test
 
