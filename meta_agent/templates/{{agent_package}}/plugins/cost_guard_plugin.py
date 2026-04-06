@@ -95,8 +95,20 @@ def calculate_cost(
 class CostGuardPlugin(BasePlugin):
     """Tracks LLM costs and enforces per-session budget limits.
 
-    Cost data is stored in session state under '_cost_guard_*' keys
-    so the trace plugin can read it.
+    Cost data is propagated to clients via ADK's session state mechanism.
+    After each LLM call, the plugin writes a ``cost_guard`` key to
+    ``callback_context.state`` with the structure::
+
+        {
+            "call_cost_usd": 0.001234,
+            "session_cost_usd": 0.005678,
+            "budget_usd": 0.50,          # 0 = unlimited
+            "blocked": false,
+            "model": "moonshotai/kimi-k2.5-0127"
+        }
+
+    Custom UIs consuming the SSE event stream can read ``state.cost_guard``
+    to display live cost info and react to budget blocks.
     """
 
     def __init__(self) -> None:
@@ -116,10 +128,20 @@ class CostGuardPlugin(BasePlugin):
         else:
             logger.warning("[CostGuard] No pricing data loaded — costs will not be tracked")
 
+    def _write_state(self, callback_context: CallbackContext, *, call_cost: float = 0, blocked: bool = False) -> None:
+        """Write cost guard state for client consumption via SSE."""
+        if hasattr(callback_context, "state"):
+            callback_context.state["cost_guard"] = {
+                "call_cost_usd": round(call_cost, 8),
+                "session_cost_usd": round(self._session_cost, 8),
+                "budget_usd": self._budget,
+                "blocked": blocked,
+                "model": self._model,
+            }
+
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> Optional[types.Content]:
-        # Reset per-run (session cost accumulates across runs)
         self._model = ""
         return None
 
@@ -135,6 +157,7 @@ class CostGuardPlugin(BasePlugin):
                 self._session_cost,
                 self._budget,
             )
+            self._write_state(callback_context, blocked=True)
             return LlmResponse(
                 content=types.Content(
                     role="model",
@@ -175,12 +198,7 @@ class CostGuardPlugin(BasePlugin):
                 self._session_cost,
                 self._model,
             )
-
-            # Store in callback state for trace plugin to pick up
-            if hasattr(callback_context, "state"):
-                callback_context.state["_cost_guard_call_cost"] = cost
-                callback_context.state["_cost_guard_session_cost"] = self._session_cost
-                callback_context.state["_cost_guard_model"] = self._model
+            self._write_state(callback_context, call_cost=cost)
         else:
             logger.debug(
                 "[CostGuard] No pricing for model '%s' — cost not tracked",
