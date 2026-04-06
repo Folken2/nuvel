@@ -6,7 +6,6 @@ using markdown file-based long-term memory.
 """
 
 from google.adk.tools import FunctionTool
-from google.adk.tools.tool_context import ToolContext
 
 from ..state.memory import (
     append_core_memory,
@@ -24,7 +23,7 @@ from ..state.memory import (
 def save_memory(
     content: str,
     topic: str = "",
-    tool_context: ToolContext = None,
+
 ) -> dict:
     """Save a piece of information to long-term memory.
 
@@ -48,7 +47,7 @@ def save_memory(
 
 def recall_memory(
     topic: str = "",
-    tool_context: ToolContext = None,
+
 ) -> dict:
     """Recall information from long-term memory.
 
@@ -57,20 +56,11 @@ def recall_memory(
 
     Args:
         topic: Optional topic to recall. If empty, returns core memory.
-               Use "list" to see all available topics.
+               Use memory_status() to see all available topics.
 
     Returns:
         Dict with the memory content.
     """
-    if topic == "list":
-        topics = list_topics()
-        return {
-            "status": "ok",
-            "topics": topics,
-            "count": len(topics),
-            "hint": "Use recall_memory(topic='<name>') to read a specific topic.",
-        }
-
     if topic:
         content = load_topic(topic)
         if not content:
@@ -95,7 +85,7 @@ def recall_memory(
 def update_memory(
     content: str,
     topic: str = "",
-    tool_context: ToolContext = None,
+
 ) -> dict:
     """Replace the full content of a memory file.
 
@@ -116,7 +106,7 @@ def update_memory(
 
 def forget_topic(
     topic: str,
-    tool_context: ToolContext = None,
+
 ) -> dict:
     """Delete a topic memory file entirely.
 
@@ -132,7 +122,7 @@ def forget_topic(
 
 
 def memory_status(
-    tool_context: ToolContext = None,
+
 ) -> dict:
     """Get memory usage statistics.
 

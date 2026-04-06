@@ -27,11 +27,21 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────────
 
-MEMORY_DIR = Path(os.getenv("MEMORY_DIR", "./memory"))
 CORE_MEMORY_FILE = "AGENT_MEMORY.md"
 TOPICS_DIR = "topics"
-MAX_CORE_MEMORY_SIZE = int(os.getenv("MEMORY_MAX_CORE_SIZE", "10000"))  # chars
-MAX_TOPIC_SIZE = int(os.getenv("MEMORY_MAX_TOPIC_SIZE", "5000"))  # chars
+
+
+def _memory_dir() -> Path:
+    """Return configured memory directory (reads env var on each call)."""
+    return Path(os.getenv("MEMORY_DIR", "./memory"))
+
+
+def _max_core_memory_size() -> int:
+    return int(os.getenv("MEMORY_MAX_CORE_SIZE", "10000"))
+
+
+def _max_topic_size() -> int:
+    return int(os.getenv("MEMORY_MAX_TOPIC_SIZE", "5000"))
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -48,9 +58,10 @@ def _slugify(text: str) -> str:
 
 def _ensure_memory_dir() -> Path:
     """Create memory directory structure if needed."""
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    (MEMORY_DIR / TOPICS_DIR).mkdir(exist_ok=True)
-    return MEMORY_DIR
+    d = _memory_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / TOPICS_DIR).mkdir(exist_ok=True)
+    return d
 
 
 def _timestamp() -> str:
@@ -66,7 +77,7 @@ def load_core_memory() -> str:
 
     Returns empty string if file doesn't exist yet.
     """
-    core_file = MEMORY_DIR / CORE_MEMORY_FILE
+    core_file = _memory_dir() / CORE_MEMORY_FILE
     if not core_file.is_file():
         return ""
     try:
@@ -87,15 +98,16 @@ def save_core_memory(content: str) -> dict:
     Returns:
         Status dict with result.
     """
-    if len(content) > MAX_CORE_MEMORY_SIZE:
+    max_size = _max_core_memory_size()
+    if len(content) > max_size:
         return {
             "status": "error",
-            "message": f"Content exceeds max size ({len(content)}/{MAX_CORE_MEMORY_SIZE} chars). "
+            "message": f"Content exceeds max size ({len(content)}/{max_size} chars). "
                        "Summarize or split into topics.",
         }
 
-    _ensure_memory_dir()
-    core_file = MEMORY_DIR / CORE_MEMORY_FILE
+    base = _ensure_memory_dir()
+    core_file = base / CORE_MEMORY_FILE
 
     try:
         core_file.write_text(content, encoding="utf-8")
@@ -121,10 +133,11 @@ def append_core_memory(entry: str) -> dict:
     timestamped = f"\n\n- [{_timestamp()}] {entry.strip()}"
     new_content = (existing + timestamped).strip()
 
-    if len(new_content) > MAX_CORE_MEMORY_SIZE:
+    max_size = _max_core_memory_size()
+    if len(new_content) > max_size:
         return {
             "status": "error",
-            "message": f"Core memory would exceed max size ({len(new_content)}/{MAX_CORE_MEMORY_SIZE} chars). "
+            "message": f"Core memory would exceed max size ({len(new_content)}/{max_size} chars). "
                        "Consider summarizing old entries or moving details to topic files.",
         }
 
@@ -136,7 +149,7 @@ def append_core_memory(entry: str) -> dict:
 
 def list_topics() -> list[str]:
     """List all topic memory files (without .md extension)."""
-    topics_dir = MEMORY_DIR / TOPICS_DIR
+    topics_dir = _memory_dir() / TOPICS_DIR
     if not topics_dir.is_dir():
         return []
     return sorted(
@@ -154,7 +167,9 @@ def load_topic(topic: str) -> str:
         Content string, or empty string if not found.
     """
     slug = _slugify(topic)
-    topic_file = MEMORY_DIR / TOPICS_DIR / f"{slug}.md"
+    if not slug:
+        return ""
+    topic_file = _memory_dir() / TOPICS_DIR / f"{slug}.md"
     if not topic_file.is_file():
         return ""
     try:
@@ -180,14 +195,15 @@ def save_topic(topic: str, content: str) -> dict:
     if not slug:
         return {"status": "error", "message": "Invalid topic name."}
 
-    if len(content) > MAX_TOPIC_SIZE:
+    max_size = _max_topic_size()
+    if len(content) > max_size:
         return {
             "status": "error",
-            "message": f"Content exceeds max topic size ({len(content)}/{MAX_TOPIC_SIZE} chars).",
+            "message": f"Content exceeds max topic size ({len(content)}/{max_size} chars).",
         }
 
-    _ensure_memory_dir()
-    topic_file = MEMORY_DIR / TOPICS_DIR / f"{slug}.md"
+    base = _ensure_memory_dir()
+    topic_file = base / TOPICS_DIR / f"{slug}.md"
 
     try:
         topic_file.write_text(content, encoding="utf-8")
@@ -217,10 +233,11 @@ def append_topic(topic: str, entry: str) -> dict:
     else:
         new_content = f"{existing}\n\n- [{_timestamp()}] {entry.strip()}"
 
-    if len(new_content) > MAX_TOPIC_SIZE:
+    max_size = _max_topic_size()
+    if len(new_content) > max_size:
         return {
             "status": "error",
-            "message": f"Topic '{slug}' would exceed max size ({len(new_content)}/{MAX_TOPIC_SIZE} chars). "
+            "message": f"Topic '{slug}' would exceed max size ({len(new_content)}/{max_size} chars). "
                        "Consider summarizing old entries.",
         }
 
@@ -237,7 +254,9 @@ def delete_topic(topic: str) -> dict:
         Status dict.
     """
     slug = _slugify(topic)
-    topic_file = MEMORY_DIR / TOPICS_DIR / f"{slug}.md"
+    if not slug:
+        return {"status": "error", "message": "Invalid topic name."}
+    topic_file = _memory_dir() / TOPICS_DIR / f"{slug}.md"
     if not topic_file.is_file():
         return {"status": "error", "message": f"Topic '{slug}' not found."}
 
@@ -290,9 +309,9 @@ def memory_stats() -> dict:
 
     return {
         "core_memory_size": len(core),
-        "core_memory_max": MAX_CORE_MEMORY_SIZE,
+        "core_memory_max": _max_core_memory_size(),
         "topic_count": len(topics),
         "topics": topic_sizes,
-        "topic_max_size": MAX_TOPIC_SIZE,
-        "memory_dir": str(MEMORY_DIR),
+        "topic_max_size": _max_topic_size(),
+        "memory_dir": str(_memory_dir()),
     }

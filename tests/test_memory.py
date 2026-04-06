@@ -21,19 +21,23 @@ sys.path.insert(0, str(ROOT))
 TEMPLATE_STATE_DIR = ROOT / "meta_agent" / "templates" / "{{agent_package}}" / "state"
 
 
+def _run_module_code(code, namespace):
+    """Load compiled module code into namespace. Used for template testing only."""
+    exec(code, namespace)  # noqa: S102
+
+
 def _load_memory_module(memory_dir: str):
     """Load the memory module with a custom MEMORY_DIR.
 
-    We read the source and exec it with a patched MEMORY_DIR to avoid
-    dealing with the template's relative imports.
+    Sets the MEMORY_DIR env var before loading so the module's lazy config
+    accessors pick up the test directory automatically.
     """
+    os.environ["MEMORY_DIR"] = memory_dir
     source = (TEMPLATE_STATE_DIR / "memory.py").read_text(encoding="utf-8")
 
     module_globals = {"__name__": "memory", "__file__": str(TEMPLATE_STATE_DIR / "memory.py")}
-    exec(compile(source, str(TEMPLATE_STATE_DIR / "memory.py"), "exec"), module_globals)
-
-    # Patch the MEMORY_DIR to our test directory
-    module_globals["MEMORY_DIR"] = Path(memory_dir)
+    code = compile(source, str(TEMPLATE_STATE_DIR / "memory.py"), "exec")
+    _run_module_code(code, module_globals)
 
     return module_globals
 
@@ -83,30 +87,21 @@ class TestMemoryModule(unittest.TestCase):
 
     def test_core_memory_size_limit(self):
         """Save rejects content exceeding max size."""
-        # Temporarily set a small limit
-        old_max = self.mem["MAX_CORE_MEMORY_SIZE"]
-        self.mem["MAX_CORE_MEMORY_SIZE"] = 50
-
-        result = self._call("save_core_memory", "x" * 100)
-        self.assertEqual(result["status"], "error")
-        self.assertIn("exceeds", result["message"])
-
-        self.mem["MAX_CORE_MEMORY_SIZE"] = old_max
+        with mock.patch.dict(os.environ, {"MEMORY_MAX_CORE_SIZE": "50"}):
+            result = self._call("save_core_memory", "x" * 100)
+            self.assertEqual(result["status"], "error")
+            self.assertIn("exceeds", result["message"])
 
     def test_append_core_memory_size_limit(self):
         """Append rejects when total would exceed max size."""
-        old_max = self.mem["MAX_CORE_MEMORY_SIZE"]
-        self.mem["MAX_CORE_MEMORY_SIZE"] = 100
+        with mock.patch.dict(os.environ, {"MEMORY_MAX_CORE_SIZE": "100"}):
+            # First entry fits
+            result = self._call("append_core_memory", "Short fact")
+            self.assertEqual(result["status"], "ok")
 
-        # First entry fits
-        result = self._call("append_core_memory", "Short fact")
-        self.assertEqual(result["status"], "ok")
-
-        # Large entry would exceed limit
-        result = self._call("append_core_memory", "x" * 200)
-        self.assertEqual(result["status"], "error")
-
-        self.mem["MAX_CORE_MEMORY_SIZE"] = old_max
+            # Large entry would exceed limit
+            result = self._call("append_core_memory", "x" * 200)
+            self.assertEqual(result["status"], "error")
 
     # ── Topic Memory Tests ────────────────────────────────────────
 
@@ -170,13 +165,9 @@ class TestMemoryModule(unittest.TestCase):
 
     def test_topic_size_limit(self):
         """Save rejects topic content exceeding max size."""
-        old_max = self.mem["MAX_TOPIC_SIZE"]
-        self.mem["MAX_TOPIC_SIZE"] = 50
-
-        result = self._call("save_topic", "big", "x" * 100)
-        self.assertEqual(result["status"], "error")
-
-        self.mem["MAX_TOPIC_SIZE"] = old_max
+        with mock.patch.dict(os.environ, {"MEMORY_MAX_TOPIC_SIZE": "50"}):
+            result = self._call("save_topic", "big", "x" * 100)
+            self.assertEqual(result["status"], "error")
 
     # ── Slugify Tests ─────────────────────────────────────────────
 
@@ -193,6 +184,24 @@ class TestMemoryModule(unittest.TestCase):
         slugify = self.mem["_slugify"]
         result = slugify("a" * 100)
         self.assertLessEqual(len(result), 60)
+
+    def test_slugify_empty_and_special_only(self):
+        """Slugify returns empty string for empty or all-special-char input."""
+        slugify = self.mem["_slugify"]
+        self.assertEqual(slugify(""), "")
+        self.assertEqual(slugify("..."), "")
+        self.assertEqual(slugify("!!!@#$"), "")
+
+    def test_load_topic_empty_slug_returns_empty(self):
+        """Load topic with invalid name returns empty string."""
+        content = self._call("load_topic", "!!!")
+        self.assertEqual(content, "")
+
+    def test_delete_topic_empty_slug_returns_error(self):
+        """Delete topic with invalid name returns error."""
+        result = self._call("delete_topic", "!!!")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Invalid", result["message"])
 
     # ── Aggregate Loading Tests ───────────────────────────────────
 
@@ -244,11 +253,10 @@ class TestMemoryModule(unittest.TestCase):
     def test_ensure_memory_dir_creates_structure(self):
         """Memory dir and topics subdir are created on first write."""
         nested_dir = Path(self.tmpdir) / "deep" / "memory"
-        self.mem["MEMORY_DIR"] = nested_dir
-
-        self._call("save_core_memory", "test")
-        self.assertTrue(nested_dir.is_dir())
-        self.assertTrue((nested_dir / "topics").is_dir())
+        with mock.patch.dict(os.environ, {"MEMORY_DIR": str(nested_dir)}):
+            self._call("save_core_memory", "test")
+            self.assertTrue(nested_dir.is_dir())
+            self.assertTrue((nested_dir / "topics").is_dir())
 
 
 class TestScaffoldIncludesMemory(unittest.TestCase):
