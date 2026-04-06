@@ -4,7 +4,11 @@ Tools for the agent.
 Add your custom tool functions here and include them in get_tools().
 """
 
+from .memory_tools import memory_tool_list
+
 
 def get_tools() -> list:
     """Return the list of tools available to the agent."""
-    return []
+    tools: list = []
+    tools.extend(memory_tool_list)
+    return tools

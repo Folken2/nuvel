@@ -22,10 +22,12 @@ from .cache_plugin import CachePlugin
 from .console_logger_plugin import ConsoleLoggerPlugin
 from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
+from .memory_plugin import MemoryPlugin
 from .trace_plugin import TracePlugin
 
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
+memory = MemoryPlugin()
 trace = TracePlugin()
 context_filter = ContextFilterPlugin(
     num_invocations_to_keep=int(os.getenv("CONTEXT_FILTER_KEEP", "10")),
@@ -43,6 +45,7 @@ self_healing = ReflectAndRetryToolPlugin(
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
 PLUGIN_PATHS = [
+    "{{agent_package}}.plugins.memory",
     "{{agent_package}}.plugins.trace",
     "{{agent_package}}.plugins.context_filter",
     "{{agent_package}}.plugins.console_logger",
@@ -53,6 +56,7 @@ PLUGIN_PATHS = [
 ]
 
 __all__ = [
+    "MemoryPlugin",
     "CachePlugin",
     "ConsoleLoggerPlugin",
     "ToolEventsPlugin",

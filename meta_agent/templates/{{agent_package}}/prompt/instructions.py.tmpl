@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from ..utils.date_utils import get_current_date_info, format_current_date
+from ..state.memory import load_all_memory
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,15 @@ async def get_agent_instruction(ctx) -> str:
     if context:
         context_block = f"\n\n# Domain Knowledge\n\n{context}"
 
+    memory_block = ""
+    try:
+        memory = load_all_memory()
+        if memory:
+            memory_block = f"\n\n# Long-Term Memory\n\n{memory}"
+    except Exception as e:
+        logger.warning("Failed to load memory: %s", e)
+
     return f"""{soul_block}{{agent_system_prompt}}
 
 Today's date: {formatted_date}
-{context_block}"""
+{context_block}{memory_block}"""
