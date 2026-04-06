@@ -45,6 +45,8 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 
+from .conversation_trace_writer import ConversationTraceWriter
+
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
     from google.adk.tools.tool_context import ToolContext
@@ -70,11 +72,54 @@ def _parse_ts(value: str) -> datetime:
 
 
 def _extract_text(content: Optional[types.Content]) -> Optional[str]:
-    """Extract concatenated text from a Content object."""
+    """Extract concatenated text from a Content object (excludes thinking parts)."""
     if not content or not content.parts:
         return None
-    texts = [p.text for p in content.parts if p.text]
+    texts = [p.text for p in content.parts if p.text and not p.thought]
     return "\n".join(texts) if texts else None
+
+
+def _extract_thinking(content: Optional[types.Content]) -> Optional[str]:
+    """Extract thinking/reasoning text from a Content object.
+
+    Returns text from parts marked as thought (part.thought == True).
+    Returns None if no thinking parts found.
+    """
+    if not content or not content.parts:
+        return None
+    thoughts = [p.text for p in content.parts if p.thought and p.text]
+    return "\n".join(thoughts) if thoughts else None
+
+
+def _extract_system_instruction(llm_request: LlmRequest) -> Optional[str]:
+    """Extract full system instruction text from an LLM request."""
+    if not llm_request.config or not llm_request.config.system_instruction:
+        return None
+    si = llm_request.config.system_instruction
+    if isinstance(si, str):
+        return si[:50_000]
+    if hasattr(si, "parts") and si.parts:
+        text = "\n".join(p.text or "" for p in si.parts)
+        return text[:50_000] if text else None
+    return None
+
+
+def _extract_messages(contents: Optional[list[types.Content]]) -> list[dict]:
+    """Extract message history as a list of {role, content_preview} dicts."""
+    if not contents:
+        return []
+    messages = []
+    for content in contents:
+        role = content.role or "user"
+        text = _extract_text(content)
+        fn_calls = _extract_function_calls(content)
+        preview = text[:500] if text else None
+        messages.append({
+            "role": role,
+            "content_preview": preview,
+            "has_function_calls": len(fn_calls) > 0,
+        })
+    return messages
 
 
 def _extract_function_calls(content: Optional[types.Content]) -> list[dict]:
@@ -366,6 +411,7 @@ class TracePlugin(BasePlugin):
         super().__init__(name="trace")
         self._file_writer = _FileWriter(_TRACE_DIR)
         self._db_writer = _DbWriter() if _TRACE_DB else None
+        self._conversation_writer = ConversationTraceWriter(trace_dir=_TRACE_DIR)
         self._run_id: str = ""
         self._session_id: str = ""
         self._run_start: float = 0
@@ -375,6 +421,8 @@ class TracePlugin(BasePlugin):
         self._llm_count: int = 0
         self._total_prompt_tokens: int = 0
         self._total_completion_tokens: int = 0
+        self._first_system_prompt: str = ""
+        self._first_tools_available: list[str] = []
 
         if _TRACE_DB:
             logger.info("[TracePlugin] DB tracing enabled (TRACE_DB=true)")
@@ -426,6 +474,31 @@ class TracePlugin(BasePlugin):
             "agent": invocation_context.agent.name,
             "user_input": _extract_text(invocation_context.user_content),
         })
+
+        # Detect skills loaded from the agent's tools
+        skills_loaded = []
+        if hasattr(invocation_context.agent, "tools") and invocation_context.agent.tools:
+            for tool in invocation_context.agent.tools:
+                if hasattr(tool, "skills"):
+                    skills_loaded = [s.name for s in tool.skills]
+                    break
+
+        self._conversation_writer.start_run(
+            conversation_id=self._run_id,
+            session_id=self._session_id,
+            agent=invocation_context.agent.name,
+            model="",  # captured on first LLM call
+            system_prompt="",  # captured on first LLM call
+            skills_loaded=skills_loaded,
+            tools_available=[],  # captured on first LLM call
+        )
+
+        # Add user turn AFTER start_run (on_user_message fires before
+        # before_run, so we'd lose the turn if we added it there)
+        user_input = _extract_text(invocation_context.user_content)
+        if user_input:
+            self._conversation_writer.add_user_turn(user_input)
+
         return None
 
     async def after_run_callback(
@@ -440,6 +513,8 @@ class TracePlugin(BasePlugin):
             "total_completion_tokens": self._total_completion_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
         })
+        if _TRACE_ENABLED:
+            self._conversation_writer.finish_run()
 
     # ── Agent lifecycle ──────────────────────────────────────────────
 
@@ -470,22 +545,22 @@ class TracePlugin(BasePlugin):
         self._llm_starts[agent_name] = time.monotonic()
 
         tools_available = list(llm_request.tools_dict.keys()) if llm_request.tools_dict else []
-        n_messages = len(llm_request.contents) if llm_request.contents else 0
+        system_instruction = _extract_system_instruction(llm_request)
+        messages = _extract_messages(llm_request.contents)
 
-        system_instruction_chars = 0
-        if llm_request.config and llm_request.config.system_instruction:
-            si = llm_request.config.system_instruction
-            if isinstance(si, str):
-                system_instruction_chars = len(si)
-            elif hasattr(si, "parts") and si.parts:
-                system_instruction_chars = sum(len(p.text or "") for p in si.parts)
+        # Capture system prompt on first LLM call for the conversation writer
+        if self._llm_call_index == 1 and system_instruction:
+            self._first_system_prompt = system_instruction
+            self._first_tools_available = tools_available
 
         self._record("llm_request", {
             "call_index": self._llm_call_index,
             "model": llm_request.model,
-            "message_count": n_messages,
+            "message_count": len(messages),
+            "messages": messages,
             "tools_available": tools_available,
-            "system_instruction_chars": system_instruction_chars,
+            "system_instruction": _safe_serialize(system_instruction, max_len=50_000),
+            "system_instruction_chars": len(system_instruction) if system_instruction else 0,
         })
         return None
 
@@ -506,6 +581,7 @@ class TracePlugin(BasePlugin):
             self._total_completion_tokens += usage.get("completion_tokens") or 0
 
         text = _extract_text(llm_response.content)
+        thinking = _extract_thinking(llm_response.content)
         function_calls = _extract_function_calls(llm_response.content)
 
         self._record("llm_response", {
@@ -515,9 +591,26 @@ class TracePlugin(BasePlugin):
             "turn_complete": llm_response.turn_complete,
             "finish_reason": str(llm_response.finish_reason) if llm_response.finish_reason else None,
             "usage": usage,
+            "thinking": _safe_serialize(thinking, max_len=10_000),
             "response_text": _safe_serialize(text, max_len=10_000),
             "function_calls": function_calls,
         })
+
+        # Update model/system_prompt on first LLM call
+        if self._llm_call_index == 1:
+            self._conversation_writer.update_run_metadata(
+                model=llm_response.model_version or "",
+                system_prompt=self._first_system_prompt,
+                tools_available=self._first_tools_available,
+            )
+
+        self._conversation_writer.add_llm_call(
+            thinking=thinking,
+            response=text,
+            function_calls=function_calls,
+            usage=usage,
+            latency_ms=latency_ms,
+        )
         return None
 
     async def on_model_error_callback(
@@ -571,6 +664,13 @@ class TracePlugin(BasePlugin):
             "duration_ms": duration_ms,
             "result": _safe_serialize(result, max_len=5000),
         })
+        self._conversation_writer.add_tool_call(
+            tool=tool.name,
+            args=tool_args,
+            result=result,
+            status="error" if is_error else "success",
+            duration_ms=duration_ms,
+        )
         return None
 
     async def on_tool_error_callback(
