@@ -451,7 +451,6 @@ class TracePlugin(BasePlugin):
         self._record("user_message", {
             "content": _extract_text(user_message),
         })
-        self._conversation_writer.add_user_turn(_extract_text(user_message) or "")
         return None
 
     # ── Run lifecycle ────────────────────────────────────────────────
@@ -493,6 +492,13 @@ class TracePlugin(BasePlugin):
             skills_loaded=skills_loaded,
             tools_available=[],  # captured on first LLM call
         )
+
+        # Add user turn AFTER start_run (on_user_message fires before
+        # before_run, so we'd lose the turn if we added it there)
+        user_input = _extract_text(invocation_context.user_content)
+        if user_input:
+            self._conversation_writer.add_user_turn(user_input)
+
         return None
 
     async def after_run_callback(
