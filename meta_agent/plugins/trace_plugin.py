@@ -45,6 +45,8 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 
+from .conversation_trace_writer import ConversationTraceWriter
+
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
     from google.adk.tools.tool_context import ToolContext
@@ -409,6 +411,7 @@ class TracePlugin(BasePlugin):
         super().__init__(name="trace")
         self._file_writer = _FileWriter(_TRACE_DIR)
         self._db_writer = _DbWriter() if _TRACE_DB else None
+        self._conversation_writer = ConversationTraceWriter(trace_dir=_TRACE_DIR)
         self._run_id: str = ""
         self._session_id: str = ""
         self._run_start: float = 0
@@ -448,6 +451,7 @@ class TracePlugin(BasePlugin):
         self._record("user_message", {
             "content": _extract_text(user_message),
         })
+        self._conversation_writer.add_user_turn(_extract_text(user_message) or "")
         return None
 
     # ── Run lifecycle ────────────────────────────────────────────────
@@ -471,6 +475,24 @@ class TracePlugin(BasePlugin):
             "agent": invocation_context.agent.name,
             "user_input": _extract_text(invocation_context.user_content),
         })
+
+        # Detect skills loaded from the agent's tools
+        skills_loaded = []
+        if hasattr(invocation_context.agent, "tools") and invocation_context.agent.tools:
+            for tool in invocation_context.agent.tools:
+                if hasattr(tool, "skills"):
+                    skills_loaded = [s.name for s in tool.skills]
+                    break
+
+        self._conversation_writer.start_run(
+            conversation_id=self._run_id,
+            session_id=self._session_id,
+            agent=invocation_context.agent.name,
+            model="",  # captured on first LLM call
+            system_prompt="",  # captured on first LLM call
+            skills_loaded=skills_loaded,
+            tools_available=[],  # captured on first LLM call
+        )
         return None
 
     async def after_run_callback(
@@ -485,6 +507,8 @@ class TracePlugin(BasePlugin):
             "total_completion_tokens": self._total_completion_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
         })
+        if _TRACE_ENABLED:
+            self._conversation_writer.finish_run()
 
     # ── Agent lifecycle ──────────────────────────────────────────────
 
@@ -565,6 +589,20 @@ class TracePlugin(BasePlugin):
             "response_text": _safe_serialize(text, max_len=10_000),
             "function_calls": function_calls,
         })
+
+        # Update model/system_prompt on first LLM call
+        if self._llm_call_index == 1:
+            self._conversation_writer._model = llm_response.model_version or ""
+            self._conversation_writer._system_prompt = self._first_system_prompt
+            self._conversation_writer._tools_available = self._first_tools_available
+
+        self._conversation_writer.add_llm_call(
+            thinking=_extract_thinking(llm_response.content),
+            response=text,
+            function_calls=function_calls,
+            usage=usage,
+            latency_ms=latency_ms,
+        )
         return None
 
     async def on_model_error_callback(
@@ -618,6 +656,13 @@ class TracePlugin(BasePlugin):
             "duration_ms": duration_ms,
             "result": _safe_serialize(result, max_len=5000),
         })
+        self._conversation_writer.add_tool_call(
+            tool=tool.name,
+            args=tool_args,
+            result=result,
+            status="error" if is_error else "success",
+            duration_ms=duration_ms,
+        )
         return None
 
     async def on_tool_error_callback(
