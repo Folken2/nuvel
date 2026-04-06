@@ -72,7 +72,41 @@ Skills are auto-discovered at startup via `SkillToolset`.
 
 Place `.md` files in `{{agent_package}}/contexts/`. They are injected into the system prompt automatically.
 
+## Plugin Chain
+
+This agent ships with 10 plugins — cross-cutting behaviors that apply to all interactions without touching agent code:
+
+| Plugin | What it does |
+|--------|-------------|
+| **CostGuardPlugin** | Tracks USD cost per LLM call, enforces per-session budget |
+| **TracePlugin** | Raw event JSONL + consolidated conversation JSON for evals |
+| **ConsoleLoggerPlugin** | Color-coded terminal output |
+| **ToolEventsPlugin** | Structured tool events for SSE streaming |
+| **ContextFilterPlugin** | Keeps last N invocations in context window |
+| **CachePlugin** | Session-scoped tool response caching with TTL |
+| **ResiliencePlugin** | Circuit breaker + rate limiting for tools |
+| **ReflectAndRetryToolPlugin** | Self-healing tool retry with LLM reflection |
+| **SaveFilesAsArtifactsPlugin** | Saves user-uploaded files as session artifacts |
+| **MemoryPlugin** | Markdown file-based long-term memory |
+
+### Cost Tracking
+
+Edit `{{agent_package}}/plugins/pricing.json` to add or update model pricing (no code changes needed):
+
+```json
+{
+  "moonshotai/kimi-k2.5": { "input": 0.0000005, "output": 0.000002 },
+  "anthropic/claude-sonnet-4": { "input": 0.000003, "output": 0.000015 }
+}
+```
+
+Prices are USD per token. The plugin auto-strips provider prefixes (`openrouter/model` matches `model`).
+
+Set `COST_GUARD_BUDGET=0.50` in `.env` to cap spending at $0.50 per session.
+
 ## Configuration
+
+### Core
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -83,15 +117,30 @@ Place `.md` files in `{{agent_package}}/contexts/`. They are injected into the s
 | `API_KEY` | (optional) | Bearer token auth |
 | `SESSION_SERVICE_URI` | (optional) | PostgreSQL for production sessions |
 
-See `.env.example` for all available variables.
+### Cost Guard
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `COST_GUARD_BUDGET` | `0` (unlimited) | Max USD per session |
+| `COST_GUARD_PRICING` | (bundled) | Path to custom `pricing.json` |
+
+### Observability
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRACE_ENABLED` | `true` | Master on/off for tracing |
+| `TRACE_DIR` | `./traces` | Directory for trace files |
+| `TRACE_DB` | `false` | Also write traces to PostgreSQL |
+
+### Memory
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_ENABLED` | `true` | Enable/disable long-term memory |
+| `MEMORY_DIR` | `./memory` | Directory for memory files |
+
+See `.env.example` for the complete list.
 
 ## Production Deployment
-
-The included plugin chain provides:
-- **Tracing** — JSONL + optional PostgreSQL traces
-- **Resilience** — Circuit breaker + rate limiting
-- **Caching** — TTL-based tool response caching
-- **Console Logger** — Color-coded terminal output
-- **Self-healing** — Automatic retry on tool failures
 
 Set `DEV_MODE=false` and provide `SESSION_SERVICE_URI` for persistent sessions.

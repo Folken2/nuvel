@@ -33,7 +33,13 @@ cp .env.example .env
 DEV_MODE=true python run_adk.py
 ```
 
-The agent runs at `http://localhost:8000`. Use the `/run_sse/` endpoint or `adk web .` for the ADK web UI.
+The agent runs at `http://localhost:8000`. Use the `/run_sse/` endpoint or the ADK web UI:
+
+```bash
+make dev-ui   # ADK web UI with all plugins loaded
+make dev      # Custom entrypoint (production-like, no UI)
+make test     # Run tests
+```
 
 ## Example
 
@@ -61,7 +67,7 @@ meta-agent/
 │   │   ├── adk-skill-creation/
 │   │   └── adk-callbacks-hitl/
 │   ├── templates/             # Production skeleton stamped out for each new agent
-│   ├── plugins/               # Trace, resilience, cache, console logger
+│   ├── plugins/               # 10 plugins (see Plugin Chain below)
 │   └── config/                # LiteLLM/OpenRouter config
 ├── scaffold.py                # CLI: python scaffold.py <agent-name>
 ├── run_adk.py                 # FastAPI server
@@ -101,7 +107,69 @@ pip install -r requirements.txt
 DEV_MODE=true python run_adk.py
 ```
 
+## Plugin Chain
+
+Every generated agent ships with a full plugin chain — cross-cutting concerns that apply to all interactions without touching agent code.
+
+| Plugin | Type | What it does |
+|--------|------|-------------|
+| **CostGuardPlugin** | Budget | Calculates USD cost per LLM call, enforces per-session budget limits |
+| **TracePlugin** | Observability | Raw event JSONL + consolidated conversation JSON for eval pipelines |
+| **ConsoleLoggerPlugin** | Observability | Color-coded terminal output for all lifecycle events |
+| **ToolEventsPlugin** | Observability | Structured tool execution events for SSE streaming |
+| **ContextFilterPlugin** | Performance | Keeps last N invocations in context window (default: 10) |
+| **CachePlugin** | Performance | Session-scoped caching for specific tools with TTL |
+| **ResiliencePlugin** | Resilience | Circuit breaker and rate limiting for tool calls |
+| **ReflectAndRetryToolPlugin** | Resilience | Self-healing tool retry with LLM reflection (max 3) |
+| **SaveFilesAsArtifactsPlugin** | Features | Saves user-uploaded files as session artifacts |
+| **MemoryPlugin** | Features | Markdown file-based long-term memory across sessions |
+
+### Cost Tracking & Budget Guard
+
+The CostGuardPlugin tracks LLM costs using a `pricing.json` config file and optionally enforces per-session budget limits.
+
+**How it works:**
+1. Each LLM call's token count is multiplied by the model's per-token price from `pricing.json`
+2. Cost is logged to the terminal and stored in traces (`cost_usd` per call, `total_cost_usd` in summary)
+3. If `COST_GUARD_BUDGET` is set and the session cost exceeds it, further LLM calls are blocked with a friendly message
+
+**Maintaining `pricing.json`:**
+
+The pricing config lives at `meta_agent/plugins/pricing.json` (or `<agent>/plugins/pricing.json` for generated agents). Edit it to add or update model pricing — no code changes needed:
+
+```json
+{
+  "moonshotai/kimi-k2.5": {
+    "input": 0.0000005,
+    "output": 0.000002
+  },
+  "anthropic/claude-sonnet-4": {
+    "input": 0.000003,
+    "output": 0.000015
+  }
+}
+```
+
+Keys are model IDs (matching what your LLM provider returns). The plugin auto-strips provider prefixes — `openrouter/moonshotai/kimi-k2.5` matches `moonshotai/kimi-k2.5`. Prices are in USD per token.
+
+To find current prices: check [OpenRouter models](https://openrouter.ai/models) or your provider's pricing page.
+
+### Traces for Self-Improvement Evals
+
+The trace system captures two layers:
+
+```
+traces/
+  2026-04-06_<session>.jsonl          # Raw events (per-event, for debugging)
+  conversations/
+    2026-04-06_<session>.json         # Consolidated record (per-conversation, for evals)
+```
+
+The consolidated JSON includes: full system prompt, user input, LLM thinking/reasoning, response, tool calls with args/results, token usage, cost, and timing — everything an eval agent needs to score quality and drive improvements.
+
 ## Configuration
+
+### Core
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -113,19 +181,54 @@ DEV_MODE=true python run_adk.py
 | `API_KEY` | (optional) | Bearer token auth |
 | `SESSION_SERVICE_URI` | (optional) | PostgreSQL for prod sessions |
 
+### Cost Guard
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `COST_GUARD_BUDGET` | `0` (unlimited) | Max USD per session. Set to e.g. `0.50` to cap spending |
+| `COST_GUARD_PRICING` | (bundled) | Path to custom `pricing.json`. Default uses the bundled file |
+
+### Observability
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRACE_ENABLED` | `true` | Master on/off for all tracing |
+| `TRACE_DIR` | `./traces` | Directory for JSONL + conversation trace files |
+| `TRACE_DB` | `false` | Also write traces to PostgreSQL (`agent_traces` table) |
+| `LOG_FORMAT` | `text` | `json` for production (structured), `text` for dev (colored) |
+| `LOG_LEVEL` | `INFO` | Logging level |
+
+### Memory
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_ENABLED` | `true` | Enable/disable long-term memory |
+| `MEMORY_DIR` | `./memory` | Directory for markdown memory files |
+| `MEMORY_MAX_CORE_SIZE` | `10000` | Max chars for core memory file |
+| `MEMORY_MAX_TOPIC_SIZE` | `5000` | Max chars per topic file |
+
+### Resilience
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TOOL_RATE_LIMIT` | `5.0` | Tool calls per second (token bucket) |
+| `TOOL_RATE_BURST` | `20` | Burst capacity for tool rate limiting |
+| `PROTECTED_TOOLS` | (none) | Comma-separated tools with circuit breaker |
+| `CONTEXT_FILTER_KEEP` | `10` | Prior invocations to keep in context window |
+
 ## Tests
 
 ```bash
-source .venv/bin/activate
-python -m pytest tests/ -v
+make test
 ```
 
-47 tests covering scaffold, file tools, validation, and end-to-end pipeline.
+133 tests covering scaffold, file tools, validation, memory, cost guard, conversation traces, and end-to-end pipeline.
 
 ## Roadmap
 
 - **V1 (current):** Local agent generation with scaffold + validate + iterate
-- **V2:** GitHub integration — create repos, push generated agents, set up CI
+- **V2:** Self-improvement eval pipeline consuming conversation traces
+- **V3:** GitHub integration — create repos, push generated agents, set up CI
 
 ## License
 
