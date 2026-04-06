@@ -1,6 +1,7 @@
 # Meta-Agent development commands
 
 PLUGIN_FLAGS = \
+	--extra_plugins meta_agent.plugins.cost_guard \
 	--extra_plugins meta_agent.plugins.trace \
 	--extra_plugins meta_agent.plugins.context_filter \
 	--extra_plugins meta_agent.plugins.console_logger \

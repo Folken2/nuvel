@@ -25,10 +25,12 @@ from .cache_plugin import CachePlugin
 from .console_logger_plugin import ConsoleLoggerPlugin
 from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
+from .cost_guard_plugin import CostGuardPlugin
 from .trace_plugin import TracePlugin
 
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
+cost_guard = CostGuardPlugin()
 trace = TracePlugin()
 context_filter = ContextFilterPlugin(
     num_invocations_to_keep=int(os.getenv("CONTEXT_FILTER_KEEP", "10")),
@@ -47,6 +49,7 @@ save_files = SaveFilesAsArtifactsPlugin()
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
 PLUGIN_PATHS = [
+    "meta_agent.plugins.cost_guard",
     "meta_agent.plugins.trace",
     "meta_agent.plugins.context_filter",
     "meta_agent.plugins.console_logger",

@@ -46,6 +46,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 
 from .conversation_trace_writer import ConversationTraceWriter
+from .cost_guard_plugin import calculate_cost, _load_pricing
 
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
@@ -423,6 +424,8 @@ class TracePlugin(BasePlugin):
         self._total_completion_tokens: int = 0
         self._first_system_prompt: str = ""
         self._first_tools_available: list[str] = []
+        self._pricing = _load_pricing()
+        self._total_cost: float = 0.0
 
         if _TRACE_DB:
             logger.info("[TracePlugin] DB tracing enabled (TRACE_DB=true)")
@@ -512,6 +515,7 @@ class TracePlugin(BasePlugin):
             "total_prompt_tokens": self._total_prompt_tokens,
             "total_completion_tokens": self._total_completion_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
+            "total_cost_usd": round(self._total_cost, 8) if self._total_cost > 0 else None,
         })
         if _TRACE_ENABLED:
             self._conversation_writer.finish_run()
@@ -580,17 +584,31 @@ class TracePlugin(BasePlugin):
             self._total_prompt_tokens += usage.get("prompt_tokens") or 0
             self._total_completion_tokens += usage.get("completion_tokens") or 0
 
+        # Calculate cost
+        model_id = llm_response.model_version or ""
+        cost_usd = None
+        if usage and self._pricing:
+            cost_usd = calculate_cost(
+                model_id,
+                usage.get("prompt_tokens") or 0,
+                usage.get("completion_tokens") or 0,
+                self._pricing,
+            )
+            if cost_usd is not None:
+                self._total_cost += cost_usd
+
         text = _extract_text(llm_response.content)
         thinking = _extract_thinking(llm_response.content)
         function_calls = _extract_function_calls(llm_response.content)
 
         self._record("llm_response", {
             "call_index": self._llm_call_index,
-            "model_version": llm_response.model_version,
+            "model_version": model_id,
             "latency_ms": latency_ms,
             "turn_complete": llm_response.turn_complete,
             "finish_reason": str(llm_response.finish_reason) if llm_response.finish_reason else None,
             "usage": usage,
+            "cost_usd": cost_usd,
             "thinking": _safe_serialize(thinking, max_len=10_000),
             "response_text": _safe_serialize(text, max_len=10_000),
             "function_calls": function_calls,
@@ -610,6 +628,7 @@ class TracePlugin(BasePlugin):
             function_calls=function_calls,
             usage=usage,
             latency_ms=latency_ms,
+            cost_usd=cost_usd,
         )
         return None
 

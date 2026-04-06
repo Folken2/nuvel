@@ -23,6 +23,7 @@ from google.adk.plugins.save_files_as_artifacts_plugin import (
 
 from .cache_plugin import CachePlugin
 from .console_logger_plugin import ConsoleLoggerPlugin
+from .cost_guard_plugin import CostGuardPlugin
 from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
 from .memory_plugin import MemoryPlugin
@@ -31,6 +32,7 @@ from .trace_plugin import TracePlugin
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
 memory = MemoryPlugin()
+cost_guard = CostGuardPlugin()
 trace = TracePlugin()
 context_filter = ContextFilterPlugin(
     num_invocations_to_keep=int(os.getenv("CONTEXT_FILTER_KEEP", "10")),
@@ -50,6 +52,7 @@ save_files = SaveFilesAsArtifactsPlugin()
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
 PLUGIN_PATHS = [
     "{{agent_package}}.plugins.memory",
+    "{{agent_package}}.plugins.cost_guard",
     "{{agent_package}}.plugins.trace",
     "{{agent_package}}.plugins.context_filter",
     "{{agent_package}}.plugins.console_logger",
