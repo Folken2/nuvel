@@ -132,23 +132,51 @@ Source: [Beyond Vector Databases](https://www.digitalocean.com/community/tutoria
 | **Context Stuffing** | Knowledge base < 200K tokens (~500 pages) | Include entire KB in prompt |
 | **Keyword/BM25 Search** | Structured docs, exact term matching | Traditional search, no embeddings |
 | **Agentic RAG** | Complex queries needing multi-step reasoning | Agent searches, reads, reasons, searches again |
+| **Karpathy's LLM Wiki** | Mid-size KB (hundreds to ~10K docs) | LLM maintains a structured wiki of interlinked .md files |
 | **Knowledge Graphs** | Relational data, entity-centric queries | Graph traversal instead of similarity search |
 | **Google Search Grounding** | Real-time/current information | Use Google Search as a built-in tool |
 
+#### Karpathy's LLM Knowledge Base (No Embeddings, No Vector DB)
+
+Source: [Karpathy's GitHub Gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), [VentureBeat](https://venturebeat.com/data/karpathy-shares-llm-knowledge-base-architecture-that-bypasses-rag-with-no)
+
+**The problem with traditional RAG:** It rediscovers knowledge from scratch on every question — there is no accumulation. Embeddings are a "black box" that humans can't read or edit.
+
+**Karpathy's alternative:**
+1. **Ingest:** Raw materials (papers, articles, repos, notes) dumped into `raw/` as Markdown
+2. **LLM Processing:** The LLM ingests new content, updates relevant wiki pages, maintains cross-references, and creates index/summary files
+3. **Health Checks:** Periodic "linting" passes where the LLM scans the wiki for inconsistencies or missing connections
+4. **Query Time:** Instead of vector similarity search, the LLM navigates via summaries and index files
+
+**Why this matters for our meta-agent:**
+- Our `contexts/` directory + `memory/` system is *already close* to this pattern
+- We could evolve it into a proper "LLM Wiki" where agents maintain their own structured knowledge
+- Every claim is traceable to a specific `.md` file a human can read/edit/delete
+- At ~100 articles / ~400K words, LLM navigation via summaries is more than sufficient
+
 **What we already have:**
 - Context files (`contexts/*.md`) — basically context stuffing
-- Memory system — markdown-based persistent state
+- Memory system (`memory/AGENT_MEMORY.md` + `topics/`) — markdown-based persistent state
+- This is already 70% of Karpathy's architecture!
+
+**What we're missing:**
+- Automated **ingest pipeline** that processes raw docs into structured wiki pages
+- **Index/summary files** that let the agent navigate large KBs efficiently
+- **Health check / linting** passes for knowledge consistency
+- **Cross-referencing** between wiki pages
 
 **What we can improve:**
 - For agents with large knowledge bases, offer a **tiered RAG strategy**:
   1. Small KB (< 100 pages): Context stuffing via `contexts/` directory (current approach)
-  2. Medium KB (100-500 pages): Keyword search + context file index
+  2. Medium KB (100-500 pages): LLM Wiki pattern — agent maintains structured .md files with indexes + cross-references
   3. Large KB (500+ pages): Vertex AI RAG Engine integration or Google Search grounding
 
 **Action items:**
-- [ ] Add a `rag-patterns` skill covering embedding-free RAG approaches
+- [ ] Add a `rag-patterns` skill covering embedding-free RAG approaches, especially Karpathy's LLM Wiki
 - [ ] During Step 1 (Discovery), ask about knowledge base size and recommend appropriate RAG strategy
 - [ ] Add Google Search grounding as a default tool option for information-seeking agents
+- [ ] Add an `ingest_document` tool template that processes raw docs into structured wiki pages
+- [ ] Add index/summary generation to the memory system for agents with large context directories
 - [ ] Add a simple keyword search tool template for medium-sized knowledge bases
 
 ---
@@ -302,5 +330,7 @@ Source: [Day 15 — A2UI](https://adventofagents.com/)
 - [Restate + Google ADK](https://www.restate.dev/blog/build-resilient-ai-agents-with-restate-and-google-adk)
 - [Model Armor — Google Cloud](https://cloud.google.com/security/products/model-armor)
 - [ADK Context Engineering](https://google.github.io/adk-docs/context/)
+- [Karpathy's LLM Knowledge Base Gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+- [Microsoft Vectorless Reasoning-Based RAG (PageIndex)](https://techcommunity.microsoft.com/blog/azuredevcommunityblog/vectorless-reasoning-based-rag-a-new-approach-to-retrieval-augmented-generation/4502238)
 - [Grokipedia — Advent of Agents](https://grokipedia.com/page/Advent_of_Agents)
 - [HowAIWorks — Advent of Agents 2025](https://howaiworks.ai/blog/google-cloud-advent-of-agents-2025)
