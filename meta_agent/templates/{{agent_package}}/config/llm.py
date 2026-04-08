@@ -32,3 +32,7 @@ REASONING_MODEL = LiteLlm(
     model=os.getenv("REASONING_MODEL", "openrouter/google/gemini-3-pro-preview"),
     extra_headers=_OPENROUTER_HEADERS,
 )
+
+# Streaming model — Gemini directly (not via LiteLLM).
+# Only used when STREAMING_ENABLED=true.
+LIVE_MODEL = os.getenv("LIVE_MODEL", "gemini-2.0-flash-live-001")
