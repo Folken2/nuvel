@@ -96,6 +96,10 @@ The description determines whether the LLM loads the skill. Be specific about **
 11. Use clear headings so the LLM can scan quickly.
 12. Keep each reference file focused — under 300 lines if possible.
 
+## Skill Design Patterns
+
+Before writing a skill from scratch, load `adk-skill-design-patterns` to identify which canonical pattern fits. The 5 patterns (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline) provide proven structures with skeleton templates. Use the decision matrix to match the agent's needs to the right pattern, then load the pattern's reference for a starting template.
+
 ## Naming Conventions
 
 - Skill directory: `kebab-case` (e.g., `security-review/`)

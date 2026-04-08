@@ -41,9 +41,16 @@ When the user mentions external integrations (APIs, services, communication tool
 Ask only the questions that aren't already answered. If the user gives a comprehensive brief, skip to Design.
 
 ## 2. Design
-Before writing any code, propose:
+Before writing any code:
+- Load `load_skill("adk-skill-design-patterns")` to understand the 5 canonical skill patterns (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline).
+- Match the user's agent to patterns using the decision matrix.
+- For each recommended pattern, load its reference for skeleton templates:
+  `load_skill_resource("adk-skill-design-patterns", "pattern-<name>.md")`
+
+Propose:
 - Which tools to create (with names and descriptions)
-- Which skills to write (with SKILL.md outlines)
+- Which skills to write, specifying which **design pattern** each follows
+  (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline) and why
 - System prompt strategy (key sections, tone)
 - Any special patterns needed (LoopAgent, ParallelAgent, etc.)
 
@@ -63,6 +70,8 @@ Load your skills for guidance, then write the custom files:
 - `load_skill("adk-prompt-engineering")` before writing prompt/instructions.py
 - `load_skill("adk-tool-creation")` before writing tools
 - `load_skill("adk-skill-creation")` before writing SKILL.md files
+- `load_skill("adk-skill-design-patterns")` before designing skills
+  → then `load_skill_resource("adk-skill-design-patterns", "pattern-<name>.md")` for each recommended pattern's skeleton template
 - `load_skill("adk-agent-patterns")` for architecture decisions
 - `load_skill("adk-callbacks-hitl")` for callbacks and HITL gates
 
