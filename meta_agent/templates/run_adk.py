@@ -16,6 +16,7 @@ import secrets
 import socket
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import uvicorn
@@ -166,45 +167,102 @@ def main() -> None:
 
     agents_dir = os.getenv("AGENTS_DIR", ".")
     dev_mode = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
+    streaming_enabled = os.getenv("STREAMING_ENABLED", "false").lower() in ("true", "1", "yes")
     port = int(os.getenv("PORT", "8000"))
 
-    print(f"[ADK] Starting server: PORT={port}, DEV_MODE={dev_mode}")
+    print(f"[ADK] Starting server: PORT={port}, DEV_MODE={dev_mode}, STREAMING={streaming_enabled}")
 
-    if dev_mode:
-        print("[ADK] DEVELOPMENT mode (in-memory sessions)")
-        app = get_fast_api_app(
-            agents_dir=agents_dir,
-            session_service_uri=None,
-            use_local_storage=False,
-            web=False,
-            a2a=False,
-            host="",
-            port=port,
-            url_prefix=None,
-            reload_agents=True,
-            extra_plugins=PLUGIN_PATHS,
+    if streaming_enabled:
+        # ── Streaming mode: build app manually for WebSocket support ──
+        from fastapi.staticfiles import StaticFiles
+        from google.adk.agents import LlmAgent
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from {{agent_package}}.streaming import mount_streaming
+        from {{agent_package}}.agent import root_agent
+        from {{agent_package}}.config.llm import LIVE_MODEL
+
+        app = FastAPI(title="{{agent_name}}")
+
+        # Session service
+        if dev_mode:
+            session_service = InMemorySessionService()
+            print("[ADK] STREAMING + DEV mode (in-memory sessions)")
+        else:
+            from google.adk.sessions import DatabaseSessionService
+            session_uri = os.getenv("SESSION_SERVICE_URI")
+            if not session_uri:
+                raise RuntimeError("SESSION_SERVICE_URI required in production.")
+            session_uri = _normalize_to_asyncpg_uri(session_uri)
+            session_service = DatabaseSessionService(
+                db_url=session_uri,
+                connect_args={"ssl": "require"},
+            )
+            print("[ADK] STREAMING + PRODUCTION mode (database)")
+
+        # Override model to Gemini for live streaming
+        live_agent = LlmAgent(
+            model=LIVE_MODEL,
+            name=root_agent.name,
+            description=root_agent.description,
+            instruction=root_agent.instruction,
+            tools=root_agent.tools,
+            sub_agents=root_agent.sub_agents,
         )
+
+        app_name = "{{agent_name}}"
+        runner = Runner(
+            app_name=app_name,
+            agent=live_agent,
+            session_service=session_service,
+        )
+
+        # Mount streaming WebSocket
+        mount_streaming(app, runner, session_service, app_name)
+
+        # Serve test client
+        static_dir = Path(__file__).parent / "static"
+        if static_dir.is_dir():
+            app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+            print(f"[ADK] Test client: http://0.0.0.0:{port}/static/test_client.html")
+
     else:
-        session_uri = os.getenv("SESSION_SERVICE_URI")
-        if not session_uri:
-            raise RuntimeError("SESSION_SERVICE_URI is required (set it in .env or env vars).")
+        # ── Standard mode: use get_fast_api_app (unchanged) ──────────
+        if dev_mode:
+            print("[ADK] DEVELOPMENT mode (in-memory sessions)")
+            app = get_fast_api_app(
+                agents_dir=agents_dir,
+                session_service_uri=None,
+                use_local_storage=False,
+                web=False,
+                a2a=False,
+                host="",
+                port=port,
+                url_prefix=None,
+                reload_agents=True,
+                extra_plugins=PLUGIN_PATHS,
+            )
+        else:
+            session_uri = os.getenv("SESSION_SERVICE_URI")
+            if not session_uri:
+                raise RuntimeError("SESSION_SERVICE_URI is required (set it in .env or env vars).")
 
-        session_uri = _normalize_to_asyncpg_uri(session_uri)
-        connect_args = {"ssl": "require"}
+            session_uri = _normalize_to_asyncpg_uri(session_uri)
+            connect_args = {"ssl": "require"}
 
-        print("[ADK] PRODUCTION mode (database)")
-        app = get_fast_api_app(
-            agents_dir=agents_dir,
-            session_service_uri=session_uri,
-            session_db_kwargs={"connect_args": connect_args},
-            web=False,
-            a2a=False,
-            host="",
-            port=port,
-            url_prefix=None,
-            reload_agents=True,
-            extra_plugins=PLUGIN_PATHS,
-        )
+            print("[ADK] PRODUCTION mode (database)")
+            app = get_fast_api_app(
+                agents_dir=agents_dir,
+                session_service_uri=session_uri,
+                session_db_kwargs={"connect_args": connect_args},
+                web=False,
+                a2a=False,
+                host="",
+                port=port,
+                url_prefix=None,
+                reload_agents=True,
+                extra_plugins=PLUGIN_PATHS,
+            )
 
     app.router.redirect_slashes = False
 
