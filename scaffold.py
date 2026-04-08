@@ -25,7 +25,7 @@ PLACEHOLDER_TAG = "{{agent_package}}"
 # Extensions considered text (placeholder substitution applied)
 TEXT_EXTENSIONS = frozenset({
     ".py", ".md", ".txt", ".yaml", ".yml", ".toml",
-    ".cfg", ".ini", ".env", ".example",
+    ".cfg", ".ini", ".env", ".example", ".html",
 })
 
 
