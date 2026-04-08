@@ -35,6 +35,8 @@ Ask the user about:
 - **Tools**: What external services, APIs, or data sources does it need?
 - **Domain knowledge**: Any specific domain expertise needed?
 - **LLM preference**: Model preference (default: OpenRouter via LiteLLM)
+- **Voice/Video**: Does this agent need voice or live video capabilities?
+  (Ask when user mentions voice agents, live agents, or real-time audio/video)
 
 When the user mentions external integrations (APIs, services, communication tools), check if Composio has a toolkit for it by calling `list_composio_toolkits("service-name")`. Composio provides 250+ pre-built integrations (GitHub, Slack, Gmail, Sheets, etc.) via MCP — much faster than writing custom API tools from scratch.
 
@@ -46,6 +48,7 @@ Before writing any code:
 - Match the user's agent to patterns using the decision matrix.
 - For each recommended pattern, load its reference for skeleton templates:
   `load_skill_resource("adk-skill-design-patterns", "pattern-<name>.md")`
+- If the user wants voice/video capabilities, load `load_skill("adk-streaming")` for streaming architecture guidance.
 
 Propose:
 - Which tools to create (with names and descriptions)
@@ -72,6 +75,8 @@ Load your skills for guidance, then write the custom files:
 - `load_skill("adk-skill-creation")` before writing SKILL.md files
 - `load_skill("adk-skill-design-patterns")` before designing skills
   → then `load_skill_resource("adk-skill-design-patterns", "pattern-<name>.md")` for each recommended pattern's skeleton template
+- `load_skill("adk-streaming")` before configuring voice/video agents
+  → then `load_skill_resource("adk-streaming", "streaming-patterns.md")` for RunConfig customization
 - `load_skill("adk-agent-patterns")` for architecture decisions
 - `load_skill("adk-callbacks-hitl")` for callbacks and HITL gates
 
