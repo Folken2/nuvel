@@ -12,6 +12,7 @@ from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools.skill_toolset import SkillToolset
 
+from .callbacks.path_guard import path_guard
 from .config.llm import FAST_MODEL
 from .tools import get_tools
 from .prompt.instructions import get_agent_instruction
@@ -62,4 +63,5 @@ root_agent = LlmAgent(
     description="Creates production-ready Google ADK agents from natural language descriptions",
     instruction=get_agent_instruction,
     tools=_build_tools(),
+    before_tool_callback=path_guard,
 )

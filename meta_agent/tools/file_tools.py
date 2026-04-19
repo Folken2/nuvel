@@ -96,7 +96,20 @@ def _list_files_impl(path: str, base_dir: str) -> dict:
 
 
 def _get_base_dir(tool_context=None) -> str:
+    """Resolve base directory for file operations.
+
+    Priority:
+    1. ``current_agent_path`` — set by scaffold_agent, the just-scaffolded agent dir.
+       When present, writes are scoped to that agent's directory so the LLM can
+       use simple package-relative paths (e.g. ``tools/foo.py``) without having
+       to prepend the kebab-case wrapper.
+    2. ``agent_output_dir`` — explicit override (legacy).
+    3. ``_OUTPUT_DIR`` — fallback to the global generated-agents directory.
+    """
     if tool_context is not None:
+        current = tool_context.state.get("current_agent_path")
+        if current:
+            return current
         return tool_context.state.get("agent_output_dir", _OUTPUT_DIR)
     return _OUTPUT_DIR
 

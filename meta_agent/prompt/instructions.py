@@ -82,6 +82,18 @@ Load your skills for guidance, then write the custom files:
 
 Use `load_skill_resource` for detailed patterns and examples.
 
+## Path Rules for `write_file` / `read_file` / `list_files`
+
+After `scaffold_agent` runs, these tools are **scoped to the scaffolded agent directory**. Write paths as if you're inside that directory:
+
+- ✅ `<package>/tools/foo.py` — correct (relative to agent root)
+- ✅ `.env.example` — correct (top-level file at agent root)
+- ❌ `generated-agents/<agent-name>/<package>/tools/foo.py` — wrong, auto-corrected
+- ❌ `<agent-name>/<package>/tools/foo.py` — wrong, auto-corrected
+- ❌ Absolute paths — always rejected
+
+Where `<package>` is the **snake_case** package name (e.g. `my_agent`) and `<agent-name>` is the **kebab-case** directory name (e.g. `my-agent`). Use `current_agent_package` from session state for the package name when you have it.
+
 Write these files using `write_file`:
 a. `<package>/prompt/instructions.py` — Full system prompt with InstructionProvider pattern
 b. `<package>/tools/<name>.py` — Each custom tool with proper ToolContext signature
