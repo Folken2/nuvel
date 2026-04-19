@@ -141,6 +141,50 @@ Set `COST_GUARD_BUDGET=0.50` in `.env` to cap spending at $0.50 per session.
 
 See `.env.example` for the complete list.
 
-## Production Deployment
+## Deploy to Railway
 
-Set `DEV_MODE=false` and provide `SESSION_SERVICE_URI` for persistent sessions.
+This agent ships with `Dockerfile`, `railway.json`, and `.dockerignore` — ready to deploy.
+
+### One-time setup
+
+```bash
+# Install the Railway CLI
+brew install railway  # or: npm install -g @railway/cli
+
+# Log in
+railway login
+```
+
+### Deploy
+
+```bash
+# From the agent directory:
+railway init         # Create a Railway project (select "Empty Project")
+railway link         # Link this directory to the project (if not already)
+railway up           # Build + deploy
+```
+
+### Configure environment variables
+
+Set these in the Railway dashboard (or via `railway variables --set KEY=VALUE`):
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `OPENROUTER_API_KEY` | Yes | Your OpenRouter API key |
+| `API_KEY` | Recommended | Enables Bearer-token auth on all endpoints |
+| `DEV_MODE` | Optional | Set to `true` for in-memory sessions (no Postgres); defaults to `false` |
+| `GOOGLE_API_KEY` | Optional | Required when `STREAMING_ENABLED=true` |
+| `STREAMING_ENABLED` | Optional | Set to `true` for voice/video agents |
+
+### Optional: Postgres for persistent sessions
+
+By default the agent runs with in-memory sessions when `DEV_MODE=true`. For persistent sessions:
+
+1. In the Railway dashboard, add a Postgres plugin to your project
+2. Copy the Postgres `DATABASE_URL` from the plugin's Variables tab
+3. Set `SESSION_SERVICE_URI=<that URL>` on your agent service
+4. Set `DEV_MODE=false`
+
+### Health check
+
+Railway polls `/health` (configured in `railway.json`) to verify the container is ready before routing traffic. The `/health` endpoint is public and requires no auth.
