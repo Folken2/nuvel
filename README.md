@@ -229,6 +229,10 @@ make test
 - **V1 (current):** Local agent generation with scaffold + validate + iterate
 - **V2:** Self-improvement eval pipeline consuming conversation traces
 - **V3:** GitHub integration — create repos, push generated agents, set up CI
+- **V4 (proposed):** One-shot auto-deploy — `deploy_agent_tool` pushes the
+  generated agent to Railway (or equivalent) and returns a live URL, so
+  non-technical users go from natural-language intent to a running agent
+  without leaving the conversation
 
 ## Contributing
 
