@@ -230,6 +230,11 @@ make test
 - **V2:** Self-improvement eval pipeline consuming conversation traces
 - **V3:** GitHub integration — create repos, push generated agents, set up CI
 
+## Contributing
+
+Contributions are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md)
+before opening a PR. For security issues, see [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+[MIT](LICENSE) © Albert Folch

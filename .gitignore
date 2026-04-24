@@ -1,9 +1,36 @@
+# Python
 __pycache__/
 *.pyc
-.venv/
-.env
-traces/
-generated-agents/*/
+*.pyo
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets / local config
+.env
+.env.local
+.env.*.local
+
+# Editor / tooling state
+.claude/
+.adk/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Runtime artifacts
+traces/
+generated-agents/*/
+logs/
+*.log
+
+# Personal / out-of-repo
+idees_albert/
 data-analysis-agent/
