@@ -233,6 +233,10 @@ make test
   generated agent to Railway (or equivalent) and returns a live URL, so
   non-technical users go from natural-language intent to a running agent
   without leaving the conversation
+- **V5 (proposed):** Managed tier — same binary, hosted. Users sign up, describe
+  an agent, and get a live URL on our infrastructure (our Railway, our LLM
+  keys, usage-based billing). Open-source stays the primary product and the
+  community path; managed serves users who want zero ops
 
 ## Contributing
 
