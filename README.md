@@ -1,5 +1,21 @@
 # Meta-Agent
 
+> Describe an agent in plain English. Get production-ready code.
+
+[![Tests](https://github.com/Folken2/meta-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/meta-agent/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/github/license/Folken2/meta-agent)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+
+<!--
+  Demo placeholder. Record with `vhs demo.tape` or `asciinema rec`, then
+  drop the resulting .gif / .cast / .svg into docs/ and replace this block:
+
+      ![Meta-agent demo](docs/demo.gif)
+
+  A 15–30s clip showing a natural-language prompt → scaffolded agent →
+  running agent is the highest-leverage thing on this page.
+-->
+
 An ADK agent that creates production-ready Google ADK agents from natural language descriptions.
 
 ## How it works
