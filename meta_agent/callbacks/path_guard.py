@@ -44,14 +44,29 @@ def _normalize_path(path: str, kebab_name: str, package_name: str) -> tuple[str,
     if p.startswith(prefix):
         p = p[len(prefix):]
 
-    # Strip the kebab-case agent wrapper if present. Writes are already scoped
-    # to the kebab-case directory via Fix A, so re-prepending it creates the
-    # exact bug we're trying to prevent (nested wrapper directories).
+    # Handle the kebab-case agent name appearing as the first segment.
+    #
+    # Two distinct LLM mistakes land here:
+    #   (a) Kebab wrapper + snake package: ``my-agent/my_agent/...``.
+    #       Writes are already scoped to the agent root via _get_base_dir, so
+    #       the wrapper is redundant and must be stripped.
+    #   (b) Kebab-as-package confusion: ``my-agent/tools/foo.py`` where the
+    #       LLM meant ``my_agent/tools/foo.py``. Stripping alone would land the
+    #       file one level too shallow (outside the package), so rewrite the
+    #       leading ``my-agent/`` to ``my_agent/`` instead.
     if kebab_name:
         wrapper = kebab_name + "/"
         if p.startswith(wrapper):
-            p = p[len(wrapper):]
+            rest = p[len(wrapper):]
+            first_segment = rest.split("/", 1)[0]
+            if package_name and first_segment != package_name:
+                # (b) confusion case — rewrite to snake package.
+                p = f"{package_name}/{rest}"
+            else:
+                # (a) wrapper case — strip.
+                p = rest
         elif p == kebab_name:
+            # Bare wrapper name with no rest — treat as empty and fall through.
             p = ""
 
     # If, after stripping, the path is empty (LLM pointed at the wrapper itself),
