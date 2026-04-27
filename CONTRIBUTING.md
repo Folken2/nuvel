@@ -1,11 +1,11 @@
-# Contributing to Meta-Agent
+# Contributing to nuvel
 
 Thanks for your interest in contributing. This project is maintained by a single
 developer, so please read this before opening a PR — it will save us both time.
 
 ## Scope
 
-Meta-Agent generates production-ready Google ADK agents from natural language.
+nuvel generates production-ready Google ADK agents from natural language.
 In-scope contributions:
 
 - Bug fixes in the scaffolder, generated-agent templates, or plugin chain
@@ -22,11 +22,11 @@ Out-of-scope (open an issue to discuss first):
 ## Development setup
 
 ```bash
-git clone https://github.com/Folken2/meta-agent.git
-cd meta-agent
+git clone https://github.com/Folken2/nuvel.git
+cd nuvel
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 cp .env.example .env
 # add your OPENROUTER_API_KEY
 ```
