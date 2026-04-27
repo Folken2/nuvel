@@ -4,8 +4,8 @@
 
 `nuvel` is a meta-agent — it builds Google ADK agents from natural-language descriptions, ships with a CLI, and inherits a battle-tested production skeleton for every agent it generates.
 
-[![Tests](https://github.com/Folken2/meta-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/meta-agent/actions/workflows/tests.yml)
-[![License: MIT](https://img.shields.io/github/license/Folken2/meta-agent)](LICENSE)
+[![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/github/license/Folken2/nuvel)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
 <!--
@@ -35,8 +35,8 @@ Every generated agent inherits battle-tested infrastructure from the [data-analy
 
 ```bash
 # Clone
-git clone https://github.com/Folken2/meta-agent.git
-cd meta-agent
+git clone https://github.com/Folken2/nuvel.git
+cd nuvel
 
 # Setup
 python3 -m venv .venv

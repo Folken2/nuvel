@@ -16,7 +16,7 @@ dynamic = ["dependencies"]
 nuvel = "nuvel.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Folken2/meta-agent"
+Homepage = "https://github.com/Folken2/nuvel"
 
 [tool.setuptools]
 py-modules = ["scaffold", "run_adk"]
