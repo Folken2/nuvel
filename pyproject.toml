@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuvel"
+version = "0.1.0"
+description = "nuvel — meta-agent for scaffolding, running, and exploring ADK agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Albert Folch" }]
+dynamic = ["dependencies"]
+
+[project.scripts]
+nuvel = "meta_agent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Folken2/meta-agent"
+
+[tool.setuptools]
+py-modules = ["scaffold", "run_adk"]
+
+[tool.setuptools.packages.find]
+include = ["meta_agent*"]
+
+[tool.setuptools.package-data]
+"meta_agent" = ["templates/**/*", "skills/**/*", "config/*", "prompt/*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

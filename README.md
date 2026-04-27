@@ -1,6 +1,8 @@
-# Meta-Agent
+# nuvel
 
 > Describe an agent in plain English. Get production-ready code.
+
+`nuvel` is a meta-agent — it builds Google ADK agents from natural-language descriptions, ships with a CLI, and inherits a battle-tested production skeleton for every agent it generates.
 
 [![Tests](https://github.com/Folken2/meta-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/meta-agent/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/github/license/Folken2/meta-agent)](LICENSE)
@@ -39,22 +41,40 @@ cd meta-agent
 # Setup
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .          # installs deps + the `nuvel` CLI
 
 # Configure
 cp .env.example .env
 # Add your OPENROUTER_API_KEY to .env
 
 # Run
-DEV_MODE=true python run_adk.py
+nuvel run --dev
 ```
 
-The agent runs at `http://localhost:8000`. Use the `/run_sse/` endpoint or the ADK web UI:
+The agent runs at `http://localhost:8000`. Use the `/run_sse/` endpoint or the ADK web UI.
+
+## CLI
+
+`nuvel` is the single entry point for everything you'd normally do by hand:
 
 ```bash
-make dev-ui   # ADK web UI with all plugins loaded
-make dev      # Custom entrypoint (production-like, no UI)
-make test     # Run tests
+nuvel new my-agent                    # scaffold a new ADK agent
+nuvel new my-agent --description "..." --output-dir ./agents
+nuvel skills list                     # list bundled ADK knowledge skills
+nuvel skills search prompt            # search skills by keyword
+nuvel run                             # production-style server
+nuvel run --dev                       # in-memory sessions, dev mode
+```
+
+Common targets are also wired through `make` so the existing workflow keeps working:
+
+```bash
+make install   # pip install -e .
+make dev       # nuvel run --dev
+make run       # nuvel run
+make dev-ui    # ADK web UI with all plugins loaded
+make skills    # nuvel skills list
+make test      # pytest
 ```
 
 ## Example
@@ -74,19 +94,16 @@ The meta-agent will:
 meta-agent/
 ├── meta_agent/
 │   ├── agent.py              # LlmAgent with tools + SkillToolset
+│   ├── cli.py                # `nuvel` CLI (new / skills / run)
 │   ├── prompt/instructions.py # "You are an ADK agent builder"
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── skills/                # 5 ADK knowledge skills (loaded on demand)
-│   │   ├── adk-agent-patterns/
-│   │   ├── adk-prompt-engineering/
-│   │   ├── adk-tool-creation/
-│   │   ├── adk-skill-creation/
-│   │   └── adk-callbacks-hitl/
+│   ├── skills/                # ADK knowledge skills (loaded on demand)
 │   ├── templates/             # Production skeleton stamped out for each new agent
 │   ├── plugins/               # 10 plugins (see Plugin Chain below)
 │   └── config/                # LiteLLM/OpenRouter config
-├── scaffold.py                # CLI: python scaffold.py <agent-name>
-├── run_adk.py                 # FastAPI server
+├── scaffold.py                # Stamping logic (called by `nuvel new`)
+├── run_adk.py                 # FastAPI server (launched by `nuvel run`)
+├── pyproject.toml             # Packaging + `nuvel` console script
 └── generated-agents/          # Output directory
 ```
 

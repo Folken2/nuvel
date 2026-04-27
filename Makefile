@@ -13,19 +13,31 @@ PLUGIN_FLAGS = \
 	--extra_plugins meta_agent.plugins.recordings \
 	--extra_plugins meta_agent.plugins.replay
 
-.PHONY: dev dev-ui run test
+.PHONY: install dev dev-ui run test cli skills
+
+# Install the package in editable mode (exposes the `nuvel` binary)
+install:
+	pip install -e .
 
 # ADK dev UI with all plugins loaded
 dev-ui:
 	adk web $(PLUGIN_FLAGS) .
 
-# Custom entrypoint (production-like, no UI)
+# Development mode (DEV_MODE=true) via the nuvel CLI
 dev:
-	DEV_MODE=true python run_adk.py
+	nuvel run --dev
 
-# Production mode
+# Production mode via the nuvel CLI
 run:
-	python run_adk.py
+	nuvel run
+
+# Show available CLI subcommands
+cli:
+	nuvel --help
+
+# List bundled skills
+skills:
+	nuvel skills list
 
 # Run tests
 test:
