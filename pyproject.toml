@@ -13,7 +13,7 @@ authors = [{ name = "Albert Folch" }]
 dynamic = ["dependencies"]
 
 [project.scripts]
-nuvel = "meta_agent.cli:main"
+nuvel = "nuvel.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Folken2/meta-agent"
@@ -22,10 +22,10 @@ Homepage = "https://github.com/Folken2/meta-agent"
 py-modules = ["scaffold", "run_adk"]
 
 [tool.setuptools.packages.find]
-include = ["meta_agent*"]
+include = ["nuvel*"]
 
 [tool.setuptools.package-data]
-"meta_agent" = ["templates/**/*", "skills/**/*", "config/*", "prompt/*"]
+"nuvel" = ["templates/**/*", "skills/**/*", "config/*", "prompt/*"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

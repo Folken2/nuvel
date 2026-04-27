@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from meta_agent.plugins.conversation_trace_writer import ConversationTraceWriter
+from nuvel.plugins.conversation_trace_writer import ConversationTraceWriter
 
 
 class TestConversationTraceWriter(unittest.TestCase):
@@ -24,7 +24,7 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.writer.start_run(
             conversation_id="abc123",
             session_id="sess-001",
-            agent="meta_agent",
+            agent="nuvel",
             model="openrouter/test-model",
             system_prompt="You are a helpful agent.",
             skills_loaded=["skill-a"],
@@ -71,7 +71,7 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.writer.start_run(
             conversation_id="multi-001",
             session_id="sess-002",
-            agent="meta_agent",
+            agent="nuvel",
             model="test-model",
             system_prompt="System prompt.",
             skills_loaded=[],
@@ -132,7 +132,7 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.writer.start_run(
             conversation_id="empty-001",
             session_id="sess-003",
-            agent="meta_agent",
+            agent="nuvel",
             model="test-model",
             system_prompt="Prompt.",
             skills_loaded=[],
@@ -150,7 +150,7 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.writer.start_run(
             conversation_id="unclose-001",
             session_id="sess-004",
-            agent="meta_agent",
+            agent="nuvel",
             model="test-model",
             system_prompt="Prompt.",
             skills_loaded=[],
@@ -176,7 +176,7 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.writer.start_run(
             conversation_id="auto-001",
             session_id="sess-005",
-            agent="meta_agent",
+            agent="nuvel",
             model="test-model",
             system_prompt="Prompt.",
             skills_loaded=[],
@@ -205,7 +205,7 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.writer.start_run(
             conversation_id="name-001",
             session_id="abcdef1234567890-extra",
-            agent="meta_agent",
+            agent="nuvel",
             model="test-model",
             system_prompt="",
             skills_loaded=[],

@@ -1,4 +1,4 @@
-"""Tests for meta_agent.tools.validate_tool — impl function only."""
+"""Tests for nuvel.tools.validate_tool — impl function only."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from scaffold import scaffold_agent
-from meta_agent.tools.validate_tool import _validate_agent_impl
+from nuvel.tools.validate_tool import _validate_agent_impl
 
 
 class TestValidateAgentImpl(unittest.TestCase):

@@ -18,8 +18,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from google.adk.cli.fast_api import get_fast_api_app
-from meta_agent.plugins import PLUGIN_PATHS
-from meta_agent.config.logging import setup_logging, generate_request_id, request_id_var
+from nuvel.plugins import PLUGIN_PATHS
+from nuvel.config.logging import setup_logging, generate_request_id, request_id_var
 
 try:
     from dotenv import load_dotenv

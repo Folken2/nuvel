@@ -1,4 +1,4 @@
-"""Tests for meta_agent.tools.composio_tools."""
+"""Tests for nuvel.tools.composio_tools."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from meta_agent.tools.composio_tools import _list_toolkits_impl, list_composio_toolkits
+from nuvel.tools.composio_tools import _list_toolkits_impl, list_composio_toolkits
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ def _make_toolkit_item(slug: str, name: str, description: str) -> MagicMock:
 class TestListToolkitsImpl:
     """Unit tests for _list_toolkits_impl (no env vars needed)."""
 
-    @patch("meta_agent.tools.composio_tools.Composio")
+    @patch("nuvel.tools.composio_tools.Composio")
     def test_returns_toolkits(self, MockComposio):
         items = [
             _make_toolkit_item("github", "GitHub", "GitHub integration"),
@@ -44,7 +44,7 @@ class TestListToolkitsImpl:
         assert result["toolkits"][0]["slug"] == "github"
         assert result["toolkits"][1]["slug"] == "slack"
 
-    @patch("meta_agent.tools.composio_tools.Composio")
+    @patch("nuvel.tools.composio_tools.Composio")
     def test_filters_by_query(self, MockComposio):
         items = [
             _make_toolkit_item("github", "GitHub", "GitHub integration"),
@@ -60,7 +60,7 @@ class TestListToolkitsImpl:
         assert result["count"] == 1
         assert result["toolkits"][0]["slug"] == "github"
 
-    @patch("meta_agent.tools.composio_tools.Composio")
+    @patch("nuvel.tools.composio_tools.Composio")
     def test_passes_category(self, MockComposio):
         mock_response = MagicMock()
         mock_response.items = []
@@ -70,7 +70,7 @@ class TestListToolkitsImpl:
 
         MockComposio.return_value.toolkits.list.assert_called_once_with(category="communication")
 
-    @patch("meta_agent.tools.composio_tools.Composio")
+    @patch("nuvel.tools.composio_tools.Composio")
     def test_no_results(self, MockComposio):
         mock_response = MagicMock()
         mock_response.items = []
@@ -82,7 +82,7 @@ class TestListToolkitsImpl:
         assert result["count"] == 0
         assert result["toolkits"] == []
 
-    @patch("meta_agent.tools.composio_tools.Composio")
+    @patch("nuvel.tools.composio_tools.Composio")
     def test_sdk_error(self, MockComposio):
         MockComposio.side_effect = Exception("connection failed")
 
@@ -104,7 +104,7 @@ class TestListComposioToolkits:
         assert result["status"] == "error"
         assert "COMPOSIO_API_KEY" in result["message"]
 
-    @patch("meta_agent.tools.composio_tools._list_toolkits_impl")
+    @patch("nuvel.tools.composio_tools._list_toolkits_impl")
     def test_delegates_to_impl(self, mock_impl, monkeypatch):
         monkeypatch.setenv("COMPOSIO_API_KEY", "my-key")
         mock_impl.return_value = {"status": "ok", "toolkits": [], "count": 0}

@@ -65,7 +65,7 @@ def _build_tools():
 
 root_agent = LlmAgent(
     model=FAST_MODEL,
-    name="meta_agent",
+    name="nuvel",
     description="Creates production-ready Google ADK agents from natural language descriptions",
     instruction=get_agent_instruction,
     tools=_build_tools(),

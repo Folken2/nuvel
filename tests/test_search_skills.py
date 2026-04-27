@@ -7,7 +7,7 @@ from urllib.error import URLError
 
 import pytest
 
-from meta_agent.tools.skills_tools import (
+from nuvel.tools.skills_tools import (
     _parse_search_response,
     search_skills,
 )
@@ -76,7 +76,7 @@ class TestParseSearchResponse:
 
 
 class TestSearchSkills:
-    @patch("meta_agent.tools.skills_tools._fetch_search_api")
+    @patch("nuvel.tools.skills_tools._fetch_search_api")
     def test_returns_filtered_results(self, mock_fetch):
         mock_fetch.return_value = SAMPLE_API_RESPONSE
         result = search_skills(query="kubernetes")
@@ -84,7 +84,7 @@ class TestSearchSkills:
         assert len(result["skills"]) == 2
         assert result["query"] == "kubernetes"
 
-    @patch("meta_agent.tools.skills_tools._fetch_search_api")
+    @patch("nuvel.tools.skills_tools._fetch_search_api")
     def test_no_results(self, mock_fetch):
         mock_fetch.return_value = {"query": "nonexistent", "skills": [], "count": 0}
         result = search_skills(query="nonexistent")
@@ -92,7 +92,7 @@ class TestSearchSkills:
         assert len(result["skills"]) == 0
         assert "no skills found" in result["message"].lower()
 
-    @patch("meta_agent.tools.skills_tools._fetch_search_api")
+    @patch("nuvel.tools.skills_tools._fetch_search_api")
     def test_api_error(self, mock_fetch):
         mock_fetch.side_effect = URLError("Connection refused")
         result = search_skills(query="kubernetes")

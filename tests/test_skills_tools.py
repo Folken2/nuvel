@@ -1,4 +1,4 @@
-"""Tests for meta_agent.tools.skills_tools — adaptation pipeline."""
+"""Tests for nuvel.tools.skills_tools — adaptation pipeline."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 
-from meta_agent.tools.skills_tools import (
+from nuvel.tools.skills_tools import (
     _normalize_name,
     _parse_skill_md,
     adapt_skill_for_adk,
@@ -140,7 +140,7 @@ class TestAdaptSkillForAdk(unittest.TestCase):
         self.assertTrue(any("Truncated" in w for w in warnings))
 
         # Verify description is at most 1024
-        from meta_agent.tools.skills_tools import _parse_skill_md
+        from nuvel.tools.skills_tools import _parse_skill_md
         with open(os.path.join(adapted, "SKILL.md")) as f:
             fm, _ = _parse_skill_md(f.read())
         self.assertLessEqual(len(fm["description"]), 1024)

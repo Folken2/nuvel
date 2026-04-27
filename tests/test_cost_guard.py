@@ -2,7 +2,7 @@
 
 import unittest
 
-from meta_agent.plugins.cost_guard_plugin import calculate_cost, _find_pricing
+from nuvel.plugins.cost_guard_plugin import calculate_cost, _find_pricing
 
 
 SAMPLE_PRICING = {

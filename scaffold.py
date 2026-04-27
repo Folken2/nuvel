@@ -1,7 +1,7 @@
 """
 scaffold.py — The Stamping Script
 
-Copies the template skeleton from meta_agent/templates/ into a target
+Copies the template skeleton from nuvel/templates/ into a target
 directory, renaming the {{agent_package}} directory and replacing all
 placeholders in files.
 
@@ -18,7 +18,7 @@ import shutil
 import sys
 from pathlib import Path
 
-TEMPLATES_DIR = Path(__file__).parent / "meta_agent" / "templates"
+TEMPLATES_DIR = Path(__file__).parent / "nuvel" / "templates"
 
 PLACEHOLDER_TAG = "{{agent_package}}"
 

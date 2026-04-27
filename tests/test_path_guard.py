@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from meta_agent.callbacks.path_guard import _normalize_path, path_guard
+from nuvel.callbacks.path_guard import _normalize_path, path_guard
 
 
 class TestNormalizePath(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Tests for meta_agent.config — skill/tool env-var filtering."""
+"""Tests for nuvel.config — skill/tool env-var filtering."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pathlib
 import unittest
 from unittest import mock
 
-from meta_agent.config import (
+from nuvel.config import (
     get_skills_dir,
     is_skill_enabled,
     is_tool_disabled,
@@ -89,14 +89,14 @@ class TestToolFiltering(unittest.TestCase):
     """Integration: get_tools() respects META_AGENT_DISABLED_TOOLS."""
 
     def test_all_tools_by_default(self):
-        from meta_agent.tools import _ALL_TOOLS, get_tools
+        from nuvel.tools import _ALL_TOOLS, get_tools
 
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("META_AGENT_DISABLED_TOOLS", None)
             self.assertEqual(len(get_tools()), len(_ALL_TOOLS))
 
     def test_disabled_tools_removed(self):
-        from meta_agent.tools import _ALL_TOOLS, get_tools
+        from nuvel.tools import _ALL_TOOLS, get_tools
 
         with mock.patch.dict(
             os.environ, {"META_AGENT_DISABLED_TOOLS": "list_composio_toolkits_tool"}

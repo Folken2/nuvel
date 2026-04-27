@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from scaffold import scaffold_agent
-from meta_agent.tools.validate_tool import _validate_agent_impl
+from nuvel.tools.validate_tool import _validate_agent_impl
 
 
 class TestEndToEnd:

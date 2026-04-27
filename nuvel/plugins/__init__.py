@@ -53,17 +53,17 @@ replay = ReplayPlugin()
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
 PLUGIN_PATHS = [
-    "meta_agent.plugins.cost_guard",
-    "meta_agent.plugins.trace",
-    "meta_agent.plugins.context_filter",
-    "meta_agent.plugins.console_logger",
-    "meta_agent.plugins.tool_events",
-    "meta_agent.plugins.resilience",
-    "meta_agent.plugins.cache",
-    "meta_agent.plugins.self_healing",
-    "meta_agent.plugins.save_files",
-    "meta_agent.plugins.recordings",
-    "meta_agent.plugins.replay",
+    "nuvel.plugins.cost_guard",
+    "nuvel.plugins.trace",
+    "nuvel.plugins.context_filter",
+    "nuvel.plugins.console_logger",
+    "nuvel.plugins.tool_events",
+    "nuvel.plugins.resilience",
+    "nuvel.plugins.cache",
+    "nuvel.plugins.self_healing",
+    "nuvel.plugins.save_files",
+    "nuvel.plugins.recordings",
+    "nuvel.plugins.replay",
 ]
 
 __all__ = [

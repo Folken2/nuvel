@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from meta_agent.tools.skills_tools import (
+from nuvel.tools.skills_tools import (
     _check_installs,
     install_skill,
     read_skill_context,
@@ -21,7 +21,7 @@ from meta_agent.tools.skills_tools import (
 class TestCheckInstalls(unittest.TestCase):
     """Tests for _check_installs (mock _fetch_search_api)."""
 
-    @patch("meta_agent.tools.skills_tools._fetch_search_api")
+    @patch("nuvel.tools.skills_tools._fetch_search_api")
     def test_above_threshold(self, mock_fetch):
         mock_fetch.return_value = {
             "skills": [
@@ -35,7 +35,7 @@ class TestCheckInstalls(unittest.TestCase):
         }
         self.assertTrue(_check_installs("owner/repo@my-skill"))
 
-    @patch("meta_agent.tools.skills_tools._fetch_search_api")
+    @patch("nuvel.tools.skills_tools._fetch_search_api")
     def test_below_threshold(self, mock_fetch):
         mock_fetch.return_value = {
             "skills": [
@@ -49,7 +49,7 @@ class TestCheckInstalls(unittest.TestCase):
         }
         self.assertFalse(_check_installs("owner/repo@my-skill"))
 
-    @patch("meta_agent.tools.skills_tools._fetch_search_api")
+    @patch("nuvel.tools.skills_tools._fetch_search_api")
     def test_not_found(self, mock_fetch):
         mock_fetch.return_value = {"skills": []}
         self.assertFalse(_check_installs("owner/repo@my-skill"))
@@ -81,15 +81,15 @@ class TestInstallSkill(unittest.TestCase):
             )
         return skill_dir
 
-    @patch("meta_agent.tools.skills_tools._check_installs")
+    @patch("nuvel.tools.skills_tools._check_installs")
     def test_rejects_below_threshold(self, mock_check):
         mock_check.return_value = False
         result = install_skill(package="owner/repo@my-skill", agent_name="test-agent")
         self.assertEqual(result["status"], "error")
         self.assertIn("1,000", result["message"])
 
-    @patch("meta_agent.tools.skills_tools._download_skill")
-    @patch("meta_agent.tools.skills_tools._check_installs")
+    @patch("nuvel.tools.skills_tools._download_skill")
+    @patch("nuvel.tools.skills_tools._check_installs")
     def test_install_success(self, mock_check, mock_download):
         mock_check.return_value = True
         skill_dir = self._make_skill_dir()
@@ -135,15 +135,15 @@ class TestReadSkillContext(unittest.TestCase):
         for d in self._dirs:
             shutil.rmtree(d, ignore_errors=True)
 
-    @patch("meta_agent.tools.skills_tools._check_installs")
+    @patch("nuvel.tools.skills_tools._check_installs")
     def test_rejects_below_threshold(self, mock_check):
         mock_check.return_value = False
         result = read_skill_context(package="owner/repo@my-skill")
         self.assertEqual(result["status"], "error")
         self.assertIn("1,000", result["message"])
 
-    @patch("meta_agent.tools.skills_tools._download_skill")
-    @patch("meta_agent.tools.skills_tools._check_installs")
+    @patch("nuvel.tools.skills_tools._download_skill")
+    @patch("nuvel.tools.skills_tools._check_installs")
     def test_returns_content(self, mock_check, mock_download):
         mock_check.return_value = True
 

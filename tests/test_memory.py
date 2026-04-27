@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 # to a temp location and test it standalone.
 
 # For testing, we import the template source and patch MEMORY_DIR.
-TEMPLATE_STATE_DIR = ROOT / "meta_agent" / "templates" / "{{agent_package}}" / "state"
+TEMPLATE_STATE_DIR = ROOT / "nuvel" / "templates" / "{{agent_package}}" / "state"
 
 
 def _run_module_code(code, namespace):

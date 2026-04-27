@@ -92,7 +92,7 @@ The meta-agent will:
 
 ```
 meta-agent/
-├── meta_agent/
+├── nuvel/
 │   ├── agent.py              # LlmAgent with tools + SkillToolset
 │   ├── cli.py                # `nuvel` CLI (new / skills / run)
 │   ├── prompt/instructions.py # "You are an ADK agent builder"
@@ -168,7 +168,7 @@ The CostGuardPlugin tracks LLM costs using a `pricing.json` config file and opti
 
 **Maintaining `pricing.json`:**
 
-The pricing config lives at `meta_agent/plugins/pricing.json` (or `<agent>/plugins/pricing.json` for generated agents). Edit it to add or update model pricing — no code changes needed:
+The pricing config lives at `nuvel/plugins/pricing.json` (or `<agent>/plugins/pricing.json` for generated agents). Edit it to add or update model pricing — no code changes needed:
 
 ```json
 {

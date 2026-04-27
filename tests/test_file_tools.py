@@ -1,4 +1,4 @@
-"""Tests for meta_agent.tools.file_tools — impl functions only (no ToolContext)."""
+"""Tests for nuvel.tools.file_tools — impl functions only (no ToolContext)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 
-from meta_agent.tools.file_tools import (
+from nuvel.tools.file_tools import (
     _resolve_safe_path,
     _write_file_impl,
     _read_file_impl,
