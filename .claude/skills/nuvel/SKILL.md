@@ -1,6 +1,6 @@
 ---
 name: nuvel
-description: Use when the user wants to build a Google ADK agent — scaffolding a new agent, adding tools/skills/prompts to one, or asking how to structure an ADK project. Triggers on phrases like "create an ADK agent", "build a Google agent", "scaffold an agent", "make an agent that does X", "I need an ADK skeleton", or any task involving generated-agents/, LlmAgent, SkillToolset, or the ADK framework. Also use whenever the user mentions `nuvel`, the `nuvel` CLI, or asks about agent architecture patterns / callbacks / HITL / streaming / ADK prompt engineering — nuvel ships the canonical knowledge skills for those topics. Lean toward triggering: if the task touches Google ADK at all, this skill is in scope.
+description: Use when the user wants to build a Google ADK agent — scaffolding a new agent, adding tools/skills/prompts to one, or asking how to structure an ADK project. Triggers on phrases like "create an ADK agent", "build a Google agent", "scaffold an agent", "make an agent that does X", "I need an ADK skeleton", or any task involving generated-agents/, LlmAgent, SkillToolset, or the ADK framework. Also use whenever the user mentions `nuvel`, the `nuvel` CLI, or asks about agent architecture patterns / callbacks / HITL / streaming / ADK prompt engineering — nuvel ships the canonical knowledge skills for those topics. Lean toward triggering — if the task touches Google ADK at all, this skill is in scope.
 ---
 
 # nuvel — building production-ready ADK agents from inside Claude Code
