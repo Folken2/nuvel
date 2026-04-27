@@ -18,7 +18,7 @@ env/
 .env.*.local
 
 # Editor / tooling state
-.claude/
+.claude/settings.local.json
 .adk/
 .idea/
 .vscode/
