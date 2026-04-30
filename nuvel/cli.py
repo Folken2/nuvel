@@ -29,10 +29,19 @@ def _cmd_new(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         description=args.description,
         system_prompt=args.system_prompt,
+        persona=args.persona,
+        with_composio=args.with_composio,
     )
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
         print(f"Files created: {result['files_created']}")
+        flags = []
+        if result.get("persona"):
+            flags.append("persona")
+        if result.get("with_composio"):
+            flags.append("composio")
+        if flags:
+            print(f"Bundles: {', '.join(flags)}")
         return 0
     print(f"Error: {result['message']}", file=sys.stderr)
     return 1
@@ -121,6 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.add_argument("--output-dir", default=None, help="Parent directory for the new agent.")
     p_new.add_argument("--description", default="", help="Short agent description.")
     p_new.add_argument("--system-prompt", default="", help="System prompt for the new agent.")
+    p_new.add_argument(
+        "--persona", action="store_true",
+        help="Activate the persona overlay: self-rewriting SOUL.md, AWAKENING.md, "
+             "author_skill, complete_awakening. For agents meant to live and grow "
+             "over time. Inappropriate for stateless task bots.",
+    )
+    p_new.add_argument(
+        "--with-composio", action="store_true",
+        help="Wire the Composio Tool Router MCP (~1000 toolkits via one hosted endpoint).",
+    )
     p_new.set_defaults(func=_cmd_new)
 
     p_skills = sub.add_parser("skills", help="Inspect bundled skills.")

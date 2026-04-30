@@ -25,7 +25,7 @@ py-modules = ["scaffold", "run_adk"]
 include = ["nuvel*"]
 
 [tool.setuptools.package-data]
-"nuvel" = ["templates/**/*", "skills/**/*", "config/*", "prompt/*"]
+"nuvel" = ["templates/**/*", "templates_overlays/**/*", "skills/**/*", "config/*", "prompt/*"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

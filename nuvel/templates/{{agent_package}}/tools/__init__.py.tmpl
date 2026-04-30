@@ -1,14 +1,16 @@
 """
 Tools for the agent.
 
-Add your custom tool functions here and include them in get_tools().
+Composes the tool surface from feature bundles. Bundles activated by
+scaffold flags (--persona, --with-composio) are rendered in here; the
+others are absent.
 """
 
 from .memory_tools import memory_tool_list
-
+{{persona_imports}}{{composio_imports}}
 
 def get_tools() -> list:
     """Return the list of tools available to the agent."""
     tools: list = []
     tools.extend(memory_tool_list)
-    return tools
+{{persona_extends}}{{composio_extends}}    return tools

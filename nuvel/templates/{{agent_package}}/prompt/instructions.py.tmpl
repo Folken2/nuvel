@@ -1,67 +1,54 @@
 """
-Agent instruction builder for {{agent_name}}.
+Instruction builder for {{agent_name}}.
+
+Composes the system prompt every turn from these layers:
+  1. AWAKENING.md (persona scaffold only — present until complete_awakening deletes it)
+  2. SOUL.md      (character — read fresh each turn)
+  3. Frame        (system posture)
+  4. Date
+  5. Memory       (AGENT_MEMORY.md + topics)
+
+Skills are exposed via the LazySkillToolset (see agent.py) — queried on
+demand rather than injected into the prompt.
 """
 
 import logging
-from pathlib import Path
 
-from ..utils.date_utils import get_current_date_info, format_current_date
+from ..utils.date_utils import format_current_date
 from ..state.memory import load_all_memory
+from ..config.paths import awakening_file, soul_file
 
 logger = logging.getLogger(__name__)
 
-_SOUL_FILE = Path(__file__).parent.parent / "soul" / "SOUL.md"
-_CONTEXTS_DIR = Path(__file__).parent.parent / "contexts"
 
-
-def _load_soul() -> str:
-    """Load the agent's SOUL.md identity layer."""
-    if _SOUL_FILE.is_file():
-        try:
-            content = _SOUL_FILE.read_text(encoding="utf-8").strip()
-            if content:
-                logger.info("Loaded SOUL.md (%d chars)", len(content))
-                return content
-        except Exception as e:
-            logger.warning("Failed to read SOUL.md: %s", e)
-    return ""
-
-
-def _load_context() -> str:
-    """Load context files from the contexts/ directory."""
-    if not _CONTEXTS_DIR.is_dir():
+def _read(path) -> str:
+    if not path.is_file():
         return ""
-    parts = []
-    for ctx_file in sorted(_CONTEXTS_DIR.glob("*.md")):
-        try:
-            content = ctx_file.read_text(encoding="utf-8").strip()
-            if content:
-                parts.append(content)
-        except Exception as e:
-            logger.warning("Failed to read context %s: %s", ctx_file.name, e)
-    return "\n\n".join(parts)
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        logger.warning("Failed to read %s: %s", path, e)
+        return ""
+
+
+_FRAME = """\
+{{instruction_frame}}"""
 
 
 async def get_agent_instruction(ctx) -> str:
-    """Generate agent instruction. ADK InstructionProvider callback."""
-    formatted_date = format_current_date()
-    soul = _load_soul()
-    context = _load_context()
-
-    soul_block = f"{soul}\n\n" if soul else ""
-    context_block = ""
-    if context:
-        context_block = f"\n\n# Domain Knowledge\n\n{context}"
-
-    memory_block = ""
+    """ADK InstructionProvider — assembled per turn."""
+    soul = _read(soul_file())
+{{awakening_load}}    memory = ""
     try:
         memory = load_all_memory()
-        if memory:
-            memory_block = f"\n\n# Long-Term Memory\n\n{memory}"
     except Exception as e:
         logger.warning("Failed to load memory: %s", e)
 
-    return f"""{soul_block}{{agent_system_prompt}}
-
-Today's date: {formatted_date}
-{context_block}{memory_block}"""
+    parts: list[str] = []
+{{awakening_inject}}    if soul:
+        parts.append(soul)
+    parts.append(_FRAME)
+    parts.append(f"Today: {format_current_date()}")
+    if memory:
+        parts.append(f"# Memory\n\n{memory}")
+    return "\n\n".join(parts)

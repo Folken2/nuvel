@@ -33,6 +33,20 @@ Throughout the rest of this skill `nuvel` means "whichever invocation works on t
 
 When in doubt: Mode A.
 
+## Feature flags — `--persona` and `--with-composio`
+
+`nuvel new` ships two optional bundles. Pick them up front; they shape the scaffold meaningfully and aren't easy to retrofit.
+
+**`--persona`** — activates the self-evolving agent pattern: a self-rewriting `SOUL.md` (with `read_soul` / `update_soul` tools), a one-time `AWAKENING.md` bootstrap that the agent deletes via `complete_awakening`, and skill-authoring tools (`author_skill`, `update_skill`) so the agent grows its own SKILL.md repertoire over time. The instruction frame switches to the "act-first" persona text. Use this for **agents meant to live for months and develop a stable character** — personal assistants, long-running companions, agents that should accumulate knowledge across sessions. Do **not** use for stateless task bots, customer-support agents, or anything that should behave consistently across deploys: a support bot that rewrites its own SOUL.md mid-conversation is a regression, not a feature.
+
+**`--with-composio`** — wires the Composio Tool Router via ADK's `McpToolset`. One `composio.create(user_id=...)` call gives the agent ~1000 toolkits (Gmail, GitHub, Slack, Notion, Calendar, etc.) behind a single hosted MCP endpoint. Composio handles auth, tool discovery, and execution. Requires `COMPOSIO_API_KEY` at runtime; without it the toolset gracefully no-ops. Use this when **the agent's value is breadth of integrations** rather than depth in one domain. Independent of `--persona` — combine freely.
+
+**When to combine.** Personal agent meant to act across the user's whole digital life: `--persona --with-composio`. Pure task bot needing many integrations: `--with-composio` only. Domain-specialist that should never drift (e.g. SQL analyst, data-pipeline operator): no flags. Personal companion without external tools: `--persona` only.
+
+**Universal improvements (always on, regardless of flags):**
+- `LazySkillToolset` rebuilds on `SKILL.md` mtime change — new skills become queryable on the next agent invocation, no process restart. SOUL.md and memory edits are also picked up immediately (read fresh each turn).
+- `config/paths.py` exposes `SOUL_FILE` / `AWAKENING_FILE` / `SKILLS_DIR` / `MEMORY_DIR` env vars with in-repo defaults. Set these to a mounted volume path (e.g. `/data/...` on Railway) for cross-deploy persistence; leave unset locally. `seed_volume_if_empty()` runs at boot and copies in-repo seeds into an empty volume on first deploy.
+
 ## The canonical Mode A workflow
 
 Treat each step as a checkpoint — verify the previous step before moving on. Don't batch 5 steps and hope.
@@ -52,10 +66,11 @@ If the user gave you a vague brief ("an agent that helps with X"), name 2-3 conc
 ```bash
 nuvel new <kebab-name> \
   --description "one-line description" \
-  --output-dir ./generated-agents
+  --output-dir ./generated-agents \
+  [--persona] [--with-composio]
 ```
 
-The default `--output-dir` is `./generated-agents` relative to wherever you run from. Pass `--system-prompt` only if the user gave you exact text — otherwise leave it off and write the prompt properly in step 4.
+The default `--output-dir` is `./generated-agents` relative to wherever you run from. See the **Feature flags** section above to decide on `--persona` and `--with-composio`. Pass `--system-prompt` only if the user gave you exact text — otherwise leave it off and write the prompt properly in step 4.
 
 Verify: `ls generated-agents/<name>/` should show `<snake_name>/`, `run_adk.py`, `requirements.txt`, `.env.example`, `tests/`.
 
@@ -123,8 +138,17 @@ Don't try to fix the warnings — they're upstream and the project tolerates the
 ## Quick reference
 
 ```bash
-# Scaffold
+# Scaffold (base)
 nuvel new <kebab-name> --description "…" --output-dir ./generated-agents
+
+# Self-evolving personal agent with broad tool access
+nuvel new <kebab-name> --description "…" --persona --with-composio
+
+# Just persona (no external integrations)
+nuvel new <kebab-name> --description "…" --persona
+
+# Just Composio (stateless task bot with many integrations)
+nuvel new <kebab-name> --description "…" --with-composio
 
 # Knowledge
 nuvel skills list

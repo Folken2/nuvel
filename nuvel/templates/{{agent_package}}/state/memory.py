@@ -33,7 +33,14 @@ TOPICS_DIR = "topics"
 
 def _memory_dir() -> Path:
     """Return configured memory directory (reads env var on each call)."""
-    return Path(os.getenv("MEMORY_DIR", "./memory"))
+    # Prefer config/paths.memory_dir() so deployment volumes work uniformly
+    # with SOUL/SKILLS overrides; fall back to the legacy default if the
+    # paths module is missing for any reason.
+    try:
+        from ..config.paths import memory_dir as _resolved
+        return _resolved()
+    except Exception:
+        return Path(os.getenv("MEMORY_DIR", "./memory"))
 
 
 def _max_core_memory_size() -> int:
