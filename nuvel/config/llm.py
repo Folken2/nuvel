@@ -19,8 +19,11 @@ litellm.request_timeout = int(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
 litellm.drop_params = True
 
 _OPENROUTER_HEADERS = {
-    "HTTP-Referer": "https://github.com/albertfolch-renal/meta-agent",
-    "X-Title": "meta-agent",
+    "HTTP-Referer": os.getenv(
+        "OPENROUTER_REFERER",
+        "https://github.com/Folken2/nuvel",
+    ),
+    "X-Title": os.getenv("OPENROUTER_TITLE", "nuvel"),
 }
 
 FAST_MODEL = LiteLlm(
