@@ -1,64 +1,96 @@
 # Banner design brief
 
-Target: `docs/assets/banner.png`, 1200×300 (4:1), used at the very top of the README hero.
+Target: `docs/assets/banner.png`, 1200×300 (4:1, header band) or 1400×784 (16:9, full hero — Multica's ratio). Used at the very top of the README hero.
 
 ## Visual direction
 
-Editorial / library / quiet-confident — adjacent to Multica's banner aesthetic but distinct. The wordmark direction is warm cream + charcoal italic serif (see `logo-light.svg` / `logo-dark.svg`); the banner should live in the same world.
+**Painterly mountain landscape with a sea of clouds**, in the same Studio Ghibli / Makoto Shinkai-adjacent digital-illustration style as Multica's hero banner. The metaphor is calm, scenic, non-technical — the product's character comes from proximity to the warm landscape, not from any depicted tech.
 
-**Anchor palette:**
-- Background: cream `#F4F1EA` (or a near neighbour — `#EDE8DA`, `#F8F4EB`)
-- Primary mark / type: charcoal `#2A2A28`
-- Single accent (use sparingly, one element only): terracotta `#C8553D` *or* deep ochre `#B6873B`
+The specific hook: **a sea of clouds below the peaks**. Catalan *núvol* = cloud, which is the etymological seed of the wordmark "nuvel" (and the accent dot in the logo references this). Showing núvols literally in the landscape ties banner and wordmark together without anyone having to explain it.
 
-**Anti-palette** (avoid):
-- Purple gradients on white/dark — the AI-product cliché
-- Cool blue/cyan tech aesthetic — too generic-startup
-- Pure black on pure white — too clinical for the warmth we want
-- Sans-serif anything — the wordmark is serif italic, the banner should harmonise
+## Style anchors
 
-## Composition
+- Painterly digital illustration. Ghibli / Makoto Shinkai / Atey Ghailan / Mathias Verhasselt territory. Oil-and-light-pen feel, not vector-flat, not 3D-render.
+- Atmospheric depth — multiple ranges receding into haze.
+- Golden hour or just-after-sunrise light. Warm peach and gold at the horizon, cool blues in the shadows.
+- Restrained — no neon, no glow effects, no lens flares, no "epic" overdrive.
+- Wide breathing space. The composition is mostly sky and clouds; the peak anchors the upper third.
 
-Three options, in order of how Multica-adjacent they are. Pick one before generating.
+## Composition (recommended)
 
-### A. Pure typographic (lowest risk, most "library card")
+**Single figure on a high ridge, looking out over a sea of clouds; one mountain peak rising above the cloud layer; warm light at the horizon.**
 
-Centered or left-aligned wordmark "nuvel" in italic serif (Fraunces / Playfair / Eames Century Modern), set large. A one-line tagline below in regular weight: *"Production-ready agents, your way."* Generous negative space. A single thin horizontal rule above or below the wordmark, in the accent color, ~1px weight.
+- Foreground: a hiker (or just the silhouette of a person) on a rocky outcrop, viewed from behind or three-quarter back. Small in frame — the landscape dominates. Wears earthy tones (charcoal jacket, ochre pack) that echo the wordmark palette.
+- Mid-ground: a sea of clouds rolling between the ridges, lit pink/peach where the sun touches them.
+- Background: one or two snow-capped peaks rising clear above the clouds. Soft pink on the snow where the light hits, deep blue in the shadowed faces.
+- Sky: clear gradient from deep blue at the top to warm peach at the horizon. Optional: a small crescent moon high in the blue zone (Multica has one; mirroring this is fine, omitting it is also fine).
+- Light direction: low, from camera-right or behind the figure. Long shadows across the foreground rocks.
 
-No imagery. The banner *is* typography.
+This composition reads as: "you, looking out from a vantage point, with the clouds (núvols) below."
 
-### B. Typographic + small architectural diagram
+## Color palette
 
-Wordmark on the left third. Right two-thirds: a small, hand-drawn-looking diagram in line weight matching the mark — a plain-English description on one side, an arrow, a small grid of three labelled boxes on the other (`adk`, `claude-agent-sdk`, `managed`). Style cue: technical-handbook line drawing, not flowchart-clipart. All in charcoal with optional terracotta accent on the arrow.
+| Role | Hex | Notes |
+| ---- | --- | ----- |
+| Sky high | `#1F3D5C` | Deep, slightly desaturated blue |
+| Sky low / horizon | `#E8B58C` → `#F4D5A5` | Warm peach into pale gold at the very horizon |
+| Clouds in light | `#F2C8B0` | Pink-peach where the sun touches them |
+| Clouds in shadow | `#7A8AA0` | Cool blue-grey on the underside |
+| Snow in light | `#F5DCC8` | Warm white, almost pink |
+| Snow / rock in shadow | `#3A4A5E` | Deep cool blue |
+| Foreground rock | `#6B5847` → `#8E7560` | Earthy umber |
+| Figure clothing | `#2A2A28` (charcoal) + `#B6873B` (ochre accent) | Echoes the wordmark palette |
 
-### C. Editorial illustration (highest risk, hardest to brief)
+## Anti-palette (reject if present)
 
-Loose, ink-and-cream illustration: an open book whose pages are dissolving into geometric shapes (squares, circles, lines) that drift to the right. Reads as "structure emerging from description." Wordmark integrated bottom-left. Inspired by hand-drawn essay illustrations (think *The New Yorker*, *Wired* feature art, NOT 3D-render-AI-stock).
+- Neon teal, magenta, electric blue — anything synth-wave
+- Lens flares, light bloom, "god rays" overdrive
+- Any visible technology in frame (drones, satellites, robots, screens, code)
+- Hyper-detailed photorealism — we want painterly, not stock photo
+- A second figure walking with the first (Multica's silhouette; ours is solo)
+- Crisp vector flat aesthetic — wrong style entirely
 
-## Image-gen prompt seeds
+## Image-gen prompts
 
-If using Midjourney / Sora / DALL-E / Imagen, paste the prompt that matches your chosen composition. Add `--ar 4:1 --style raw` (Midjourney) or equivalent aspect-ratio flag.
+Aspect-ratio note: Midjourney `--ar 16:9` for the hero variant or `--ar 4:1` for the slim band. Add `--style raw` if using v6+.
 
-**Composition A:**
+### Primary prompt
 
-> A wide horizontal banner, 4:1 aspect ratio. Cream background `#F4F1EA`. Centered: the word "nuvel" in elegant italic serif typography, charcoal color `#2A2A28`, large. Below in smaller regular weight: "Production-ready agents, your way." Generous negative space. A single thin horizontal rule above the wordmark in terracotta `#C8553D`, 1px weight, 80px wide. Editorial, minimal, library-card aesthetic. No 3D, no gradients, no glow effects. Flat, vector-clean, print-quality.
+> A wide painterly digital illustration in the style of Studio Ghibli and Makoto Shinkai. A single solitary hiker stands on a rocky outcrop in the foreground, viewed from behind, gazing out across a vast sea of clouds. The clouds roll between distant mountain ridges and are lit warm pink and peach by the low golden-hour sun. One snow-capped mountain peak rises clear above the cloud layer in the middle distance, its snow tinted pink in the light, deep blue in shadow. The sky gradient goes from deep blue at the top to warm peach at the horizon. The hiker wears a charcoal jacket with an ochre pack — small in the frame, the landscape dominates. Atmospheric, restrained, calm. Oil-painting feel, soft brushwork. NO neon, NO lens flare, NO visible technology, NO crisp vector style.
 
-**Composition B:**
+### Variant — wider, slimmer band (for the README header)
 
-> A wide horizontal banner, 4:1 aspect ratio. Cream background `#F4F1EA`. Left third: the word "nuvel" in italic serif, charcoal `#2A2A28`, large. Right two-thirds: a hand-drawn-style technical diagram in thin charcoal line. On the left of the diagram, a stylized rectangle labeled "describe what it does"; an arrow points right to a small grid of three labeled boxes — "adk", "claude-agent-sdk", "managed". The arrow is terracotta `#C8553D`. Style: technical handbook, ink-on-paper, no shading, no fills. Flat, minimal, editorial.
+Same prompt, end with: *"Composition centered for a 4:1 wide horizontal banner — most of the frame is sky, clouds, and distant peaks; the foreground figure sits in the lower-left quadrant; the right two-thirds is open landscape and warm sky."*
 
-**Composition C:**
+### Variant — no figure (cleaner, more abstract)
 
-> A wide horizontal banner, 4:1 aspect ratio. Cream paper background with very subtle texture. Centered illustration: an open book whose pages dissolve into floating geometric shapes — clean squares, circles, thin lines — drifting toward the right edge of the frame. Charcoal ink on cream, with a single terracotta `#C8553D` accent on one of the shapes. Bottom-left, integrated into the composition: the word "nuvel" in italic serif. Style: New Yorker editorial illustration, hand-drawn ink, restrained, intelligent. No 3D, no AI-glow, no clipart aesthetic.
+> A wide painterly digital illustration in the style of Studio Ghibli and Makoto Shinkai. A single snow-capped mountain peak rising above a sea of low pink-peach clouds at golden hour. Multiple ridge lines receding into atmospheric haze in the background. Sky gradient from deep blue at the top to warm peach at the horizon. A small crescent moon high in the blue. Painterly, restrained, calm — oil-painting feel with soft visible brushwork. No figures, no technology, no neon. Wide cinematic horizontal aspect ratio.
+
+The no-figure variant pairs more cleanly with the wordmark — pure landscape, pure mood, no narrative competition. The figure variant is warmer and more Multica-adjacent. Either works.
 
 ## Quality bar
 
 Reject and re-roll if:
-- Any character appears as gibberish or misspelled (common image-gen failure)
-- The serif wordmark renders as sans
-- More than one accent color appears
-- Any element looks rendered, glowy, or 3D
-- The composition feels overstuffed — empty space is a feature
-- The illustration style reads as "AI clipart"
 
-When you have a candidate, drop it at `docs/assets/banner.png` and uncomment the banner block at the top of `README.md`.
+- The peak shape reads as Mt. Everest stock-photo silhouette (too generic)
+- Clouds look like cotton-ball clipart instead of soft layered atmosphere
+- The figure has any uncanny anatomy issues (image gen often fails on hands; if visible, regenerate)
+- Sky has banding, gradient artifacts, or a "phone wallpaper" sheen
+- The piece feels overworked — too many elements, too saturated, too much detail
+- Any character/text/glyphs appear in the image (image-gen often inserts garbage text)
+- Feels generically "AI fantasy art" — the mark of failure is "looks like every Midjourney mountain post"
+
+## After you have a candidate
+
+1. Drop the file at `docs/assets/banner.png` (1400×784) — or `banner-wide.png` if you also generate the 4:1 band.
+2. Uncomment the banner block at the top of `README.md`:
+
+   ```html
+   <p align="center">
+     <img src="docs/assets/banner.png" alt="nuvel — production-ready agents, your way" width="100%">
+   </p>
+   ```
+
+3. Push.
+
+If the result is close but not quite right, the highest-leverage tweaks (in order): cloud color temperature → peak silhouette → light direction → figure pose. The first three are usually one-prompt-tweak each; the fourth is harder and probably means re-rolling without the figure.
