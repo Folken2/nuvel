@@ -15,6 +15,7 @@
 Skills, scaffolder, or meta-agent — build agents on [Google ADK](https://google.github.io/adk-docs/), the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python), or [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) with the workflow you already have.
 
 [![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
+[![GitHub stars](https://img.shields.io/github/stars/Folken2/nuvel?style=flat)](https://github.com/Folken2/nuvel/stargazers)
 
 [Google ADK](https://google.github.io/adk-docs/) · [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) · [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) · [Skills format](https://www.anthropic.com/news/skills) · [Contributing](CONTRIBUTING.md)
 
