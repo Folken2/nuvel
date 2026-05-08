@@ -1,0 +1,21 @@
+# Environment definition — applied once at setup time, then referenced by ID.
+#
+# The environment is the template for the per-session container where the
+# agent's tools execute. Networking + package config goes here.
+#
+# Field reference: https://platform.claude.com/docs/en/managed-agents/environments
+
+name: {{agent_name}}-env
+
+config:
+  type: cloud
+
+  # networking.type:
+  #   unrestricted                — full egress (default; simplest)
+  #   package_managers_and_custom — package managers + the hosts you list
+  networking:
+    type: unrestricted
+    # If you switch to package_managers_and_custom, list MCP server hosts here
+    # or your tools will silently fail.
+    # allowed_hosts:
+    #   - api.githubcopilot.com

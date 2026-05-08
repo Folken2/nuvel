@@ -1,0 +1,93 @@
+# {{agent_name}}
+
+{{agent_description}}
+
+Built on [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) using [nuvel](https://github.com/Folken2/nuvel).
+
+The agent loop runs on Anthropic's infrastructure. This project is a thin proxy: a YAML agent definition, a setup script that registers it, and a FastAPI server that creates one session per incoming request.
+
+## Quick start
+
+```bash
+# 1. Install
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure
+cp .env.example .env
+# Add your ANTHROPIC_API_KEY
+
+# 3. Apply the agent and environment definitions (one-time)
+python setup.py
+# Writes MANAGED_AGENT_ID and MANAGED_AGENT_ENV_ID to .env
+
+# 4. Local dev (no server)
+python run_dev.py "say hello"
+
+# 5. Server mode
+python server.py
+# → http://localhost:8000
+# → POST /run_sse/ with {"prompt": "..."}
+# → GET /health
+```
+
+## Project layout
+
+```
+agent.yaml                # what the agent IS — model, system, tools, MCP servers, skills
+environment.yaml          # what container the agent's tools run in
+setup.py                  # applies both YAMLs; persists IDs to .env
+{{agent_package}}/
+├── orchestrator.py       # session lifecycle: stream-first, idle-break gate, custom-tool dispatch
+└── tools/
+    ├── __init__.py       # custom-tool registry (host-side handlers)
+    └── example.py        # one starter handler — replace
+server.py                 # FastAPI: /run_sse/, /health
+run_dev.py                # local CLI for testing without server
+```
+
+## Adding a custom tool
+
+Two-step:
+
+1. **Declare the schema** in `agent.yaml` under `tools:`:
+   ```yaml
+   - type: custom
+     name: my_tool
+     description: What it does and when to use it.
+     input_schema:
+       type: object
+       properties:
+         arg1: {type: string}
+       required: [arg1]
+   ```
+
+2. **Implement the handler** in `{{agent_package}}/tools/`. Add a Python function that takes a dict of args and returns a string. Register it in `{{agent_package}}/tools/__init__.py` by adding to `_HANDLERS`.
+
+Then run `python setup.py` to apply the new schema (creates a new agent version).
+
+**Custom tools are the right place for any non-MCP API call that needs a secret.** The container has no env vars and vaults are MCP-only, so anything else (REST APIs with API keys, internal libraries, DB connections) lives here on your server.
+
+## Adding an MCP integration
+
+1. **Declare the server** in `agent.yaml` under `mcp_servers:` (no auth — just `type: url`, `name`, `url`).
+2. **Create a vault** with the OAuth credentials (see [Vaults docs](https://platform.claude.com/docs/en/managed-agents/tools.md#vaults)).
+3. **Attach the vault to sessions** by passing `vault_ids=["vlt_..."]` in `orchestrator.py` `sessions.create()` call.
+
+## Adding a skill
+
+Anthropic prebuilt skills (`xlsx`, `docx`, `pptx`, `pdf`) — add to `agent.yaml` under `skills:`:
+
+```yaml
+skills:
+  - type: anthropic
+    skill_id: xlsx
+```
+
+Custom skills — create via the Skills API, then reference by ID. See [Skills docs](https://platform.claude.com/docs/en/agents-and-tools/skills).
+
+## Deployment
+
+The `Dockerfile` and `railway.json` work out of the box. Set `ANTHROPIC_API_KEY`, `MANAGED_AGENT_ID`, `MANAGED_AGENT_ENV_ID` (and optionally `API_KEY` for bearer auth) in the deployment environment. `MANAGED_AGENT_ID` and `MANAGED_AGENT_ENV_ID` come from the `setup.py` run on your local machine — copy them from `.env`.
+
+For team workflows, prefer the [`ant` CLI](https://platform.claude.com/docs/en/api/sdks/cli.md) which handles `create` / `update --version N` for the YAML files in CI.

@@ -1,0 +1,120 @@
+"""
+Session orchestrator for {{agent_name}}.
+
+Owns the data-plane lifecycle:
+  1. Open the SSE stream first (stream-first ordering).
+  2. Send the user message.
+  3. Forward agent events to the caller as serialized payloads.
+  4. Handle agent.custom_tool_use by dispatching to host-side tool handlers
+     and replying with user.custom_tool_result.
+  5. Break on session.status_terminated, or session.status_idle with a
+     terminal stop_reason (anything except requires_action — see docs).
+
+This pattern is correct under the Managed Agents launch SDK:
+  - Stream-first: the SSE stream only delivers events that occur AFTER
+    it opens, so we open it before sending the kickoff event.
+  - Idle-break gate: idle is transient when waiting on tool confirmations
+    or custom-tool results; only break on terminal stop_reasons.
+  - Custom tools host-side: the only place secrets can live, since the
+    container has no env vars and vaults are MCP-only.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, AsyncIterator
+
+from anthropic import Anthropic
+
+from .tools import dispatch_custom_tool
+
+
+def _serialize_event(event: Any) -> dict:
+    """Best-effort serialization of an SDK event object into a plain dict."""
+    cls = event.__class__.__name__
+    out: dict[str, Any] = {"type": getattr(event, "type", cls.lower()), "id": getattr(event, "id", None)}
+
+    # Common payload fields — populated when present, ignored when not.
+    for field in ("content", "name", "input", "tool_use_id", "stop_reason",
+                  "session_thread_id", "model_usage", "evaluated_permission"):
+        value = getattr(event, field, None)
+        if value is not None:
+            try:
+                json.dumps(value, default=lambda o: getattr(o, "__dict__", str(o)))
+                out[field] = value
+            except TypeError:
+                out[field] = str(value)
+    return out
+
+
+def _stop_reason_terminal(stop_reason: Any) -> bool:
+    """idle is terminal except when the agent is waiting on us."""
+    if stop_reason is None:
+        return True
+    rtype = getattr(stop_reason, "type", None) or (
+        stop_reason.get("type") if isinstance(stop_reason, dict) else None
+    )
+    return rtype != "requires_action"
+
+
+def run_session(
+    client: Anthropic,
+    agent_id: str,
+    environment_id: str,
+    prompt: str,
+    title: str | None = None,
+) -> AsyncIterator[dict]:
+    """Synchronous generator that yields serialized event dicts.
+
+    FastAPI wraps this with anyio.from_thread to drive an SSE response.
+    """
+    session = client.beta.sessions.create(
+        agent=agent_id,
+        environment_id=environment_id,
+        title=title or f"Session: {prompt[:60]}",
+    )
+
+    yield {"type": "session.created", "session_id": session.id}
+
+    with client.beta.sessions.events.stream(session_id=session.id) as stream:
+        # Stream-first: send the kickoff after the stream is open.
+        client.beta.sessions.events.send(
+            session_id=session.id,
+            events=[
+                {"type": "user.message",
+                 "content": [{"type": "text", "text": prompt}]}
+            ],
+        )
+
+        for event in stream:
+            payload = _serialize_event(event)
+            yield payload
+
+            if event.type == "session.status_terminated":
+                return
+
+            if event.type == "session.status_idle":
+                if _stop_reason_terminal(getattr(event, "stop_reason", None)):
+                    return
+                # transient idle — fall through to handle whatever the
+                # agent is waiting on (custom tool, tool confirmation).
+
+            if event.type == "agent.custom_tool_use":
+                tool_name = getattr(event, "name", "")
+                tool_input = getattr(event, "input", {}) or {}
+                try:
+                    result = dispatch_custom_tool(tool_name, tool_input)
+                    is_error = False
+                except Exception as exc:
+                    result = f"Tool {tool_name} failed: {exc}"
+                    is_error = True
+
+                client.beta.sessions.events.send(
+                    session_id=session.id,
+                    events=[{
+                        "type": "user.custom_tool_result",
+                        "custom_tool_use_id": event.id,
+                        "content": [{"type": "text", "text": str(result)}],
+                        "is_error": is_error,
+                    }],
+                )

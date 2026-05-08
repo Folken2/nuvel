@@ -1,0 +1,37 @@
+"""
+Custom tool registry for {{agent_name}}.
+
+Custom tools in Managed Agents are handled HOST-SIDE — the agent emits
+agent.custom_tool_use events, we execute the call here, and reply with
+user.custom_tool_result. Anthropic's container never sees the secret.
+
+This is the only place to use API keys for non-MCP services. The
+container has no env vars and vaults are MCP-only, so any third-party
+API or CLI that needs a secret must be wrapped as a custom tool.
+
+Each handler:
+  - Takes a dict of arguments (validated by the agent against the
+    input_schema in agent.yaml).
+  - Returns a string that gets surfaced back to the agent.
+  - Raises any exception to signal an error; the orchestrator wraps
+    it into is_error=True automatically.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+
+from .example import lookup_user
+
+# Map tool name (matches agent.yaml `tools[].name`) to handler function.
+_HANDLERS: dict[str, Callable[[dict[str, Any]], Any]] = {
+    "lookup_user": lookup_user,
+}
+
+
+def dispatch_custom_tool(name: str, args: dict[str, Any]) -> Any:
+    """Run the host-side handler for a custom tool, by name."""
+    handler = _HANDLERS.get(name)
+    if handler is None:
+        raise ValueError(f"Unknown custom tool: {name}")
+    return handler(args)

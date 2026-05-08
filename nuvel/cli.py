@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk")
+SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk", "anthropic-managed-agents")
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 
@@ -40,6 +40,9 @@ def _scaffold_agent_for(framework: str):
         return scaffold_agent
     if framework == "claude-agent-sdk":
         from nuvel.backends.claude_agent_sdk.scaffold import scaffold_agent
+        return scaffold_agent
+    if framework == "anthropic-managed-agents":
+        from nuvel.backends.anthropic_managed_agents.scaffold import scaffold_agent
         return scaffold_agent
     raise ValueError(f"Unknown framework: {framework}")
 

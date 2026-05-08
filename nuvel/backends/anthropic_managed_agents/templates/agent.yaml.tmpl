@@ -1,0 +1,55 @@
+# Agent definition — applied once at setup time, then referenced by ID.
+#
+# Edit this file freely; rerun `python setup.py` after changes to
+# create a new versioned agent and update .env with the new ID.
+#
+# Field reference: https://platform.claude.com/docs/en/managed-agents/agent-setup
+
+name: {{agent_name}}
+model: claude-opus-4-7
+
+# System prompt — sets the agent's persona and operating principles.
+system: |
+  {{agent_system_prompt}}
+
+  Role: You are {{agent_name}}, {{agent_description}}.
+
+  Operating principles:
+  - Use your tools to take action; don't ask permission for things you've been authorized for.
+  - When ambiguous, surface the ambiguity in one sentence and propose the most likely interpretation.
+  - Cite tool outputs so the user can verify your work.
+
+# Tools — three kinds:
+#   1. Prebuilt agent toolset (bash, read, write, edit, glob, grep, web_fetch, web_search)
+#   2. MCP toolsets (third-party integrations; credentials live in vaults, not here)
+#   3. Custom tools (handled host-side by your server.py — schemas declared inline)
+tools:
+  - type: agent_toolset_20260401
+    default_config:
+      enabled: true
+
+  # Example custom tool — the agent emits agent.custom_tool_use events that
+  # your server handles in {{agent_package}}/tools/. Replace or delete.
+  - type: custom
+    name: lookup_user
+    description: Look up a user by ID. Use when you need verified profile data.
+    input_schema:
+      type: object
+      properties:
+        user_id:
+          type: string
+          description: The user's unique ID
+      required: [user_id]
+
+# MCP servers — third-party integrations.
+# Each entry declares the connection only; auth lives in a vault attached
+# at session-create time. Uncomment and edit to wire one up.
+mcp_servers: []
+# - type: url
+#   name: github
+#   url: https://api.githubcopilot.com/mcp/
+
+# Anthropic prebuilt skills (xlsx, docx, pptx, pdf) and your custom skills.
+skills: []
+# - type: anthropic
+#   skill_id: xlsx

@@ -1,0 +1,26 @@
+"""Smoke tests for {{agent_name}} — runs without making API calls."""
+
+from __future__ import annotations
+
+from {{agent_package}}.tools import dispatch_custom_tool
+from {{agent_package}}.tools.example import lookup_user
+
+
+def test_lookup_user_returns_string():
+    result = lookup_user({"user_id": "u_123"})
+    assert isinstance(result, str)
+    assert "u_123" in result
+
+
+def test_dispatch_known_tool():
+    result = dispatch_custom_tool("lookup_user", {"user_id": "u_456"})
+    assert "u_456" in result
+
+
+def test_dispatch_unknown_tool_raises():
+    try:
+        dispatch_custom_tool("does_not_exist", {})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected ValueError for unknown tool")
