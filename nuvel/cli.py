@@ -1,10 +1,14 @@
-"""nuvel — command-line interface for the meta-agent.
+"""nuvel — command-line interface.
 
 Subcommands:
-    nuvel new <name>            Scaffold a new ADK agent.
-    nuvel skills list           List bundled skills.
-    nuvel skills search <q>     Search skills by name or description.
-    nuvel run                   Launch the meta-agent (delegates to nuvel.run_adk).
+    nuvel new <name> --framework <fw>
+        Scaffold a new agent. Default framework: adk.
+    nuvel skills list [--framework <fw>]
+        List bundled knowledge skills for a framework.
+    nuvel skills search <q> [--framework <fw>]
+        Search skills by name or description.
+    nuvel run [--dev]
+        Launch the meta-agent (ADK-based) for autonomous scaffolding.
 """
 
 from __future__ import annotations
@@ -17,11 +21,24 @@ from pathlib import Path
 
 import yaml
 
-SKILLS_DIR = Path(__file__).resolve().parent / "backends" / "adk" / "skills"
+DEFAULT_FRAMEWORK = "adk"
+SUPPORTED_FRAMEWORKS = ("adk",)
+_BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
+
+
+def _skills_dir(framework: str) -> Path:
+    return _BACKENDS_DIR / framework / "skills"
+
+
+def _scaffold_agent_for(framework: str):
+    if framework == "adk":
+        from nuvel.backends.adk.scaffold import scaffold_agent
+        return scaffold_agent
+    raise ValueError(f"Unknown framework: {framework}")
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    from nuvel.backends.adk.scaffold import scaffold_agent
+    scaffold_agent = _scaffold_agent_for(args.framework)
 
     result = scaffold_agent(
         name=args.name,
@@ -34,6 +51,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
         print(f"Files created: {result['files_created']}")
+        print(f"Framework: {args.framework}")
         flags = []
         if result.get("persona"):
             flags.append("persona")
@@ -46,11 +64,12 @@ def _cmd_new(args: argparse.Namespace) -> int:
     return 1
 
 
-def _load_skills() -> list[dict]:
+def _load_skills(framework: str) -> list[dict]:
     skills: list[dict] = []
-    if not SKILLS_DIR.is_dir():
+    skills_dir = _skills_dir(framework)
+    if not skills_dir.is_dir():
         return skills
-    for entry in sorted(SKILLS_DIR.iterdir()):
+    for entry in sorted(skills_dir.iterdir()):
         skill_md = entry / "SKILL.md"
         if not skill_md.is_file():
             continue
@@ -89,7 +108,7 @@ def _print_skills(skills: list[dict]) -> None:
 
 
 def _cmd_skills_list(args: argparse.Namespace) -> int:
-    _print_skills(_load_skills())
+    _print_skills(_load_skills(args.framework))
     return 0
 
 
@@ -97,7 +116,7 @@ def _cmd_skills_search(args: argparse.Namespace) -> int:
     query = args.query.lower()
     matches = [
         s
-        for s in _load_skills()
+        for s in _load_skills(args.framework)
         if query in s["slug"].lower()
         or query in s["name"].lower()
         or query in s["description"].lower()
@@ -113,27 +132,38 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return subprocess.call([sys.executable, "-m", "nuvel.run_adk"], env=env)
 
 
+def _add_framework_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--framework", "-f",
+        choices=SUPPORTED_FRAMEWORKS,
+        default=DEFAULT_FRAMEWORK,
+        help=f"Agent framework (default: {DEFAULT_FRAMEWORK}).",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nuvel",
-        description="nuvel — scaffold, run, and explore meta-agent projects.",
+        description="nuvel — scaffold, run, and explore agents across frameworks.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_new = sub.add_parser("new", help="Scaffold a new ADK agent.")
+    p_new = sub.add_parser("new", help="Scaffold a new agent.")
     p_new.add_argument("name", help="Kebab-case agent name (e.g. my-agent).")
+    _add_framework_flag(p_new)
     p_new.add_argument("--output-dir", default=None, help="Parent directory for the new agent.")
     p_new.add_argument("--description", default="", help="Short agent description.")
     p_new.add_argument("--system-prompt", default="", help="System prompt for the new agent.")
     p_new.add_argument(
         "--persona", action="store_true",
-        help="Activate the persona overlay: self-rewriting SOUL.md, AWAKENING.md, "
-             "author_skill, complete_awakening. For agents meant to live and grow "
-             "over time. Inappropriate for stateless task bots.",
+        help="(adk only) Activate the persona overlay: self-rewriting SOUL.md, "
+             "AWAKENING.md, author_skill, complete_awakening. For agents meant "
+             "to live and grow over time. Inappropriate for stateless task bots.",
     )
     p_new.add_argument(
         "--with-composio", action="store_true",
-        help="Wire the Composio Tool Router MCP (~1000 toolkits via one hosted endpoint).",
+        help="(adk only) Wire the Composio Tool Router MCP "
+             "(~1000 toolkits via one hosted endpoint).",
     )
     p_new.set_defaults(func=_cmd_new)
 
@@ -141,9 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
     skills_sub = p_skills.add_subparsers(dest="skills_command", required=True)
 
     p_list = skills_sub.add_parser("list", help="List all bundled skills.")
+    _add_framework_flag(p_list)
     p_list.set_defaults(func=_cmd_skills_list)
 
     p_search = skills_sub.add_parser("search", help="Search skills by keyword.")
+    _add_framework_flag(p_search)
     p_search.add_argument("query", help="Substring to match against skill name/description.")
     p_search.set_defaults(func=_cmd_skills_search)
 
