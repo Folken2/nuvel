@@ -1,8 +1,0 @@
-1. Fer que el meta-agent pugui connectar-se a skills.sh i buscar, descarregar i utilitzar les skills per crear nous agents.
-2. Fer que el meta-agent pugui evaluar prompts, skills... i refinar agents. Seria tancar el loop i fer els agents self-improving.
-3. Afegir Composio per connectors varis. Utilitzar cli també com github, google workspace... investigar cli potents.
-4. Afegir un SOUL.md a tots els agents. Investigar que podem utilitzar d'openclaw per crear agents potents, autonoms i self-improvings. 
-5. Per defecte, tots els agents surten amb un projecte Neon per memoria curta i logs d'intereccions. Explorar metode de memoria més eficaç: markdown files o tipus vector search a Neon.
-6. Explorar "auto-dream" de claude code per fer que els agents actualitzin memòria cada nit.
-7. ADK 2.0 Task API (alpha 2.0.0a2): tres modes d'agent (chat/task/single_turn) amb auto-return, sessions aïllades, input/output schema tipat (Pydantic), i Workflow Runtime per DAGs determinístics. Quan estabilitzin, migrar el scaffolder per generar agents amb task modes i workflows. La structured I/O és clau per l'eval pipeline — outputs tipats i validables en lloc de text lliure. Breaking changes amb 1.x, esperar estabilització.
-8. Eval agent que consumeixi els conversation traces (traces/conversations/*.json) per scoring automatitzat, detecció de regressions, i suggeriments de millora de prompts/tools. Les golden recordings (#3 test harness) serveixen com baseline. Això tanca el loop de self-improvement.
