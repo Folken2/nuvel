@@ -6,7 +6,10 @@ Target: `docs/assets/banner.png`, 1200×300 (4:1, header band) or 1400×784 (16:
 
 **Painterly mountain landscape with a sea of clouds**, in the same Studio Ghibli / Makoto Shinkai-adjacent digital-illustration style as Multica's hero banner. The metaphor is calm, scenic, non-technical — the product's character comes from proximity to the warm landscape, not from any depicted tech.
 
-The specific hook: **a sea of clouds below the peaks**. Catalan *núvol* = cloud, which is the etymological seed of the wordmark "nuvel" (and the accent dot in the logo references this). Showing núvols literally in the landscape ties banner and wordmark together without anyone having to explain it.
+The specific hook: **Montserrat rising above a sea of clouds**. Two reinforcing references:
+
+- *Núvol* (Catalan) = cloud, the etymological seed of the wordmark "nuvel"; the accent dot in the logo references the same diacritic. Showing núvols in the landscape ties banner and wordmark together.
+- **Montserrat** is the iconic Catalan mountain near Barcelona — a cluster of rounded, eroded conglomerate rock formations whose distinctive serrated silhouette (the literal meaning of *Montserrat*) is unmistakable. Named explicitly in the prompts so image-gen locks the right shape. Morning mist between its formations is one of the most photographed views in Catalonia.
 
 ## Style anchors
 
@@ -18,15 +21,15 @@ The specific hook: **a sea of clouds below the peaks**. Catalan *núvol* = cloud
 
 ## Composition (recommended)
 
-**Single figure on a high ridge, looking out over a sea of clouds; one mountain peak rising above the cloud layer; warm light at the horizon.**
+**The Montserrat massif rising above a sea of low clouds at golden hour; warm light raking across the rounded rock formations.**
 
-- Foreground: a hiker (or just the silhouette of a person) on a rocky outcrop, viewed from behind or three-quarter back. Small in frame — the landscape dominates. Wears earthy tones (charcoal jacket, ochre pack) that echo the wordmark palette.
-- Mid-ground: a sea of clouds rolling between the ridges, lit pink/peach where the sun touches them.
-- Background: one or two snow-capped peaks rising clear above the clouds. Soft pink on the snow where the light hits, deep blue in the shadowed faces.
-- Sky: clear gradient from deep blue at the top to warm peach at the horizon. Optional: a small crescent moon high in the blue zone (Multica has one; mirroring this is fine, omitting it is also fine).
-- Light direction: low, from camera-right or behind the figure. Long shadows across the foreground rocks.
+- Foreground (optional): a small hiker silhouette on a viewpoint, viewed from behind, looking out toward Montserrat. Small in frame — the landscape dominates. Earthy tones (charcoal jacket, ochre pack) that echo the wordmark palette. **Or omit entirely** for a cleaner abstract composition (recommended — see "no-figure variant" below).
+- Mid-ground: a sea of clouds rolling at the base of the mountain, lit pink/peach where the sun touches them. Some clouds drift between the rock formations themselves.
+- Background: the distinctive Montserrat silhouette — a cluster of rounded, eroded conglomerate rock formations rising vertically like fingers or stalagmites. Pink-grey rock catching the warm light, deep blue-grey in shadow. Mediterranean pines and scrub vegetation visible at the lower slopes where they emerge from the clouds.
+- Sky: clear gradient from deep blue at the top to warm peach at the horizon. Optional: a thin crescent moon high in the blue zone.
+- Light direction: low, raking from camera-right. Long shadows in the rock crevices, warm rim-light on the western faces of the formations.
 
-This composition reads as: "you, looking out from a vantage point, with the clouds (núvols) below."
+This composition reads as: "Montserrat above the clouds (núvols)" — the wordmark's etymology, made literal in landscape.
 
 ## Color palette
 
@@ -36,10 +39,11 @@ This composition reads as: "you, looking out from a vantage point, with the clou
 | Sky low / horizon | `#E8B58C` → `#F4D5A5` | Warm peach into pale gold at the very horizon |
 | Clouds in light | `#F2C8B0` | Pink-peach where the sun touches them |
 | Clouds in shadow | `#7A8AA0` | Cool blue-grey on the underside |
-| Snow in light | `#F5DCC8` | Warm white, almost pink |
-| Snow / rock in shadow | `#3A4A5E` | Deep cool blue |
-| Foreground rock | `#6B5847` → `#8E7560` | Earthy umber |
-| Figure clothing | `#2A2A28` (charcoal) + `#B6873B` (ochre accent) | Echoes the wordmark palette |
+| Montserrat rock in light | `#D4A88A` → `#C89878` | Warm pink-grey conglomerate, sun-lit western faces |
+| Montserrat rock in shadow | `#4A5260` | Deep blue-grey on the eastern crevices |
+| Mediterranean vegetation | `#3A5240` → `#5A7050` | Pines and scrub on lower slopes (subtle) |
+| Foreground rock / viewpoint | `#6B5847` → `#8E7560` | Earthy umber |
+| Figure clothing (if used) | `#2A2A28` (charcoal) + `#B6873B` (ochre accent) | Echoes the wordmark palette |
 
 ## Anti-palette (reject if present)
 
@@ -54,25 +58,27 @@ This composition reads as: "you, looking out from a vantage point, with the clou
 
 Aspect-ratio note: Midjourney `--ar 16:9` for the hero variant or `--ar 4:1` for the slim band. Add `--style raw` if using v6+.
 
-### Primary prompt
+### Primary prompt — no figure (recommended)
 
-> A wide painterly digital illustration in the style of Studio Ghibli and Makoto Shinkai. A single solitary hiker stands on a rocky outcrop in the foreground, viewed from behind, gazing out across a vast sea of clouds. The clouds roll between distant mountain ridges and are lit warm pink and peach by the low golden-hour sun. One snow-capped mountain peak rises clear above the cloud layer in the middle distance, its snow tinted pink in the light, deep blue in shadow. The sky gradient goes from deep blue at the top to warm peach at the horizon. The hiker wears a charcoal jacket with an ochre pack — small in the frame, the landscape dominates. Atmospheric, restrained, calm. Oil-painting feel, soft brushwork. NO neon, NO lens flare, NO visible technology, NO crisp vector style.
+> A wide painterly digital illustration in the style of Studio Ghibli and Makoto Shinkai. The Montserrat mountain in Catalonia, Spain — its distinctive cluster of rounded, eroded conglomerate rock formations rising vertically like fingers above a sea of low clouds at golden hour. The clouds drift between the rock pillars and at the base of the mountain, lit warm pink and peach by the low sun. Pink-grey conglomerate rock catches the warm light on its western faces, deep blue-grey in shadow. Mediterranean pines and scrub vegetation visible at the lower slopes where they emerge from the clouds. Sky gradient from deep blue at the top to warm peach at the horizon. A thin crescent moon high in the blue. Atmospheric depth — multiple ridge lines receding into haze. Painterly, restrained, calm — oil-painting feel with soft visible brushwork. NO snow, NO neon, NO lens flare, NO visible technology, NO crisp vector style, NO buildings or monastery.
 
-### Variant — wider, slimmer band (for the README header)
+### Variant — with figure (more Multica-adjacent)
 
-Same prompt, end with: *"Composition centered for a 4:1 wide horizontal banner — most of the frame is sky, clouds, and distant peaks; the foreground figure sits in the lower-left quadrant; the right two-thirds is open landscape and warm sky."*
+> A wide painterly digital illustration in the style of Studio Ghibli and Makoto Shinkai. A single solitary hiker stands on a rocky viewpoint in the foreground, viewed from behind, gazing out toward the Montserrat mountain in Catalonia. The distinctive cluster of rounded, eroded conglomerate rock formations rises vertically like fingers above a sea of low clouds at golden hour. The clouds drift between the rock pillars, lit warm pink and peach by the low sun. Pink-grey conglomerate rock in the warm light, deep blue-grey in shadow. Mediterranean pines and scrub at the lower slopes. Sky gradient from deep blue at the top to warm peach at the horizon. The hiker wears a charcoal jacket with an ochre pack — small in the frame, the landscape dominates. Atmospheric, restrained, calm. Oil-painting feel, soft brushwork. NO snow, NO neon, NO lens flare, NO visible technology, NO crisp vector style, NO buildings or monastery.
 
-### Variant — no figure (cleaner, more abstract)
+### Variant — slim band (4:1, for the README header)
 
-> A wide painterly digital illustration in the style of Studio Ghibli and Makoto Shinkai. A single snow-capped mountain peak rising above a sea of low pink-peach clouds at golden hour. Multiple ridge lines receding into atmospheric haze in the background. Sky gradient from deep blue at the top to warm peach at the horizon. A small crescent moon high in the blue. Painterly, restrained, calm — oil-painting feel with soft visible brushwork. No figures, no technology, no neon. Wide cinematic horizontal aspect ratio.
+Same as either prompt above, append: *"Composition centered for a 4:1 wide horizontal banner — most of the frame is sky, clouds, and the Montserrat silhouette in the right two-thirds; the left third is open peach sky and atmospheric haze."*
 
-The no-figure variant pairs more cleanly with the wordmark — pure landscape, pure mood, no narrative competition. The figure variant is warmer and more Multica-adjacent. Either works.
+The no-figure variant pairs more cleanly with the wordmark — pure mood, no narrative competition. The figure variant is warmer and more Multica-adjacent. Either works; the no-figure one is more ownable.
 
 ## Quality bar
 
 Reject and re-roll if:
 
-- The peak shape reads as Mt. Everest stock-photo silhouette (too generic)
+- The mountain reads as a generic sharp Alpine peak instead of Montserrat's rounded, finger-like conglomerate cluster (the silhouette is the point — if it doesn't look like Montserrat, re-roll with a stronger prompt weight on "Montserrat" and "rounded conglomerate rock")
+- Snow appears anywhere — Montserrat is Mediterranean, low elevation, no snow
+- The Benedictine monastery / Santa Maria de Montserrat appears in the rock face — too literal, too narrative-heavy
 - Clouds look like cotton-ball clipart instead of soft layered atmosphere
 - The figure has any uncanny anatomy issues (image gen often fails on hands; if visible, regenerate)
 - Sky has banding, gradient artifacts, or a "phone wallpaper" sheen
@@ -93,4 +99,4 @@ Reject and re-roll if:
 
 3. Push.
 
-If the result is close but not quite right, the highest-leverage tweaks (in order): cloud color temperature → peak silhouette → light direction → figure pose. The first three are usually one-prompt-tweak each; the fourth is harder and probably means re-rolling without the figure.
+If the result is close but not quite right, the highest-leverage tweaks (in order): **Montserrat silhouette accuracy** (most important — re-roll with stronger weight on "Montserrat conglomerate rock formations"), cloud color temperature, light direction, figure pose if used. The first three are usually one-prompt-tweak each; figure pose is harder and probably means re-rolling without the figure.
