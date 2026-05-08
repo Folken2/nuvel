@@ -64,7 +64,7 @@ You don't have to enumerate every tool the server exports — only the ones you 
 | `mcp-server-fetch` | `uvx` | HTTP fetch with sane defaults — better than letting Claude shell out to curl. |
 | `@modelcontextprotocol/server-git` | `npx -y` | Git operations. |
 | `@modelcontextprotocol/server-sequential-thinking` | `npx -y` | Structured chain-of-thought scratchpad. Worth it for complex tasks. |
-| Composio Tool Router | hosted (HTTP) | ~1000 toolkits behind one MCP. See `references/composio-integration.md`. |
+| Composio Tool Router | hosted (HTTP) | ~1000 toolkits (Gmail, GitHub, Slack, Notion, etc.) behind one MCP. See "Composio" below. |
 
 Don't wire all of these by default — every additional MCP server adds tools to Claude's context. Pick what your agent actually needs.
 
@@ -81,6 +81,39 @@ Don't wire all of these by default — every additional MCP server adds tools to
 - The server is maintained separately from your agent code.
 
 The two compose freely — most production agents have one SDK MCP server (custom domain tools) plus 1-3 external servers (filesystem, fetch, maybe Composio).
+
+## Composio — broad integration coverage via one hosted MCP
+
+[Composio](https://composio.dev) hosts an MCP server that exposes ~1000 third-party toolkits — Gmail, GitHub, Slack, Notion, Linear, Calendar, Stripe, HubSpot, every major SaaS — behind a single endpoint. Composio handles auth (OAuth flows, token refresh, per-user credentials) and tool discovery; you wire it once and the agent gains broad reach.
+
+Two-step setup:
+
+1. **Get the per-user MCP endpoint.** Composio sessions are scoped by `user_id`; create one with the `composio` Python SDK:
+
+   ```python
+   from composio import Composio
+   session = Composio().create(user_id="alice")  # any string identifier
+   # session.mcp.url and session.mcp.headers are what you need
+   ```
+
+2. **Wire as a regular HTTP MCP server**:
+
+   ```python
+   options = ClaudeAgentOptions(
+       mcp_servers={
+           "composio": {"type": "http", "url": session.mcp.url, "headers": session.mcp.headers},
+       },
+       allowed_tools=[
+           "mcp__composio__GMAIL_SEND_EMAIL",
+           "mcp__composio__GITHUB_CREATE_ISSUE",
+           # ... only the tools you've connected in the Composio dashboard
+       ],
+   )
+   ```
+
+The toolkits the agent sees are the ones you've connected for that `user_id` at <https://app.composio.dev/apps>. For multi-tenant deployments, build the options per request with the end-user's `user_id` so OAuth tokens never cross users.
+
+When **not** to reach for Composio: when you only need 1-2 integrations (write direct tools instead — less indirection), when you have tight latency budgets (the MCP hop adds ~100ms), or when compliance forbids data flowing through a hosted service.
 
 ## Debugging "tool not found"
 

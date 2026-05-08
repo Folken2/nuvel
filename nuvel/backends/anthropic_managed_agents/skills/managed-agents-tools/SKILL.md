@@ -109,6 +109,31 @@ Anthropic refreshes the token before expiry using the `refresh` block. The crede
 
 **MCP auth tokens are not the service's REST API keys.** A Notion `ntn_` integration token is for Notion's REST API; the Notion MCP server expects an OAuth bearer. Different auth systems.
 
+### Composio — broad integration coverage via one hosted MCP
+
+[Composio](https://composio.dev) is the highest-leverage MCP option when your agent needs many integrations (Gmail, GitHub, Slack, Notion, Calendar, Linear, Stripe, etc.). One MCP endpoint exposes ~1000 toolkits; Composio handles auth (per-user OAuth flows, token refresh) and tool discovery.
+
+For Managed Agents, the wiring is two-step:
+
+1. **Declare the MCP server** on the agent (no auth here):
+
+   ```yaml
+   # agent.yaml
+   mcp_servers:
+     - type: url
+       name: composio
+       url: https://mcp.composio.dev/mcp/<session-or-tenant-path>
+   tools:
+     - {type: agent_toolset_20260401}
+     - {type: mcp_toolset, mcp_server_name: composio}
+   ```
+
+2. **Create a vault** with the Composio API key as the credential, and attach via `vault_ids` on session create.
+
+The per-user `user_id` model that Composio's Python SDK uses (`Composio().create(user_id=...)`) maps to a stable URL or tenant identifier in the MCP path — see the [Composio MCP docs](https://docs.composio.dev) for the current shape, since the pattern has shifted across versions. For multi-tenant Managed Agents, this is the cleanest way to keep OAuth tokens per end-user without writing a credential manager yourself.
+
+When **not** to reach for Composio in Managed Agents: when you only need 1-2 integrations (the per-service MCP servers — like the GitHub MCP — give you tighter control), or when you need bespoke business logic on top of the integration (use a custom tool to compose Composio's tools host-side).
+
 ## Custom tools — for everything else
 
 Custom tools are how you give the agent capabilities backed by your own code. They run on **your server**, not in Anthropic's container. The flow:
