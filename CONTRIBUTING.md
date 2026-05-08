@@ -64,6 +64,34 @@ Do **not** open a public issue. See [SECURITY.md](SECURITY.md).
 Be kind. Assume good faith. Technical disagreement is welcome; personal attacks
 are not.
 
+## Releasing (maintainers)
+
+nuvel publishes to PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) — no
+API tokens stored in GitHub secrets. The workflow in
+[.github/workflows/release.yml](.github/workflows/release.yml) triggers on a
+`v*.*.*` tag push and:
+
+1. Builds sdist + wheel and verifies the tag matches `pyproject.toml` `version`
+2. Publishes to PyPI through the OIDC-backed `pypi` environment
+3. Creates a GitHub release with auto-generated notes
+
+To cut a release:
+
+```bash
+# 1. Bump version in pyproject.toml
+# 2. Commit, push, and tag
+git commit -am "release: 0.2.0"
+git tag v0.2.0
+git push && git push --tags
+```
+
+One-time setup before the first release:
+
+- Register `nuvel` on PyPI and add this repo as a Trusted Publisher
+  (`pypi.org` → Account → Publishing → Add a new pending publisher).
+- Create a GitHub environment named `pypi` (Settings → Environments → New
+  environment).
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the

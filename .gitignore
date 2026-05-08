@@ -7,6 +7,12 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Build artifacts
+build/
+dist/
+*.egg
+wheels/
+
 # Virtual environments
 .venv/
 venv/
