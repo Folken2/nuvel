@@ -12,12 +12,10 @@
 
 **Production-ready agents, your way.**
 
-Skills, scaffolder, or meta-agent — build agents on [Google ADK](https://google.github.io/adk-docs/), the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python), or [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) with the workflow you already have.
+Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Agent SDK, or Anthropic Managed Agents with the workflow you already have.
 
 [![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/Folken2/nuvel?style=flat)](https://github.com/Folken2/nuvel/stargazers)
-
-[Google ADK](https://google.github.io/adk-docs/) · [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) · [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) · [Skills format](https://www.anthropic.com/news/skills) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -32,9 +30,9 @@ Skills, scaffolder, or meta-agent — build agents on [Google ADK](https://googl
 
 ## What is nuvel?
 
-nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — [Google ADK](https://google.github.io/adk-docs/), the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python), and [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview). It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
+nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, the Claude Agent SDK, and Anthropic Managed Agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **[Claude Code](https://claude.com/claude-code)**, **[Codex](https://github.com/openai/codex)**, **[Cursor](https://cursor.com)**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 10-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 10-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
 
 ## Frameworks
 
@@ -55,7 +53,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 
 ## Quick Install
 
-**Use the skills with [Claude Code](https://claude.com/claude-code):**
+**Use the skills with Claude Code:**
 
 ```bash
 git clone https://github.com/Folken2/nuvel.git
@@ -102,7 +100,7 @@ The skeleton is free; the brain is yours. Edit:
 - **Claude Agent SDK**: `tools/example.py` (one `@tool` per file, registered in `tools/__init__.py`), `prompt/system_prompt.md`, `.claude/skills/`, `agent.py` (`build_options()` returning `ClaudeAgentOptions`).
 - **Anthropic Managed Agents**: `agent.yaml` (model, system, tools, MCP servers, skills), `environment.yaml` (container config), custom-tool handlers in `tools/`. Run `python setup.py` to apply the YAMLs to Anthropic's control plane.
 
-If you're driving [Claude Code](https://claude.com/claude-code), the bundled skill at [.claude/skills/nuvel/SKILL.md](.claude/skills/nuvel/SKILL.md) walks Claude through this step-by-step.
+If you're driving Claude Code, the bundled skill at [.claude/skills/nuvel/SKILL.md](.claude/skills/nuvel/SKILL.md) walks Claude through this step-by-step.
 
 ### 3. Run it
 
@@ -194,7 +192,7 @@ nuvel/
 ### Key Design Decisions
 
 - **Template-based scaffolding** — Every generated agent inherits a proven production skeleton (plugins, circuit breakers, rate limiting, structured logging, SSE streaming). You only write the brain.
-- **Skills as a portable knowledge format** — The seven ADK skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
+- **Skills as a portable knowledge format** — The seven ADK skills follow the Anthropic skills format, so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
 - **Scoped file operations** — All file tools are sandboxed to the output directory. No path traversal possible.
 
 ## Generated Agent Structure
