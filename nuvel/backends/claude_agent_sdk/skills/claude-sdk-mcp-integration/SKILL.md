@@ -1,7 +1,6 @@
 ---
 name: claude-sdk-mcp-integration
 description: Wiring external MCP servers into a Claude Agent SDK agent — stdio and HTTP transports, dict format, when to use SDK MCP vs external, naming conventions, and common pre-built servers (filesystem, fetch, sequential-thinking). Read when you need to give Claude access to a service via an existing MCP server, when choosing between writing your own tools and consuming an external one, or when debugging "tool not found" errors.
-type: knowledge
 ---
 
 # External MCP servers in the Claude Agent SDK

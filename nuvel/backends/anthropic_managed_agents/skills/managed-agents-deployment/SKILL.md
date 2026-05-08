@@ -1,7 +1,6 @@
 ---
 name: managed-agents-deployment
 description: Deploying a Managed Agents project to production — wrapping the SDK in FastAPI with SSE, the env vars that have to be set, agent-version pinning, bearer auth, cost tracking via span events, and Docker/Railway/Fly. Read when going from "setup.py worked locally" to "it's running on a server", when designing the request/response contract, when investigating why deployments lose state, or when planning rollouts of agent updates.
-type: knowledge
 ---
 
 # Deploying a Managed Agents project

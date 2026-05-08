@@ -1,7 +1,6 @@
 ---
 name: managed-agents-skills-memory
 description: Skills and memory stores in Anthropic Managed Agents — Anthropic prebuilt skills (xlsx/docx/pptx/pdf), custom skills via the Skills API, and memory stores for cross-session persistence with versioning and audit. Read when adding domain expertise the agent should auto-load, when the agent needs persistent state across sessions, or when distinguishing memory from session resources.
-type: knowledge
 ---
 
 # Skills and memory in Managed Agents

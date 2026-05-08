@@ -1,7 +1,6 @@
 ---
 name: managed-agents-tools
 description: The three kinds of tools in Anthropic Managed Agents — the prebuilt agent toolset (`agent_toolset_20260401`), MCP toolsets with vault-backed credentials, and custom tools handled host-side. Read when adding a new capability to your agent, when deciding where to put a third-party API call, when a third-party service has a hosted MCP server, or when an integration needs an API key.
-type: knowledge
 ---
 
 # Tools in Managed Agents

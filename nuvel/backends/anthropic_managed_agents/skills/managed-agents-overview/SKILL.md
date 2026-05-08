@@ -1,7 +1,6 @@
 ---
 name: managed-agents-overview
 description: The mandatory flow for Anthropic Managed Agents — create a versioned agent once, reference it from sessions on every run. Read first when starting a Managed Agents project, when migrating from a different Anthropic surface (Claude API, Claude Agent SDK), or when confused about why session.create() rejects model/system/tools fields.
-type: knowledge
 ---
 
 # Anthropic Managed Agents — the mandatory flow

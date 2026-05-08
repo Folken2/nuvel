@@ -38,7 +38,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 
 | Framework | Flag | Knowledge skills | Where the agent runs |
 | --- | --- | --- | --- |
-| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 7 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design) | Your server (OpenRouter + LiteLLM) |
+| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 8 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router) | Your server (OpenRouter + LiteLLM) |
 | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | `--framework claude-agent-sdk` | 6 skills (tool creation, MCP integration, permissions, hooks, system prompts, deployment) | Your server (Anthropic API direct) |
 | [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | `--framework anthropic-managed-agents` | 5 skills (overview, tools, events, deployment, skills + memory) | Anthropic's infrastructure (your server is a thin proxy) |
 

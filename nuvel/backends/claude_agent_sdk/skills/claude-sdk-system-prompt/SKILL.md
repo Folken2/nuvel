@@ -1,7 +1,6 @@
 ---
 name: claude-sdk-system-prompt
 description: System prompts in the Claude Agent SDK — string vs file vs preset, the claude_code preset and its append field, dynamic prompts via per-turn rebuilding, and how setting_sources composes user/project/local instructions. Read when designing the agent's voice and operating principles, when migrating an existing prompt into the SDK shape, or when choosing between a static and a dynamic prompt.
-type: knowledge
 ---
 
 # System prompts in the Claude Agent SDK

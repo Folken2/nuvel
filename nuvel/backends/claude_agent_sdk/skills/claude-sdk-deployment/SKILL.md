@@ -1,7 +1,6 @@
 ---
 name: claude-sdk-deployment
 description: Deploying Claude Agent SDK agents to production — wrapping the SDK in FastAPI with SSE streaming, session resume, cost tracking via ResultMessage, Docker/Railway/Fly config, ANTHROPIC_API_KEY handling, and bearer-auth patterns. Read when going from "it works locally" to "it's running on a server", when designing the request/response contract for an agent endpoint, or when investigating why deployments are slower or more expensive than expected.
-type: knowledge
 ---
 
 # Deploying a Claude Agent SDK agent

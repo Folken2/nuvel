@@ -1,7 +1,6 @@
 ---
 name: claude-sdk-hooks
 description: Hooks in the Claude Agent SDK — PreToolUse, PostToolUse, UserPromptSubmit, Stop event types, the HookMatcher signature, hook function signatures, blocking vs auditing patterns, and when hooks beat permission callbacks. Read when adding deterministic guards around tool calls, when implementing audit logging, when injecting context dynamically, or when can_use_tool isn't enough.
-type: knowledge
 ---
 
 # Hooks in the Claude Agent SDK

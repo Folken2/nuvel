@@ -1,7 +1,6 @@
 ---
 name: claude-sdk-tool-creation
 description: Building custom tools for Claude Agent SDK agents — the @tool decorator, schema dicts, return shape, error returns, and the mcp__server__tool naming gotcha. Read when adding a new tool to a Claude Agent SDK project, when you need to expose Python functions to Claude, or when designing tool boundaries.
-type: knowledge
 ---
 
 # Building tools for the Claude Agent SDK

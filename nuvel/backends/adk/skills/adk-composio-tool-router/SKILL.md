@@ -1,7 +1,6 @@
 ---
 name: adk-composio-tool-router
 description: The Composio Tool Router for ADK agents — the --with-composio scaffold flag, per-user sessions via composio.create(user_id=...), the McpToolset wiring, multi-tenant patterns, and when not to reach for it. Read when an ADK agent needs broad integration coverage (Gmail, GitHub, Slack, Notion, Calendar, Linear, etc.) without authoring per-service tools, when the user wants ~1000 toolkits behind one endpoint, or when adding multi-tenant credential isolation to an agent.
-type: knowledge
 ---
 
 # Composio Tool Router for ADK agents

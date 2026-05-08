@@ -1,7 +1,6 @@
 ---
 name: claude-sdk-permissions
 description: The Claude Agent SDK permission model — allowed_tools, disallowed_tools, the six permission_mode values, and the can_use_tool callback. Read when designing what an agent is allowed to do, when production deploys are surprising users with permission prompts, when you want dynamic per-call gating, or when locking down a deploy that runs unattended.
-type: knowledge
 ---
 
 # Permissions in the Claude Agent SDK

@@ -1,7 +1,6 @@
 ---
 name: managed-agents-events
 description: The event stream model for Anthropic Managed Agents — stream-first ordering, the idle-break gate, lossless reconnect via consolidation, custom-tool round-trip, and the most-common event types. Read when implementing or debugging the orchestrator loop, when sessions hang or terminate prematurely, or when reconnecting a dropped SSE stream.
-type: knowledge
 ---
 
 # Driving a session through events
