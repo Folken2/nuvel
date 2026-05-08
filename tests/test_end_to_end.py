@@ -2,17 +2,11 @@
 
 import os
 import shutil
-import sys
 import tempfile
-from pathlib import Path
 
 import pytest
 
-# Ensure project root is importable
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from scaffold import scaffold_agent
+from nuvel.scaffold import scaffold_agent
 from nuvel.tools.validate_tool import _validate_agent_impl
 
 

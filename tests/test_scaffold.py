@@ -1,17 +1,12 @@
-"""Tests for scaffold.py — the stamping script."""
+"""Tests for nuvel.scaffold — the stamping module."""
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-# Ensure project root is importable
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from scaffold import validate_agent_name, scaffold_agent
+from nuvel.scaffold import validate_agent_name, scaffold_agent
 
 
 class TestValidateAgentName(unittest.TestCase):

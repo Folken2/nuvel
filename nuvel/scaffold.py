@@ -30,8 +30,8 @@ import shutil
 import sys
 from pathlib import Path
 
-TEMPLATES_DIR = Path(__file__).parent / "nuvel" / "templates"
-OVERLAYS_DIR = Path(__file__).parent / "nuvel" / "templates_overlays"
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+OVERLAYS_DIR = Path(__file__).parent / "templates_overlays"
 
 PLACEHOLDER_TAG = "{{agent_package}}"
 

@@ -270,7 +270,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_includes_memory_files(self):
         """Scaffolded agent has memory state, tools, and plugin."""
-        from scaffold import scaffold_agent
+        from nuvel.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem", output_dir=self.tmpdir)
         self.assertEqual(result["status"], "ok")
@@ -302,7 +302,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_tools_init_imports_memory(self):
         """Tools __init__.py imports memory tools."""
-        from scaffold import scaffold_agent
+        from nuvel.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem2", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])
@@ -313,7 +313,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_plugins_init_includes_memory(self):
         """Plugins __init__.py registers memory plugin."""
-        from scaffold import scaffold_agent
+        from nuvel.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem3", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])
@@ -324,7 +324,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_instructions_loads_memory(self):
         """Instructions template loads memory into prompt."""
-        from scaffold import scaffold_agent
+        from nuvel.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem4", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])
@@ -335,7 +335,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_env_example_has_memory_config(self):
         """Env example includes memory configuration."""
-        from scaffold import scaffold_agent
+        from nuvel.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem5", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])

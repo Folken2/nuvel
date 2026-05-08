@@ -5,11 +5,36 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nuvel"
 version = "0.1.0"
-description = "nuvel — meta-agent for scaffolding, running, and exploring ADK agents."
+description = "Production-ready skills and scaffolder for Google ADK agents — use them with the coding agent you already have."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Albert Folch" }]
+keywords = [
+    "adk",
+    "google-adk",
+    "agent",
+    "agents",
+    "ai-agent",
+    "llm",
+    "scaffold",
+    "skills",
+    "openrouter",
+    "fastapi",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dynamic = ["dependencies"]
 
 [project.scripts]
@@ -17,15 +42,22 @@ nuvel = "nuvel.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Folken2/nuvel"
-
-[tool.setuptools]
-py-modules = ["scaffold", "run_adk"]
+Repository = "https://github.com/Folken2/nuvel"
+Issues = "https://github.com/Folken2/nuvel/issues"
+Changelog = "https://github.com/Folken2/nuvel/releases"
 
 [tool.setuptools.packages.find]
 include = ["nuvel*"]
 
 [tool.setuptools.package-data]
-"nuvel" = ["templates/**/*", "templates_overlays/**/*", "skills/**/*", "config/*", "prompt/*"]
+"nuvel" = [
+    "templates/**/*",
+    "templates_overlays/**/*",
+    "skills/**/*",
+    "config/*",
+    "prompt/*",
+    "plugins/pricing.json",
+]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

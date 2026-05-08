@@ -67,7 +67,13 @@ git clone https://github.com/Folken2/nuvel.git
 # Skills live in nuvel/skills/ and a ready-made SKILL.md is at .claude/skills/nuvel/
 ```
 
-**Install the CLI (macOS / Linux):**
+**Install the CLI from PyPI (once published):**
+
+```bash
+pip install nuvel
+```
+
+**Or install from source (always available):**
 
 ```bash
 git clone https://github.com/Folken2/nuvel.git
@@ -75,8 +81,6 @@ cd nuvel
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
-
-> A PyPI release is on the way; for now, install from source.
 
 ## Getting Started
 
@@ -153,6 +157,8 @@ nuvel/
 ├── nuvel/
 │   ├── agent.py               # Meta-agent: LlmAgent with tools + SkillToolset
 │   ├── cli.py                 # `nuvel` CLI (new / skills / run)
+│   ├── scaffold.py            # Stamping logic (called by `nuvel new`)
+│   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
 │   ├── skills/                # ADK knowledge skills (loaded on demand)
@@ -160,8 +166,6 @@ nuvel/
 │   ├── plugins/               # 10 plugins (see Plugin Chain below)
 │   └── config/                # LiteLLM/OpenRouter config
 ├── .claude/skills/nuvel/      # Claude Code SKILL.md for driving the CLI
-├── scaffold.py                # Stamping logic (called by `nuvel new`)
-├── run_adk.py                 # FastAPI server (launched by `nuvel run`)
 ├── pyproject.toml             # Packaging + `nuvel` console script
 └── generated-agents/          # Output directory
 ```

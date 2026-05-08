@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
-# Ensure project root is on path for scaffold import
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from scaffold import scaffold_agent
+from nuvel.scaffold import scaffold_agent
 from nuvel.tools.validate_tool import _validate_agent_impl
 
 

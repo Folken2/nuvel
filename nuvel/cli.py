@@ -4,7 +4,7 @@ Subcommands:
     nuvel new <name>            Scaffold a new ADK agent.
     nuvel skills list           List bundled skills.
     nuvel skills search <q>     Search skills by name or description.
-    nuvel run                   Launch the meta-agent (delegates to run_adk.py).
+    nuvel run                   Launch the meta-agent (delegates to nuvel.run_adk).
 """
 
 from __future__ import annotations
@@ -17,12 +17,11 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    from scaffold import scaffold_agent
+    from nuvel.scaffold import scaffold_agent
 
     result = scaffold_agent(
         name=args.name,
@@ -108,14 +107,10 @@ def _cmd_skills_search(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    entry = REPO_ROOT / "run_adk.py"
-    if not entry.is_file():
-        print(f"Error: {entry} not found.", file=sys.stderr)
-        return 1
     env = os.environ.copy()
     if args.dev:
         env["DEV_MODE"] = "true"
-    return subprocess.call([sys.executable, str(entry)], env=env)
+    return subprocess.call([sys.executable, "-m", "nuvel.run_adk"], env=env)
 
 
 def build_parser() -> argparse.ArgumentParser:

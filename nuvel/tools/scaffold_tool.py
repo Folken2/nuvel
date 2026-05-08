@@ -1,15 +1,12 @@
-"""Scaffold tool — wraps scaffold.py as an ADK FunctionTool."""
+"""Scaffold tool — wraps nuvel.scaffold as an ADK FunctionTool."""
 
 from __future__ import annotations
 
 import os
-import sys
 
-# Ensure project root is importable so ``scaffold`` module resolves.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from scaffold import scaffold_agent as _scaffold_agent  # noqa: E402
+from nuvel.scaffold import scaffold_agent as _scaffold_agent
 
-from google.adk.tools import FunctionTool  # noqa: E402
+from google.adk.tools import FunctionTool
 
 _OUTPUT_DIR = os.getenv("AGENTS_OUTPUT_DIR", "./generated-agents")
 
