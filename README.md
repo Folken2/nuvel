@@ -1,11 +1,6 @@
-<!--
-  Banner placeholder. Drop a 1200x300 banner at docs/assets/banner.png
-  and uncomment:
-
-  <p align="center">
-    <img src="docs/assets/banner.png" alt="nuvel — production-ready agents, your way" width="100%">
-  </p>
--->
+<p align="center">
+  <img src="docs/assets/banner.png" alt="nuvel — production-ready agents, your way" width="100%">
+</p>
 
 <div align="center">
 

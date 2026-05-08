@@ -40,3 +40,6 @@ logs/
 # Personal / out-of-repo
 idees_albert/
 data-analysis-agent/
+
+# Visual asset working files (image-gen candidates, raw originals)
+docs/assets/banner-candidates/
