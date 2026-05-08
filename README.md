@@ -1,106 +1,165 @@
+<!--
+  Banner placeholder. Drop a 1200x300 banner at docs/assets/banner.png
+  and uncomment:
+
+  <p align="center">
+    <img src="docs/assets/banner.png" alt="nuvel — production-ready ADK agents, your way" width="100%">
+  </p>
+-->
+
+<div align="center">
+
+<!--
+  Logo placeholder. Drop logo-light.svg / logo-dark.svg at docs/assets/
+  and uncomment:
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+    <img alt="nuvel" src="docs/assets/logo-light.svg" width="50">
+  </picture>
+-->
+
 # nuvel
 
-> Describe an agent in plain English. Get production-ready code.
+**Production-ready ADK agents, your way.**
 
-`nuvel` is a meta-agent — it builds Google ADK agents from natural-language descriptions, ships with a CLI, and inherits a battle-tested production skeleton for every agent it generates.
+Skills, scaffolder, or meta-agent — build [Google ADK](https://google.github.io/adk-docs/) agents with the workflow you already have.
 
 [![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/github/license/Folken2/nuvel)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
+[Google ADK](https://google.github.io/adk-docs/) · [Skills format](https://www.anthropic.com/news/skills) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
+</div>
+
 <!--
   Demo placeholder. Record with `vhs demo.tape` or `asciinema rec`, then
-  drop the resulting .gif / .cast / .svg into docs/ and replace this block:
+  drop the resulting .gif at docs/assets/demo.gif and uncomment:
 
-      ![Meta-agent demo](docs/demo.gif)
-
-  A 15–30s clip showing a natural-language prompt → scaffolded agent →
-  running agent is the highest-leverage thing on this page.
+  <p align="center">
+    <img src="docs/assets/demo.gif" alt="nuvel demo" width="800">
+  </p>
 -->
 
-An ADK agent that creates production-ready Google ADK agents from natural language descriptions.
+## What is nuvel?
 
-## How it works
+nuvel is an open-source toolkit for building production-ready [Google ADK](https://google.github.io/adk-docs/) agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-You describe what you want — goal, tasks, tools — and the meta-agent:
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **[Claude Code](https://claude.com/claude-code)**, **[Codex](https://github.com/openai/codex)**, **[Cursor](https://cursor.com)**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton (FastAPI server, plugin chain, resilience, tracing, caching) so you only write the brain. The meta-agent does both for you, autonomously, from a natural-language description.
 
-1. **Scaffolds** a complete project from a production-tested skeleton (FastAPI server, plugin chain, resilience, tracing, caching)
-2. **Generates** custom system prompts, function tools, and domain skills
-3. **Validates** the structure and reports any issues
-4. **Iterates** based on your feedback
+## Features
 
-Every generated agent inherits a battle-tested infrastructure layer (FastAPI server, plugin chain, resilience, tracing, caching) — you only need to describe the brain.
+- **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
+- **Production skeleton, not a toy** — every generated agent ships with FastAPI, a 10-plugin chain (cost guard, tracing, resilience, caching, memory), Dockerfile, Railway config, and tests.
+- **Portable knowledge skills** — seven ADK skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design) with progressive disclosure so they don't bloat your context.
+- **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character.
+- **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more.
+- **Vendor-neutral by default** — OpenRouter for LLMs, optional PostgreSQL for sessions, runs on any host that takes a Docker container.
 
-## Quick Start
+## Quick Install
+
+**Use the skills with [Claude Code](https://claude.com/claude-code):**
 
 ```bash
-# Clone
+git clone https://github.com/Folken2/nuvel.git
+# Skills live in nuvel/skills/ and a ready-made SKILL.md is at .claude/skills/nuvel/
+```
+
+**Install the CLI (macOS / Linux):**
+
+```bash
 git clone https://github.com/Folken2/nuvel.git
 cd nuvel
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
 
-# Setup
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .          # installs deps + the `nuvel` CLI
+> A PyPI release is on the way; for now, install from source.
 
-# Configure
-cp .env.example .env
-# Add your OPENROUTER_API_KEY to .env
+## Getting Started
 
-# Run
-nuvel run --dev
+### 1. Scaffold an agent
+
+```bash
+nuvel new k8s-monitor --description "checks pod health, queries logs, alerts on anomalies"
+```
+
+You get a complete project at `generated-agents/k8s-monitor/` — package layout, FastAPI server, plugin chain, Dockerfile, Railway config, and tests.
+
+### 2. Fill in the brain
+
+The skeleton is free; the brain is yours. Open `k8s_monitor/`:
+
+- `tools/` — write one Python file per tool
+- `prompt/instructions.py` — the system prompt
+- `skills/` — domain SKILL.md files for runtime knowledge
+- `agent.py` — wire your tools and SkillToolset together
+
+If you're driving [Claude Code](https://claude.com/claude-code), the bundled skill at [.claude/skills/nuvel/SKILL.md](.claude/skills/nuvel/SKILL.md) walks Claude through this step-by-step.
+
+### 3. Run it
+
+```bash
+cd generated-agents/k8s-monitor
+cp .env.example .env       # add OPENROUTER_API_KEY
+pip install -r requirements.txt
+DEV_MODE=true python run_adk.py
 ```
 
 The agent runs at `http://localhost:8000`. Use the `/run_sse/` endpoint or the ADK web UI.
 
+### Want the meta-agent to do all this for you?
+
+```bash
+nuvel run --dev            # http://localhost:8000
+```
+
+Then describe the agent you want; nuvel will scaffold, generate, and validate it autonomously.
+
 ## CLI
 
-`nuvel` is the single entry point for everything you'd normally do by hand:
+| Command | Description |
+| ------- | ----------- |
+| `nuvel new <name>` | Scaffold a new ADK agent |
+| `nuvel new <name> --description "..."` | Scaffold with a one-liner description |
+| `nuvel new <name> --persona` | Self-evolving agent (SOUL.md, awakening flow) |
+| `nuvel new <name> --with-composio` | Bundle ~1000 integrations via Composio Tool Router |
+| `nuvel new <name> --output-dir ./agents` | Override the output directory |
+| `nuvel skills list` | List bundled ADK knowledge skills |
+| `nuvel skills search <term>` | Search skills by keyword |
+| `nuvel run` | Run the meta-agent (production-style server) |
+| `nuvel run --dev` | Same, with in-memory sessions for dev |
 
-```bash
-nuvel new my-agent                    # scaffold a new ADK agent
-nuvel new my-agent --description "..." --output-dir ./agents
-nuvel skills list                     # list bundled ADK knowledge skills
-nuvel skills search prompt            # search skills by keyword
-nuvel run                             # production-style server
-nuvel run --dev                       # in-memory sessions, dev mode
-```
-
-Common targets are also wired through `make` so the existing workflow keeps working:
-
-```bash
-make install   # pip install -e .
-make dev       # nuvel run --dev
-make run       # nuvel run
-make dev-ui    # ADK web UI with all plugins loaded
-make skills    # nuvel skills list
-make test      # pytest
-```
+`make install` / `make dev` / `make run` / `make dev-ui` / `make skills` / `make test` are wired through to the same commands.
 
 ## Example
 
-> "Create a Kubernetes monitoring agent that checks pod health, queries logs, and alerts on anomalies"
+> "A Kubernetes monitoring agent that checks pod health, queries logs, and alerts on anomalies."
 
-The meta-agent will:
-- Scaffold `generated-agents/k8s-monitor-agent/`
-- Generate tools: `get_pod_status`, `query_pod_logs`, `check_anomalies`
-- Write skills: `k8s-alerting/SKILL.md` with escalation patterns
-- Create a system prompt tailored to k8s operations
-- Validate everything is wired correctly
+Whichever shape you used, you end up with the same project:
+
+- `generated-agents/k8s-monitor-agent/` — full project, ready to `pip install` and run
+- Tools: `get_pod_status`, `query_pod_logs`, `check_anomalies`
+- Domain skills: `k8s-alerting/SKILL.md` with escalation patterns
+- System prompt tailored to k8s operations
+- Plugin chain wired in (cost guard, tracing, resilience, caching)
 
 ## Architecture
 
 ```
-meta-agent/
+nuvel/
 ├── nuvel/
-│   ├── agent.py              # LlmAgent with tools + SkillToolset
-│   ├── cli.py                # `nuvel` CLI (new / skills / run)
-│   ├── prompt/instructions.py # "You are an ADK agent builder"
+│   ├── agent.py               # Meta-agent: LlmAgent with tools + SkillToolset
+│   ├── cli.py                 # `nuvel` CLI (new / skills / run)
+│   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
 │   ├── skills/                # ADK knowledge skills (loaded on demand)
 │   ├── templates/             # Production skeleton stamped out for each new agent
 │   ├── plugins/               # 10 plugins (see Plugin Chain below)
 │   └── config/                # LiteLLM/OpenRouter config
+├── .claude/skills/nuvel/      # Claude Code SKILL.md for driving the CLI
 ├── scaffold.py                # Stamping logic (called by `nuvel new`)
 ├── run_adk.py                 # FastAPI server (launched by `nuvel run`)
 ├── pyproject.toml             # Packaging + `nuvel` console script
@@ -109,8 +168,8 @@ meta-agent/
 
 ### Key Design Decisions
 
-- **Template-based scaffolding** — Every generated agent inherits a proven production skeleton (plugins, circuit breakers, rate limiting, structured logging, SSE streaming). The meta-agent only generates the brain.
-- **SkillToolset for knowledge** — The meta-agent loads ADK expertise on demand via progressive disclosure (L1/L2/L3), not a monolithic prompt. This keeps context usage efficient.
+- **Template-based scaffolding** — Every generated agent inherits a proven production skeleton (plugins, circuit breakers, rate limiting, structured logging, SSE streaming). You only write the brain.
+- **Skills as a portable knowledge format** — The seven ADK skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
 - **Scoped file operations** — All file tools are sandboxed to the output directory. No path traversal possible.
 
 ## Generated Agent Structure
