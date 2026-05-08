@@ -103,7 +103,7 @@ class TestEndToEnd:
         assert "{{" not in content  # No unresolved placeholders
 
     def test_scaffold_prompt_loads_soul(self):
-        """Scaffolded agent's instructions.py has _load_soul function."""
+        """Scaffolded agent's instructions.py loads the SOUL.md file."""
         scaffold_agent("prompt-soul-agent", output_dir=self.tmpdir)
         agent_dir = os.path.join(self.tmpdir, "prompt-soul-agent")
 
@@ -111,5 +111,5 @@ class TestEndToEnd:
             os.path.join(agent_dir, "prompt_soul_agent", "prompt", "instructions.py"),
             encoding="utf-8",
         ).read()
-        assert "_load_soul" in instructions
+        assert "soul_file" in instructions
         assert "soul" in instructions.lower()

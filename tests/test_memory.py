@@ -331,7 +331,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
         instructions = (agent_dir / "test_mem4" / "prompt" / "instructions.py").read_text()
         self.assertIn("load_all_memory", instructions)
-        self.assertIn("Long-Term Memory", instructions)
+        self.assertIn("# Memory", instructions)
 
     def test_scaffold_env_example_has_memory_config(self):
         """Env example includes memory configuration."""

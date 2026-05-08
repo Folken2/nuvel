@@ -132,6 +132,14 @@ def _build_replacements(
     persona: bool,
     with_composio: bool,
 ) -> dict[str, str]:
+    # Frame priority: user's --system-prompt wins, else persona-aware default.
+    if system_prompt:
+        frame = system_prompt
+    elif persona:
+        frame = _PERSONA_FRAME
+    else:
+        frame = _DEFAULT_FRAME
+
     return {
         "{{agent_package}}": package,
         "{{agent_name}}": name,
@@ -139,7 +147,7 @@ def _build_replacements(
         "{{agent_description}}": description,
         "{{agent_system_prompt}}": system_prompt,
         # Frame
-        "{{instruction_frame}}": _PERSONA_FRAME if persona else _DEFAULT_FRAME,
+        "{{instruction_frame}}": frame,
         # tools/__init__.py.tmpl
         "{{persona_imports}}": _PERSONA_TOOL_IMPORTS if persona else "",
         "{{persona_extends}}": _PERSONA_TOOL_EXTENDS if persona else "",
