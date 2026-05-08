@@ -1,0 +1,20 @@
+"""Smoke tests for {{agent_name}} — runs without making API calls."""
+
+from __future__ import annotations
+
+from {{agent_package}} import build_options
+
+
+def test_build_options_returns_object():
+    options = build_options()
+    assert options is not None
+
+
+def test_build_options_has_tools_server():
+    options = build_options()
+    assert "tools" in options.mcp_servers
+
+
+def test_allowed_tools_contains_at_least_one_tool():
+    options = build_options()
+    assert any(name.startswith("mcp__tools__") for name in options.allowed_tools)

@@ -54,6 +54,8 @@ include = ["nuvel*"]
     "backends/adk/templates/**/*",
     "backends/adk/templates_overlays/**/*",
     "backends/adk/skills/**/*",
+    "backends/claude_agent_sdk/templates/**/*",
+    "backends/claude_agent_sdk/skills/**/*",
     "config/*",
     "prompt/*",
     "plugins/pricing.json",

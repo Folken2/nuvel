@@ -1,0 +1,39 @@
+"""
+Tool registry for {{agent_name}}.
+
+Every @tool function imported here is bundled into a single in-process MCP
+server named "tools". Add new tools by creating a module in this package,
+defining a @tool function, and importing it below.
+"""
+
+from __future__ import annotations
+
+from claude_agent_sdk import create_sdk_mcp_server
+
+from .example import echo
+
+# Register every tool here. Order doesn't matter.
+_TOOLS = [
+    echo,
+]
+
+_SERVER_NAME = "tools"
+
+
+def build_tools_server():
+    """Build the in-process SDK MCP server for this agent's tools."""
+    return create_sdk_mcp_server(
+        name=_SERVER_NAME,
+        version="1.0.0",
+        tools=_TOOLS,
+    )
+
+
+def tool_names() -> list[str]:
+    """Return the fully-qualified MCP tool names (mcp__<server>__<tool>).
+
+    Pass this to ClaudeAgentOptions.allowed_tools to pre-approve every
+    tool in this registry — without these names in allowed_tools, the
+    SDK will surface a permission prompt on each invocation.
+    """
+    return [f"mcp__{_SERVER_NAME}__{tool.name}" for tool in _TOOLS]

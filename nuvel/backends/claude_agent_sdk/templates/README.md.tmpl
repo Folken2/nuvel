@@ -1,0 +1,67 @@
+# {{agent_name}}
+
+{{agent_description}}
+
+Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) using [nuvel](https://github.com/Folken2/nuvel).
+
+## Quick start
+
+```bash
+# 1. Install
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure
+cp .env.example .env
+# Add your ANTHROPIC_API_KEY
+
+# 3. Local dev (no server)
+python run_dev.py "say hello"
+
+# 4. Server mode
+python server.py
+# → http://localhost:8000
+# → POST /run_sse/ with {"prompt": "..."}
+# → GET /health
+```
+
+## Project layout
+
+```
+{{agent_package}}/
+├── agent.py              # ClaudeAgentOptions + get_client()
+├── prompt/
+│   └── system_prompt.md  # the system prompt (edit this)
+├── tools/
+│   ├── __init__.py       # tool registry → SDK MCP server
+│   └── example.py        # one starter @tool — replace
+├── hooks/
+│   └── audit.py          # PreToolUse hook (logs every tool call)
+└── traces/
+    └── trace_writer.py   # writes ResultMessage to JSONL
+.claude/skills/           # drop SKILL.md files here for runtime knowledge
+server.py                 # FastAPI: /run_sse/, /health
+run_dev.py                # local CLI for testing without server
+```
+
+## Adding a tool
+
+Create a new module in `{{agent_package}}/tools/` with a `@tool` decorator:
+
+```python
+from claude_agent_sdk import tool
+
+@tool("my_tool", "What this tool does", {"arg1": str})
+async def my_tool(args):
+    return {"content": [{"type": "text", "text": "result"}]}
+```
+
+Then import it in `{{agent_package}}/tools/__init__.py` and add it to the `_TOOLS` list. Tool names exposed to Claude become `mcp__tools__my_tool`.
+
+## Adding a skill
+
+Drop a SKILL.md at `.claude/skills/<name>/SKILL.md` with frontmatter (`name`, `description`). The SDK auto-loads it via `setting_sources=["project"]` in `agent.py`.
+
+## Deployment
+
+The included `Dockerfile` and `railway.json` are configured for Railway. Set `ANTHROPIC_API_KEY` (and optionally `API_KEY` for bearer auth on `/run_sse/`) in the deployment environment.

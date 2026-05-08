@@ -1,0 +1,77 @@
+"""
+Agent setup for {{agent_name}}.
+
+Builds ClaudeAgentOptions from environment + module-local pieces (system
+prompt, tools, hooks) and exposes a single get_client() factory that
+yields a configured ClaudeSDKClient.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk.types import HookMatcher
+
+from .tools import build_tools_server, tool_names
+from .hooks.audit import audit_hook
+
+_PKG_DIR = Path(__file__).resolve().parent
+_PROMPT_FILE = _PKG_DIR / "prompt" / "system_prompt.md"
+_PROJECT_ROOT = _PKG_DIR.parent
+
+
+def _read_system_prompt() -> str:
+    if _PROMPT_FILE.is_file():
+        return _PROMPT_FILE.read_text(encoding="utf-8").strip()
+    return "You are a helpful AI assistant."
+
+
+def build_options() -> ClaudeAgentOptions:
+    """Compose ClaudeAgentOptions from env + module config.
+
+    Override anything via env vars where it makes sense; the rest is
+    set in code so the agent's behavior is reviewable in version control.
+    """
+    tools_server = build_tools_server()
+
+    return ClaudeAgentOptions(
+        # Model
+        model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+        fallback_model=os.getenv("CLAUDE_FALLBACK_MODEL", "claude-haiku-4-5"),
+
+        # System prompt — read from prompt/system_prompt.md so it's edit-
+        # able without touching code.
+        system_prompt=_read_system_prompt(),
+
+        # Tools — our in-process MCP server, plus any pre-approved names.
+        mcp_servers={"tools": tools_server},
+        allowed_tools=tool_names(),
+
+        # Permissions — production deploys usually want acceptEdits or
+        # dontAsk. Use 'default' for interactive/dev sessions where you
+        # want to be prompted.
+        permission_mode=os.getenv("PERMISSION_MODE", "acceptEdits"),
+
+        # Limits — built into the SDK, no plugin needed.
+        max_turns=int(os.getenv("MAX_TURNS", "20")),
+        max_budget_usd=float(os.getenv("MAX_BUDGET_USD", "1.0")),
+
+        # Working directory for any tool that needs filesystem access.
+        cwd=os.getenv("AGENT_CWD", str(_PROJECT_ROOT)),
+
+        # Hooks — audit every tool call. Add more via the hooks/ package.
+        hooks={
+            "PreToolUse": [HookMatcher(matcher=None, hooks=[audit_hook])],
+        },
+
+        # Skills come from .claude/skills/ at the project root via the
+        # SDK's setting_sources mechanism.
+        setting_sources=["project"],
+    )
+
+
+def get_client() -> ClaudeSDKClient:
+    """Return a configured ClaudeSDKClient. Use as an async context manager."""
+    return ClaudeSDKClient(options=build_options())

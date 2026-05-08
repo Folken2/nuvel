@@ -22,17 +22,24 @@ from pathlib import Path
 import yaml
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk",)
+SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk")
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 
+def _backend_module(framework: str) -> str:
+    return framework.replace("-", "_")
+
+
 def _skills_dir(framework: str) -> Path:
-    return _BACKENDS_DIR / framework / "skills"
+    return _BACKENDS_DIR / _backend_module(framework) / "skills"
 
 
 def _scaffold_agent_for(framework: str):
     if framework == "adk":
         from nuvel.backends.adk.scaffold import scaffold_agent
+        return scaffold_agent
+    if framework == "claude-agent-sdk":
+        from nuvel.backends.claude_agent_sdk.scaffold import scaffold_agent
         return scaffold_agent
     raise ValueError(f"Unknown framework: {framework}")
 
