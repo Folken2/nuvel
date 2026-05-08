@@ -10,7 +10,7 @@
           font-size="64"
           letter-spacing="-1"
           text-anchor="middle">nuvel</text>
-    <!-- Accent dot over the "u" (positioned approximately; tune in Figma after outlining). -->
-    <circle cx="119" cy="14" r="3.6"/>
+    <!-- Accent dot over the "u" (sits just above the letterform, reads as a diacritic). -->
+    <circle cx="120" cy="25" r="3.6"/>
   </g>
 </svg>
