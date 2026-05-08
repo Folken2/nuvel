@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nuvel.scaffold import validate_agent_name, scaffold_agent
+from nuvel.backends.adk.scaffold import validate_agent_name, scaffold_agent
 
 
 class TestValidateAgentName(unittest.TestCase):

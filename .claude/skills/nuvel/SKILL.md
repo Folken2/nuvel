@@ -83,7 +83,7 @@ nuvel skills list                    # see what's available
 nuvel skills search <topic>          # narrow by keyword
 ```
 
-Available skills (all live in `nuvel/skills/<slug>/SKILL.md` inside the nuvel repo):
+Available skills (all live in `nuvel/backends/adk/skills/<slug>/SKILL.md` inside the nuvel repo):
 
 | Slug | Read when… |
 | --- | --- |

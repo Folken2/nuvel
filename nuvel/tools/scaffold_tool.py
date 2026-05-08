@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from nuvel.scaffold import scaffold_agent as _scaffold_agent
+from nuvel.backends.adk.scaffold import scaffold_agent as _scaffold_agent
 
 from google.adk.tools import FunctionTool
 

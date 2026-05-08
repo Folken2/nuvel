@@ -1,11 +1,11 @@
 """
-scaffold.py — The Stamping Script
+scaffold.py — The ADK Stamping Script
 
-Copies the template skeleton from nuvel/templates/ into a target directory,
-renames the {{agent_package}} directory, and substitutes placeholders.
+Copies the template skeleton from nuvel/backends/adk/templates/ into a target
+directory, renames the {{agent_package}} directory, and substitutes placeholders.
 
 Two optional feature bundles are activated via flags and applied as
-overlays from nuvel/templates_overlays/<bundle>/:
+overlays from nuvel/backends/adk/templates_overlays/<bundle>/:
 
     --persona         self-rewriting SOUL.md, AWAKENING.md, author_skill,
                       complete_awakening — for agents meant to live for

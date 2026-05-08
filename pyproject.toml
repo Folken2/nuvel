@@ -51,9 +51,9 @@ include = ["nuvel*"]
 
 [tool.setuptools.package-data]
 "nuvel" = [
-    "templates/**/*",
-    "templates_overlays/**/*",
-    "skills/**/*",
+    "backends/adk/templates/**/*",
+    "backends/adk/templates_overlays/**/*",
+    "backends/adk/skills/**/*",
     "config/*",
     "prompt/*",
     "plugins/pricing.json",

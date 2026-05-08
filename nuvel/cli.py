@@ -17,11 +17,11 @@ from pathlib import Path
 
 import yaml
 
-SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+SKILLS_DIR = Path(__file__).resolve().parent / "backends" / "adk" / "skills"
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    from nuvel.scaffold import scaffold_agent
+    from nuvel.backends.adk.scaffold import scaffold_agent
 
     result = scaffold_agent(
         name=args.name,

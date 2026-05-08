@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 # to a temp location and test it standalone.
 
 # For testing, we import the template source and patch MEMORY_DIR.
-TEMPLATE_STATE_DIR = ROOT / "nuvel" / "templates" / "{{agent_package}}" / "state"
+TEMPLATE_STATE_DIR = ROOT / "nuvel" / "backends" / "adk" / "templates" / "{{agent_package}}" / "state"
 
 
 def _run_module_code(code, namespace):
@@ -270,7 +270,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_includes_memory_files(self):
         """Scaffolded agent has memory state, tools, and plugin."""
-        from nuvel.scaffold import scaffold_agent
+        from nuvel.backends.adk.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem", output_dir=self.tmpdir)
         self.assertEqual(result["status"], "ok")
@@ -302,7 +302,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_tools_init_imports_memory(self):
         """Tools __init__.py imports memory tools."""
-        from nuvel.scaffold import scaffold_agent
+        from nuvel.backends.adk.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem2", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])
@@ -313,7 +313,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_plugins_init_includes_memory(self):
         """Plugins __init__.py registers memory plugin."""
-        from nuvel.scaffold import scaffold_agent
+        from nuvel.backends.adk.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem3", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])
@@ -324,7 +324,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_instructions_loads_memory(self):
         """Instructions template loads memory into prompt."""
-        from nuvel.scaffold import scaffold_agent
+        from nuvel.backends.adk.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem4", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])
@@ -335,7 +335,7 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
 
     def test_scaffold_env_example_has_memory_config(self):
         """Env example includes memory configuration."""
-        from nuvel.scaffold import scaffold_agent
+        from nuvel.backends.adk.scaffold import scaffold_agent
 
         result = scaffold_agent("test-mem5", output_dir=self.tmpdir)
         agent_dir = Path(result["path"])

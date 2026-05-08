@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-_DEFAULT_SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
+_DEFAULT_SKILLS_DIR = pathlib.Path(__file__).parent / "backends" / "adk" / "skills"
 
 
 def _build_skill_toolset() -> SkillToolset | None:

@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 
-from nuvel.scaffold import scaffold_agent
+from nuvel.backends.adk.scaffold import scaffold_agent
 from nuvel.tools.validate_tool import _validate_agent_impl
 
 
