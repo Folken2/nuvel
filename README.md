@@ -9,18 +9,11 @@
 
 <div align="center">
 
-<!--
-  Logo placeholder. Drop logo-light.svg / logo-dark.svg at docs/assets/
-  and uncomment:
-
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
-    <img alt="nuvel" src="docs/assets/logo-light.svg" width="50">
-  </picture>
--->
-
-# nuvel
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+  <img alt="nuvel" src="docs/assets/logo-light.svg" width="240">
+</picture>
 
 **Production-ready agents, your way.**
 
