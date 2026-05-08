@@ -3,7 +3,7 @@
   and uncomment:
 
   <p align="center">
-    <img src="docs/assets/banner.png" alt="nuvel — production-ready ADK agents, your way" width="100%">
+    <img src="docs/assets/banner.png" alt="nuvel — production-ready agents, your way" width="100%">
   </p>
 -->
 
@@ -22,15 +22,15 @@
 
 # nuvel
 
-**Production-ready ADK agents, your way.**
+**Production-ready agents, your way.**
 
-Skills, scaffolder, or meta-agent — build [Google ADK](https://google.github.io/adk-docs/) agents with the workflow you already have.
+Skills, scaffolder, or meta-agent — build agents on [Google ADK](https://google.github.io/adk-docs/), the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python), or [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) with the workflow you already have.
 
 [![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/github/license/Folken2/nuvel)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
-[Google ADK](https://google.github.io/adk-docs/) · [Skills format](https://www.anthropic.com/news/skills) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Google ADK](https://google.github.io/adk-docs/) · [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) · [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) · [Skills format](https://www.anthropic.com/news/skills) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
