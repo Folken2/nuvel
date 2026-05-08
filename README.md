@@ -29,7 +29,7 @@ You describe what you want — goal, tasks, tools — and the meta-agent:
 3. **Validates** the structure and reports any issues
 4. **Iterates** based on your feedback
 
-Every generated agent inherits battle-tested infrastructure from the [data-analysis-agent](https://github.com/albertfolch-renal/data-analysis-agent) — you only need to describe the brain.
+Every generated agent inherits a battle-tested infrastructure layer (FastAPI server, plugin chain, resilience, tracing, caching) — you only need to describe the brain.
 
 ## Quick Start
 
@@ -255,7 +255,7 @@ The consolidated JSON includes: full system prompt, user input, LLM thinking/rea
 make test
 ```
 
-133 tests covering scaffold, file tools, validation, memory, cost guard, conversation traces, and end-to-end pipeline.
+Tests cover scaffold, file tools, validation, memory, cost guard, conversation traces, and end-to-end pipeline.
 
 ## Roadmap
 
