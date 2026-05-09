@@ -29,7 +29,7 @@ def _verify_secret(token: str | None) -> None:
     expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
     if not expected:
         raise HTTPException(status_code=500, detail="TELEGRAM_WEBHOOK_SECRET not configured")
-    if not token or not secrets.compare_digest(token, expected):
+    if not secrets.compare_digest(token or "", expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
@@ -106,6 +106,10 @@ async def _process_message(request: Request, msg: dict) -> None:
         reply = "Sorry, something went wrong."
     finally:
         keepalive.cancel()
+        try:
+            await keepalive
+        except asyncio.CancelledError:
+            pass
 
     await _send_message(chat_id, reply, reply_to=reply_to, message_thread_id=thread_id)
 

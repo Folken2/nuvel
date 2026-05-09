@@ -105,7 +105,7 @@ class TestTelegramRouter(unittest.TestCase):
             )
             self.assertEqual(r.status_code, 401)
 
-    def test_valid_text_message_returns_200_and_dispatches(self):
+    def test_valid_text_message_returns_200(self):
         runner = AsyncMock()
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value.status_code = 200
