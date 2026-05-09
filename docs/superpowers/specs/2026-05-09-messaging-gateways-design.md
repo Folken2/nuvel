@@ -8,7 +8,7 @@
 
 ## Context
 
-Today, a nuvel-scaffolded agent only exposes the ADK FastAPI surface (`/run`, `/run_sse`, etc.) plus a small custom layer in `run_adk.py` (`/health`, `/debug-info`). To put the agent in front of real humans on a chat platform, the agent owner has to write the inbound webhook handlers, signature verification, session mapping, and outbound API calls themselves. This spec adds a built-in path so the answer is `--channels slack,telegram,teams`.
+Today, a nuvel-scaffolded agent only exposes the ADK FastAPI surface (`/run`, `/run_sse`, etc.) plus a small custom layer in `run_adk.py` (`/health`, `/debug-info`). To put the agent in front of real humans on a chat platform, the agent owner has to write the inbound webhook handlers, signature verification, session mapping, and outbound API calls themselves. This spec adds a built-in path so the answer is `--with-slack --with-telegram --with-teams`.
 
 A working v1 of an MS Teams ↔ ADK bridge already exists in production (`reference/teams-v1/data-analysis-agent/run_m365_bridge.py`). It uses the Microsoft 365 Agents SDK (`microsoft-agents-*`), supports both an SDK-mode (production, JWT-validated) and an anonymous mode (Agents Playground / local dev), and proxies to the ADK server over its REST API. We port it forward.
 
@@ -32,21 +32,21 @@ These are clean v1.x extensions; the gateway abstractions defined below do not p
 
 ### 1. Architecture overview
 
-A nuvel-scaffolded ADK agent stays a single FastAPI server. The `--channels` CLI flag activates **gateway overlays** that drop a `gateways/` package into the agent and wire two surfaces:
+A nuvel-scaffolded ADK agent stays a single FastAPI server. The per-channel CLI flags (`--with-slack`, `--with-telegram`, `--with-teams`) activate **gateway overlays** that drop a `gateways/` package into the agent and wire two surfaces:
 
 - **Slack (Composio Slackbot) and Telegram** → FastAPI `APIRouter`s mounted on the existing `run_adk.py` app under `/gateways/<platform>`. Same process, same port, in-process ADK `Runner` invocation, no HTTP hop.
 - **MS Teams** → standalone aiohttp sidecar process (`teams_bridge.py`), direct port of the v1, talks to the agent over its existing REST API at `/run`. Separate process, default port `3978`.
 
 The asymmetry is driven by the Microsoft 365 Agents SDK: production-mode JWT validation goes through `microsoft_agents.hosting.aiohttp.CloudAdapter`, which expects to own its own aiohttp `Application`. Bridging an aiohttp adapter inside a FastAPI app is fragile, and reimplementing the JWT validation by hand is error-prone. The v1 already chose the sidecar architecture and it is the production-tested path; we adopt it.
 
-Agents scaffolded **without** `--channels` produce byte-identical output to today.
+Agents scaffolded **without** any `--with-*` channel flag produce byte-identical output to today.
 
 ### 2. Backend scope (v1)
 
-V1 supports `--framework adk` only. For `--framework claude-agent-sdk` and `--framework anthropic-managed-agents`, the `--channels` flag is accepted at the CLI level but the scaffolder exits with:
+V1 supports `--framework adk` only. For `--framework claude-agent-sdk` and `--framework anthropic-managed-agents`, the channel flags are accepted at the CLI level but the scaffolder exits with:
 
 ```
-Error: --channels is not yet supported for the <framework> backend.
+Error: --with-<channel> is not yet supported for the <framework> backend.
        Open an issue if you need it: https://github.com/.../issues
 ```
 
@@ -55,18 +55,18 @@ Channel handlers are reusable across backends in principle (only the agent-invoc
 ### 3. CLI surface
 
 ```
-nuvel new my-agent --framework adk --channels slack,telegram,teams
+nuvel new my-agent --framework adk --with-slack --with-telegram --with-teams
 ```
 
-- `--channels` is comma-separated.
-- Valid values: `slack`, `telegram`, `teams`. Unknown values fail validation with a clear list of accepted values.
-- Empty / omitted = no gateways (default — preserves today's behavior exactly).
-- Repeating `--channels` accumulates (so `--channels slack --channels telegram` works the same as `--channels slack,telegram`).
-- `slack` implies `--with-composio`. If the user passes `--channels slack` without `--with-composio`, the scaffolder enables it and prints: `[nuvel] --channels slack uses Composio Slackbot — enabling --with-composio.`
-- The success summary is extended:
+- Each channel has its own boolean flag: `--with-slack`, `--with-telegram`, `--with-teams`. This matches the existing flag style used by `--with-composio` and `--persona`.
+- All three default to off. Omitting all flags = no gateways = byte-identical to today's output.
+- `--with-slack` implies `--with-composio`. If the user passes `--with-slack` without `--with-composio`, the scaffolder enables it automatically and prints: `[nuvel] --with-slack uses Composio Slackbot — enabling --with-composio.`
+- The success summary lists active channels:
   ```
+  Bundles: composio
   Channels: slack, telegram, teams
   ```
+  (only the line with non-empty content is printed; backwards-compatible with today's `Bundles:` line)
 
 ### 4. Scaffold mechanism (overlays)
 
@@ -307,12 +307,12 @@ The Teams sidecar runs in a separate process and doesn't go through `APIKeyMiddl
 
 **Scaffold tests:** add to `tests/test_end_to_end.py` style suite:
 
-- `nuvel new --channels slack` → verify `gateways/slack.py` and `gateways/_common.py` land, `run_adk.py` includes the slack router import + mount, `.env.example` contains the Slack block.
-- `nuvel new --channels telegram` → analogous.
-- `nuvel new --channels teams` → verify `gateways/teams_bridge.py` lands, `requirements.txt` has the `microsoft-agents-*` lines, `.env.example` has the Teams block.
-- `nuvel new --channels slack,telegram,teams` → all three present, no overlap conflicts.
-- `nuvel new` (no `--channels`) → output byte-identical to today's golden snapshot.
-- `nuvel new --channels slack` without `--with-composio` → composio overlay is auto-applied.
+- `nuvel new --with-slack` → verify `gateways/slack.py` and `gateways/_common.py` land, `run_adk.py` includes the slack router import + mount, `.env.example` contains the Slack block.
+- `nuvel new --with-telegram` → analogous.
+- `nuvel new --with-teams` → verify `gateways/teams_bridge.py` lands, `requirements.txt` has the `microsoft-agents-*` lines, `.env.example` has the Teams block.
+- `nuvel new --with-slack --with-telegram --with-teams` → all three present, no overlap conflicts.
+- `nuvel new` (no channel flags) → output byte-identical to today's golden snapshot.
+- `nuvel new --with-slack` without `--with-composio` → composio overlay is auto-applied.
 
 **No live network in CI.** Composio / Slack / Telegram / Teams calls are mocked.
 
@@ -326,7 +326,7 @@ The scaffolded README gets a `## Channels` section. Each active channel adds a s
 
 Each subsection is gated on the corresponding overlay being applied, so the README only documents what was actually generated.
 
-The base nuvel `nuvel new` README template gains a one-liner under "Customizing": `Use --channels to expose this agent to Slack, Telegram, or MS Teams.`
+The base nuvel `nuvel new` README template gains a one-liner under "Customizing": `Use --with-slack, --with-telegram, or --with-teams to expose this agent on a chat platform.`
 
 ### 15. Documentation outside the scaffold
 
@@ -340,7 +340,7 @@ The base nuvel `nuvel new` README template gains a one-liner under "Customizing"
 
 - **Cross-platform identity** — punted. Each platform user is a distinct ADK user_id in v1.
 - **Custom (non-Composio) Slack option** — punted. Add as `--slack-mode={composio|custom}` in v1.x if demand exists.
-- **Channels for non-ADK backends** — flag is reserved at the CLI level; backend-specific scaffolders error out cleanly.
+- **Channels for non-ADK backends** — flags are reserved at the CLI level; backend-specific scaffolders error out cleanly when any are set.
 - **Streaming replies** — v1.x extension. The gateway abstractions in `_common.py` accept a stream-aware variant cleanly because each handler already owns the message lifecycle.
 - **Outbound retry queue** — v1.x extension. Single attempt + log in v1.
 
@@ -363,21 +363,21 @@ nuvel/backends/adk/templates_overlays/gateway-teams/
 tests/test_gateway_slack.py
 tests/test_gateway_telegram.py
 tests/test_gateway_teams_bridge.py
-tests/test_scaffold_channels.py
+tests/test_scaffold_gateways.py
 docs/superpowers/specs/2026-05-09-messaging-gateways-design.md  (this doc)
 ```
 
 **Files modified:**
 
 ```
-nuvel/cli.py                                          # --channels flag, validation, success summary
-nuvel/backends/adk/scaffold.py                        # apply gateway overlays, populate placeholders
+nuvel/cli.py                                          # --with-slack/--with-telegram/--with-teams flags, validation, success summary
+nuvel/backends/adk/scaffold.py                        # accept new flags, apply gateway overlays, populate placeholders
 nuvel/backends/adk/templates/run_adk.py               # {{gateway_imports}}, {{gateway_mounts}}, /gateways in PUBLIC_PREFIXES
 nuvel/backends/adk/templates/requirements.txt        # {{gateway_requirements}} placeholder
 nuvel/backends/adk/templates/{{agent_package}}/.env.example  # {{gateway_env_block}} placeholder (or equivalent)
 nuvel/backends/adk/templates/README.md.tmpl          # {{gateway_readme_section}} placeholder
-nuvel/backends/claude_agent_sdk/scaffold.py           # accept --channels, error if non-empty
-nuvel/backends/anthropic_managed_agents/scaffold.py   # accept --channels, error if non-empty
+nuvel/backends/claude_agent_sdk/scaffold.py           # accept channel flags, error if any are set
+nuvel/backends/anthropic_managed_agents/scaffold.py   # accept channel flags, error if any are set
 README.md                                             # link to this spec under feature list
 CONTRIBUTING.md                                       # note overlay convention for new channels
 ```
