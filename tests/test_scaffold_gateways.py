@@ -218,3 +218,47 @@ class TestTeamsOverlay(unittest.TestCase):
         bridge = (self.agent_dir / "agent_tm" / "gateways" / "teams_bridge.py").read_text()
         # Default for AGENT_APP_NAME should be the scaffolded agent name.
         self.assertIn('os.getenv("AGENT_APP_NAME", "agent-tm")', bridge)
+
+
+class TestAllChannelsTogether(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        result = adk_scaffold(
+            "agent-all", output_dir=self.tmpdir,
+            with_slack=True, with_telegram=True, with_teams=True,
+        )
+        self.assertEqual(result["status"], "ok")
+        self.agent_dir = Path(result["path"])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_all_three_modules_present(self):
+        gw = self.agent_dir / "agent_all" / "gateways"
+        for fname in ("__init__.py", "_common.py", "slack.py", "telegram.py", "teams_bridge.py"):
+            self.assertTrue((gw / fname).is_file(), f"Missing: {fname}")
+
+    def test_run_adk_mounts_slack_and_telegram_only(self):
+        run_adk = (self.agent_dir / "run_adk.py").read_text()
+        self.assertIn("gw_slack", run_adk)
+        self.assertIn("gw_telegram", run_adk)
+        self.assertNotIn("teams_bridge", run_adk)  # Teams is a sidecar, not mounted
+
+    def test_env_example_contains_all_three_blocks(self):
+        env = (self.agent_dir / ".env.example").read_text()
+        self.assertIn("TELEGRAM_BOT_TOKEN", env)
+        self.assertIn("COMPOSIO_WEBHOOK_SECRET", env)
+        self.assertIn("TEAMS_BRIDGE_PORT", env)
+
+    def test_readme_contains_all_three_sections(self):
+        readme = (self.agent_dir / "README.md").read_text()
+        self.assertIn("Channel: Slack", readme)
+        self.assertIn("Channel: Telegram", readme)
+        self.assertIn("Channel: Microsoft Teams", readme)
+
+    def test_no_unrendered_placeholders_anywhere(self):
+        # Walk the agent directory; no file should contain `{{` template syntax.
+        for path in self.agent_dir.rglob("*"):
+            if path.is_file() and path.suffix in (".py", ".md", ".txt", ".example"):
+                content = path.read_text(errors="ignore")
+                self.assertNotIn("{{", content, f"Unrendered placeholder in {path}")
