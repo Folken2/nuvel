@@ -4,6 +4,9 @@
 
 ADK only. Inappropriate for stateless task bots.
 
+!!! info "Inspiration"
+    The SOUL.md / awakening pattern is **inspired by OpenClaw** and its approach to long-running agent identity. nuvel's `--persona` overlay adapts those ideas for ADK-scaffolded agents.
+
 ## Scaffold
 
 ```bash
