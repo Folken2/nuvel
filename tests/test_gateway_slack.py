@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
@@ -71,13 +72,14 @@ class TestSlackRouter(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
-    def _client(self, runner_mock, composio_mock=None):
+    def _client(self, runner_mock, composio_mock=None, env_extra=None):
         app = FastAPI()
         app.state.runner = runner_mock
         app.state.app_name = "sl-test"
         app.state.composio_client = composio_mock or MagicMock()
         app.include_router(self.sl.router)
-        with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": "s3cret"}, clear=False):
+        env = {"COMPOSIO_WEBHOOK_SECRET": "s3cret", **(env_extra or {})}
+        with patch.dict("os.environ", env, clear=False):
             yield TestClient(app)
 
     def test_missing_secret_returns_401(self):
@@ -122,3 +124,198 @@ class TestSlackRouter(unittest.TestCase):
                 },
             )
             self.assertEqual(r.status_code, 200)
+
+    def test_dm_with_files_downloads_and_passes_attachments(self):
+        """Files in payload are fetched with SLACK_BOT_TOKEN and forwarded to the runner."""
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        captured = {}
+
+        async def fake_invoke(_runner, _u, _s, text, attachments=None, **_kw):
+            captured["text"] = text
+            captured["attachments"] = attachments
+            return SimpleNamespace(text="ok", attachments=[])
+
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.content = b"\x89PNG\x00fakebytes"
+        fake_resp.headers = {"Content-Type": "image/png"}
+        fake_resp.raise_for_status = MagicMock()
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke), \
+             patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp):
+            for client in self._client(runner, env_extra={"SLACK_BOT_TOKEN": "xoxb-test"}):
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "what's this?", "ts": "1700000000.001", "channel_type": "im",
+                            "files": [{
+                                "id": "F1", "mimetype": "image/png", "name": "x.png",
+                                "url_private": "https://files.slack.com/x.png", "size": 14,
+                            }],
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        # Background task may run after the response — give the loop a tick:
+        import asyncio, time
+        for _ in range(250):
+            if "attachments" in captured:
+                break
+            time.sleep(0.02)
+        self.assertIn("attachments", captured)
+        self.assertEqual(len(captured["attachments"]), 1)
+        self.assertEqual(captured["attachments"][0].mime_type, "image/png")
+        self.assertEqual(captured["attachments"][0].data, b"\x89PNG\x00fakebytes")
+        self.assertEqual(captured["attachments"][0].display_name, "x.png")
+
+    def test_files_without_bot_token_fall_back_to_uri(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+        captured = {}
+
+        async def fake_invoke(_r, _u, _s, text, attachments=None, **_kw):
+            captured["attachments"] = attachments
+            return SimpleNamespace(text="ok", attachments=[])
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
+            for client in self._client(runner):  # no SLACK_BOT_TOKEN
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "look", "ts": "1700000000.001", "channel_type": "im",
+                            "files": [{"id": "F1", "mimetype": "image/png", "name": "x.png",
+                                       "url_private": "https://files.slack.com/x.png", "size": 14}],
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(250):
+            if "attachments" in captured:
+                break
+            time.sleep(0.02)
+        self.assertIn("attachments", captured)
+        self.assertEqual(len(captured["attachments"]), 1)
+        self.assertIsNone(captured["attachments"][0].data)
+        self.assertEqual(captured["attachments"][0].file_uri, "https://files.slack.com/x.png")
+
+    def test_outbound_inline_image_uploads_via_composio(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        # Build an AgentReply with one inline outbound attachment.
+        common = self.sl  # import sibling
+        Reply = self.sl.AgentReply if hasattr(self.sl, "AgentReply") else None
+        # Fall back to importing from _common via the existing module path:
+        if Reply is None:
+            from sl_test.gateways._common import AgentReply, OutboundAttachment
+        else:
+            from sl_test.gateways._common import OutboundAttachment
+
+        reply = AgentReply(text="here you go", attachments=[
+            OutboundAttachment(mime_type="image/png", display_name="chart.png", data=b"\x89PNGdata"),
+        ])
+
+        async def fake_invoke(*_a, **_kw):
+            return reply
+
+        composio = MagicMock()
+        composio.tools.execute = MagicMock(return_value={"ok": True})
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
+            for client in self._client(runner, composio_mock=composio):
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "draw", "ts": "1700000000.001", "channel_type": "im",
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(250):
+            if composio.tools.execute.called:
+                break
+            time.sleep(0.02)
+
+        # Find the upload call (there may also be a SLACKBOT_SEND_MESSAGE call).
+        upload_calls = [c for c in composio.tools.execute.call_args_list
+                        if c.args and c.args[0] == self.sl.SLACK_FILES_UPLOAD_TOOL]
+        self.assertEqual(len(upload_calls), 1)
+        args = upload_calls[0].kwargs.get("arguments") or upload_calls[0].args[1]
+        self.assertEqual(args["channel"], "D456")
+        self.assertEqual(args["filename"], "chart.png")
+        self.assertEqual(args["filetype"], "png")
+        # data was b64-encoded
+        import base64
+        self.assertEqual(base64.b64decode(args["content_b64"]), b"\x89PNGdata")
+
+    def test_outbound_upload_failure_falls_back_to_text_send(self):
+        """When the file upload raises, _process must still send the text reply.
+
+        Tests _process directly as a coroutine to avoid the asyncio.create_task
+        + TestClient timing fragility — the failure mode here is a logic bug,
+        not a routing one, so the HTTP layer adds no signal.
+        """
+        import asyncio
+
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        from sl_test.gateways._common import AgentReply, OutboundAttachment
+
+        async def fake_invoke(*_a, **_kw):
+            return AgentReply(text="here you go", attachments=[
+                OutboundAttachment(mime_type="image/png", display_name="x.png", data=b"\x89PNG"),
+            ])
+
+        composio = MagicMock()
+
+        def execute_side_effect(tool, *_a, **_kw):
+            if tool == self.sl.SLACK_FILES_UPLOAD_TOOL:
+                raise RuntimeError("upload boom")
+            return {"ok": True}
+        composio.tools.execute = MagicMock(side_effect=execute_side_effect)
+
+        # Build a minimal fake Request with the app.state attributes _process reads.
+        from types import SimpleNamespace
+        fake_request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(
+                runner=runner, app_name="sl-test", composio_client=composio,
+            )),
+        )
+        payload = {
+            "team_id": "T01", "channel": "D456", "user": "U012",
+            "text": "draw", "ts": "1700000000.001", "channel_type": "im",
+        }
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
+            asyncio.run(self.sl._process(fake_request, payload, in_thread=False))
+
+        send_calls = [c for c in composio.tools.execute.call_args_list
+                      if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
+        self.assertEqual(len(send_calls), 1, "fallback text send should have happened")
+        args = send_calls[0].kwargs.get("arguments") or {}
+        self.assertEqual(args.get("markdown_text"), "here you go")

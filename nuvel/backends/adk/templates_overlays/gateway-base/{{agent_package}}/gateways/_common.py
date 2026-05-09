@@ -7,8 +7,10 @@ independently importable.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk.runners import Runner
@@ -16,6 +18,109 @@ from google.adk.sessions import BaseSessionService
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InboundAttachment:
+    """A platform-side file inbound to the agent.
+
+    Either `data` (preferred) or `file_uri` should be set.
+    """
+    mime_type: str
+    display_name: str
+    data: bytes | None = None
+    file_uri: str | None = None
+
+
+@dataclass
+class OutboundAttachment:
+    """An agent-side artifact outbound to the platform."""
+    mime_type: str
+    display_name: str
+    data: bytes | None = None
+    file_uri: str | None = None
+
+
+@dataclass
+class AgentReply:
+    """Structured reply returned by `invoke_agent`."""
+    text: str
+    attachments: list[OutboundAttachment] = field(default_factory=list)
+
+
+def _humanize_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def attachments_to_parts(
+    items: list[InboundAttachment],
+    *,
+    inline_max_bytes: int,
+) -> list[genai_types.Part]:
+    """Convert inbound attachments to ADK Parts.
+
+    - bytes <= inline_max_bytes -> Part(inline_data=Blob)
+    - else if file_uri set -> Part(file_data=FileData)
+    - else -> Part(text=...) skip note (so the agent has a hint)
+    """
+    parts: list[genai_types.Part] = []
+    for item in items:
+        if item.data is not None and len(item.data) <= inline_max_bytes:
+            parts.append(genai_types.Part(
+                inline_data=genai_types.Blob(mime_type=item.mime_type, data=item.data)
+            ))
+            continue
+        if item.file_uri:
+            parts.append(genai_types.Part(
+                file_data=genai_types.FileData(
+                    file_uri=item.file_uri,
+                    mime_type=item.mime_type,
+                    display_name=item.display_name,
+                )
+            ))
+            continue
+        size_hint = _humanize_bytes(len(item.data)) if item.data is not None else "no bytes available"
+        logger.warning(
+            "Gateway: dropping attachment %r — no usable representation (%s)",
+            item.display_name, size_hint,
+        )
+        parts.append(genai_types.Part(
+            text=f'[attachment "{item.display_name}" ({size_hint}) skipped: no usable representation]'
+        ))
+    return parts
+
+
+def enforce_attachment_limits(
+    items: list[InboundAttachment],
+    *,
+    max_count: int,
+    max_bytes: int,
+) -> tuple[list[InboundAttachment], list[str]]:
+    """Trim list to max_count and drop items whose `data` exceeds max_bytes.
+
+    Returns (kept_items, skip_notes). Each skip_note is a single-line string
+    suitable for appending to the user's prompt.
+    """
+    kept: list[InboundAttachment] = []
+    notes: list[str] = []
+    for i, item in enumerate(items):
+        if i >= max_count:
+            notes.append(
+                f'[attachment "{item.display_name}" skipped: exceeds GATEWAY_MAX_ATTACHMENT_COUNT ({max_count})]'
+            )
+            continue
+        if item.data is not None and len(item.data) > max_bytes:
+            notes.append(
+                f'[attachment "{item.display_name}" ({_humanize_bytes(len(item.data))}) '
+                f'skipped: exceeds GATEWAY_MAX_ATTACHMENT_BYTES ({_humanize_bytes(max_bytes)})]'
+            )
+            continue
+        kept.append(item)
+    return kept, notes
 
 
 def session_key(platform: str, payload: dict[str, Any]) -> tuple[str, str]:
@@ -72,28 +177,108 @@ async def invoke_agent(
     user_id: str,
     session_id: str,
     text: str,
-) -> str:
-    """Run the agent in-process and return the final assistant text reply.
+    attachments: list[InboundAttachment] | None = None,
+    *,
+    inline_max_bytes: int = 4_194_304,
+) -> AgentReply:
+    """Run the agent in-process and return text + collected outbound artifacts.
 
-    Iterates `runner.run_async(...)` events, collects all text parts emitted
-    by non-user events, and returns the **last non-empty** text — matching
-    the v1 Teams bridge's extraction rule.
+    Reads three sources for outbound attachments on each non-user event:
+      - `inline_data` parts (Blob)
+      - `file_data` parts (FileData with file_uri)
+      - `actions.artifact_delta` (loaded via runner.artifact_service if set)
+
+    Inbound attachments are converted via `attachments_to_parts` and prepended
+    after the user-text part.
     """
-    new_message = genai_types.Content(role="user", parts=[genai_types.Part(text=text)])
+    parts: list[genai_types.Part] = [genai_types.Part(text=text)]
+    if attachments:
+        parts.extend(attachments_to_parts(attachments, inline_max_bytes=inline_max_bytes))
+    new_message = genai_types.Content(role="user", parts=parts)
+
     texts: list[str] = []
+    out_attachments: list[OutboundAttachment] = []
+    seen_digests: set[bytes] = set()
+
+    artifact_service = getattr(runner, "artifact_service", None)
+    app_name = getattr(runner, "app_name", "")
+
     async for event in runner.run_async(
         user_id=user_id, session_id=session_id, new_message=new_message
     ):
         if getattr(event, "author", None) == "user":
             continue
+
+        # Walk content parts.
         content = getattr(event, "content", None)
-        if not content:
-            continue
-        for part in getattr(content, "parts", None) or []:
+        for part in (getattr(content, "parts", None) or []):
             piece = getattr(part, "text", None)
             if piece:
                 texts.append(piece)
-    return texts[-1] if texts else "Agent did not return text."
+            inline = getattr(part, "inline_data", None)
+            if inline is not None and getattr(inline, "data", None):
+                digest = hashlib.sha256(inline.data).digest()
+                if digest not in seen_digests:
+                    seen_digests.add(digest)
+                    out_attachments.append(OutboundAttachment(
+                        mime_type=inline.mime_type,
+                        display_name=f"agent-output-{len(out_attachments) + 1}",
+                        data=inline.data,
+                    ))
+            fdata = getattr(part, "file_data", None)
+            if fdata is not None and getattr(fdata, "file_uri", None):
+                out_attachments.append(OutboundAttachment(
+                    mime_type=getattr(fdata, "mime_type", "") or "application/octet-stream",
+                    display_name=getattr(fdata, "display_name", "") or "agent-file",
+                    file_uri=fdata.file_uri,
+                ))
+
+        # Walk artifact_delta entries (saved via tool_context.save_artifact).
+        actions = getattr(event, "actions", None)
+        delta = getattr(actions, "artifact_delta", None) or {}
+        if delta and artifact_service is None:
+            logger.info(
+                "Gateway: agent emitted %d artifact(s) but no artifact_service is configured; skipping.",
+                len(delta),
+            )
+            continue
+        for filename, version in delta.items():
+            try:
+                loaded = await artifact_service.load_artifact(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id,
+                    filename=filename,
+                    version=version,
+                )
+            except Exception:
+                logger.exception("Gateway: load_artifact failed for %s@%s", filename, version)
+                continue
+            if loaded is None:
+                continue
+            inline = getattr(loaded, "inline_data", None)
+            fdata = getattr(loaded, "file_data", None)
+            if inline is not None and getattr(inline, "data", None):
+                digest = hashlib.sha256(inline.data).digest()
+                if digest in seen_digests:
+                    continue
+                seen_digests.add(digest)
+                out_attachments.append(OutboundAttachment(
+                    mime_type=inline.mime_type,
+                    display_name=filename,
+                    data=inline.data,
+                ))
+            elif fdata is not None and getattr(fdata, "file_uri", None):
+                out_attachments.append(OutboundAttachment(
+                    mime_type=getattr(fdata, "mime_type", "") or "application/octet-stream",
+                    display_name=filename,
+                    file_uri=fdata.file_uri,
+                ))
+
+    return AgentReply(
+        text=texts[-1] if texts else "Agent did not return text.",
+        attachments=out_attachments,
+    )
 
 
 def get_composio_client():
