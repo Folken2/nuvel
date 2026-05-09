@@ -8,6 +8,7 @@ independently importable.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from google.adk.runners import Runner
@@ -93,3 +94,9 @@ async def invoke_agent(
             if piece:
                 texts.append(piece)
     return texts[-1] if texts else "Agent did not return text."
+
+
+def get_composio_client():
+    """Lazy import: only used when the Slack overlay is active."""
+    from composio import Composio
+    return Composio(api_key=os.environ.get("COMPOSIO_API_KEY"))

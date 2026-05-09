@@ -134,3 +134,33 @@ class TestTelegramOverlay(unittest.TestCase):
         readme = (self.agent_dir / "README.md").read_text()
         self.assertIn("Telegram", readme)
         self.assertIn("setWebhook", readme)
+
+
+class TestSlackOverlay(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        result = adk_scaffold("agent-sl", output_dir=self.tmpdir, with_slack=True)
+        self.assertEqual(result["status"], "ok")
+        # Slack auto-enables composio.
+        self.assertTrue(result["with_composio"])
+        self.agent_dir = Path(result["path"])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_slack_module_exists(self):
+        self.assertTrue((self.agent_dir / "agent_sl" / "gateways" / "slack.py").is_file())
+
+    def test_run_adk_imports_and_mounts_slack(self):
+        run_adk = (self.agent_dir / "run_adk.py").read_text()
+        self.assertIn("from agent_sl.gateways import slack as gw_slack", run_adk)
+        self.assertIn("app.include_router(gw_slack.router)", run_adk)
+
+    def test_env_example_has_slack_block(self):
+        env = (self.agent_dir / ".env.example").read_text()
+        self.assertIn("COMPOSIO_WEBHOOK_SECRET", env)
+
+    def test_readme_has_slack_section(self):
+        readme = (self.agent_dir / "README.md").read_text()
+        self.assertIn("Slack", readme)
+        self.assertIn("composio trigger create", readme)

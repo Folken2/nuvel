@@ -149,6 +149,40 @@ _TELEGRAM_README_BLOCK = (
     "5. The bot replies inline in DMs and in the same thread/topic in groups.\n"
 )
 
+_SLACK_ENV_BLOCK = (
+    "# ── Slack gateway (via Composio Slackbot) ────────────────────────\n"
+    "# Required: random shared secret used by Composio when delivering\n"
+    "# trigger webhooks. Set the same value when running\n"
+    "# `composio trigger create ... --webhook ...?secret=<this>`.\n"
+    "COMPOSIO_WEBHOOK_SECRET=change_me_to_a_long_random_string\n"
+    "# Optional: bot user ID for @-mention detection in channels.\n"
+    "# SLACK_BOT_USER_ID=U0BOT...\n"
+    "# Optional: 'all' to invoke on every channel message; default 'mention'.\n"
+    "# SLACK_CHANNEL_TRIGGER_MODE=mention\n"
+    "\n"
+)
+
+_SLACK_README_BLOCK = (
+    "\n## Channel: Slack\n"
+    "\n"
+    "This gateway uses [Composio's Slackbot toolkit](https://docs.composio.dev/) for\n"
+    "both inbound (webhook triggers) and outbound (`SLACKBOT_SEND_MESSAGE`).\n"
+    "\n"
+    "1. In the Composio dashboard, connect Slack to your workspace.\n"
+    "2. Set `COMPOSIO_WEBHOOK_SECRET` in `.env` to a long random string.\n"
+    "3. After deploying, register the triggers you want. Minimum:\n"
+    "\n"
+    "   ```\n"
+    "   composio trigger create SLACKBOT_DIRECT_MESSAGE_RECEIVED \\\n"
+    "       --webhook \"https://<your-deployment>/gateways/slack/composio?secret=$COMPOSIO_WEBHOOK_SECRET\"\n"
+    "   composio trigger create SLACKBOT_CHANNEL_MESSAGE_RECEIVED \\\n"
+    "       --webhook \"https://<your-deployment>/gateways/slack/composio?secret=$COMPOSIO_WEBHOOK_SECRET\"\n"
+    "   ```\n"
+    "\n"
+    "4. (Optional) Set `SLACK_BOT_USER_ID` so channel-mentions only trigger replies\n"
+    "   when the bot is explicitly @-mentioned (default behavior).\n"
+)
+
 
 # ── Placeholder replacement ─────────────────────────────────────────
 
@@ -184,7 +218,41 @@ def _build_replacements(
         gateway_env_blocks.append(_TELEGRAM_ENV_BLOCK)
         gateway_readme_blocks.append(_TELEGRAM_README_BLOCK)
 
-    # (slack, teams contributions are added in Tasks 4 and 5.)
+    if with_slack:
+        gateway_imports_lines.append(f"from {package}.gateways import slack as gw_slack")
+        gateway_mounts_lines.append("    app.include_router(gw_slack.router)")
+        gateway_env_blocks.append(_SLACK_ENV_BLOCK)
+        gateway_readme_blocks.append(_SLACK_README_BLOCK)
+
+    # (teams contributions are added in Task 5.)
+
+    # State-injection block: prepend to gateway_mounts_lines when any channel is active.
+    # All gateway routers depend on app.state.runner, app.state.app_name.
+    # Slack also requires app.state.composio_client.
+    if with_slack or with_telegram or with_teams:
+        state_lines = [
+            f'    app.state.app_name = "{name}"',
+            f"    from {package}.agent import root_agent as _root",
+            "    from google.adk.runners import Runner as _Runner",
+            "    from google.adk.sessions import InMemorySessionService as _InMem",
+            "    # Build a parallel session service for in-process gateway invocations.",
+            "    # In dev mode (DEV_MODE=true), use in-memory; in prod, use the same DB URI.",
+            "    if dev_mode:",
+            "        _gw_session_service = _InMem()",
+            "    else:",
+            "        from google.adk.sessions import DatabaseSessionService as _DbSess",
+            "        _gw_session_service = _DbSess(",
+            '            db_url=_normalize_to_asyncpg_uri(os.getenv("SESSION_SERVICE_URI")),',
+            '            connect_args={"ssl": "require"},',
+            "        )",
+            f'    app.state.runner = _Runner(app_name="{name}", agent=_root, session_service=_gw_session_service)',
+        ]
+        if with_slack:
+            state_lines.append(
+                f"    from {package}.gateways._common import get_composio_client"
+            )
+            state_lines.append("    app.state.composio_client = get_composio_client()")
+        gateway_mounts_lines = state_lines + gateway_mounts_lines
 
     gateway_imports = ("\n".join(gateway_imports_lines) + "\n") if gateway_imports_lines else ""
     gateway_mounts = ("\n".join(gateway_mounts_lines) + "\n") if gateway_mounts_lines else ""
@@ -350,7 +418,9 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "gateway-base", target, replacements, files_created)
         if with_telegram:
             _stamp_tree(OVERLAYS_DIR / "gateway-telegram", target, replacements, files_created)
-        # Per-channel overlays for slack and teams added in subsequent tasks.
+        if with_slack:
+            _stamp_tree(OVERLAYS_DIR / "gateway-slack", target, replacements, files_created)
+        # Teams overlay added in Task 5.
 
         return {
             "status": "ok",
