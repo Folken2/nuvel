@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nuvel-cli"
-version = "0.1.0"
-description = "Production-ready skills and scaffolder for Google ADK agents — use them with the coding agent you already have."
+version = "0.1.1"
+description = "Production-ready agents, your way — skills, scaffolder, and meta-agent for Google ADK, the Claude Agent SDK, and Anthropic Managed Agents."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
