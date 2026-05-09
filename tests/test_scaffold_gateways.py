@@ -164,3 +164,57 @@ class TestSlackOverlay(unittest.TestCase):
         readme = (self.agent_dir / "README.md").read_text()
         self.assertIn("Slack", readme)
         self.assertIn("composio trigger create", readme)
+
+
+class TestTeamsOverlay(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        result = adk_scaffold("agent-tm", output_dir=self.tmpdir, with_teams=True)
+        self.assertEqual(result["status"], "ok")
+        self.agent_dir = Path(result["path"])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_teams_bridge_module_exists(self):
+        self.assertTrue((self.agent_dir / "agent_tm" / "gateways" / "teams_bridge.py").is_file())
+
+    def test_requirements_includes_microsoft_agents(self):
+        reqs = (self.agent_dir / "requirements.txt").read_text()
+        self.assertIn("microsoft-agents-hosting-aiohttp", reqs)
+        self.assertIn("microsoft-agents-authentication-msal", reqs)
+        self.assertIn("aiohttp", reqs)
+        self.assertIn("pypdf", reqs)
+
+    def test_env_example_has_teams_block(self):
+        env = (self.agent_dir / ".env.example").read_text()
+        self.assertIn("TEAMS_BRIDGE_PORT", env)
+
+    def test_readme_has_teams_section(self):
+        readme = (self.agent_dir / "README.md").read_text()
+        self.assertIn("Teams", readme)
+        self.assertIn("teams_bridge", readme)
+
+    def test_teams_bridge_uses_renamed_envvars(self):
+        bridge = (self.agent_dir / "agent_tm" / "gateways" / "teams_bridge.py").read_text()
+        # Old names that MUST be gone:
+        self.assertNotIn("DATA_AGENT_BASE_URL", bridge)
+        self.assertNotIn("DATA_AGENT_APP_NAME", bridge)
+        self.assertNotIn("DATA_AGENT_API_KEY", bridge)
+        self.assertNotIn("DATA_AGENT_TIMEOUT_SECONDS", bridge)
+        # M365_* renamed to TEAMS_*:
+        self.assertNotIn("M365_BRIDGE_PORT", bridge)
+        self.assertNotIn("M365_PROGRESS_TEXTS", bridge)
+        self.assertNotIn("M365_ENABLE_INTERMEDIATE_MESSAGES", bridge)
+        # New names:
+        self.assertIn("AGENT_BASE_URL", bridge)
+        self.assertIn("AGENT_APP_NAME", bridge)
+        self.assertIn("API_KEY", bridge)
+        self.assertIn("AGENT_TIMEOUT_SECONDS", bridge)
+        self.assertIn("TEAMS_BRIDGE_PORT", bridge)
+        self.assertIn("TEAMS_PROGRESS_TEXTS", bridge)
+
+    def test_teams_bridge_default_app_name_is_scaffolded(self):
+        bridge = (self.agent_dir / "agent_tm" / "gateways" / "teams_bridge.py").read_text()
+        # Default for AGENT_APP_NAME should be the scaffolded agent name.
+        self.assertIn('os.getenv("AGENT_APP_NAME", "agent-tm")', bridge)

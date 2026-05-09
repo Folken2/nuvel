@@ -183,6 +183,58 @@ _SLACK_README_BLOCK = (
     "   when the bot is explicitly @-mentioned (default behavior).\n"
 )
 
+_TEAMS_ENV_BLOCK = (
+    "# ── Teams gateway (sidecar — runs separately) ───────────────────\n"
+    "# The Teams bridge is a separate process. Run it with:\n"
+    "#   python -m <agent_package>.gateways.teams_bridge\n"
+    "#\n"
+    "# SDK mode (production) — Azure Bot Service + Teams:\n"
+    "# CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID=...\n"
+    "# CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET=...\n"
+    "# CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID=...\n"
+    "#\n"
+    "# Anonymous mode (Agents Playground / local dev): leave the three above\n"
+    "# unset; the bridge accepts unauthenticated POSTs to /api/messages.\n"
+    "#\n"
+    "# Bridge → agent connection (defaults usually fine):\n"
+    "# AGENT_BASE_URL=http://127.0.0.1:8000\n"
+    "# AGENT_APP_NAME=<scaffolded agent name>\n"
+    "# AGENT_TIMEOUT_SECONDS=120\n"
+    "#\n"
+    "# Bridge runtime:\n"
+    "TEAMS_BRIDGE_PORT=3978\n"
+    "# TEAMS_BRIDGE_HOST=localhost\n"
+    "# TEAMS_ENABLE_INTERMEDIATE_MESSAGES=true\n"
+    "# TEAMS_PROGRESS_TEXTS=Analyzing request...|Inspecting available data...|Running tools...|Preparing final response...\n"
+    "# TEAMS_PROGRESS_MIN_DELAY_MS=350\n"
+    "\n"
+)
+
+_TEAMS_README_BLOCK = (
+    "\n## Channel: Microsoft Teams (sidecar)\n"
+    "\n"
+    "Teams is implemented as a separate process that proxies to this agent's\n"
+    "REST API. It uses the Microsoft 365 Agents SDK, which is aiohttp-based\n"
+    "and runs alongside (not inside) the FastAPI agent server.\n"
+    "\n"
+    "**Run command:**\n"
+    "\n"
+    "```\n"
+    "python -m {{agent_package}}.gateways.teams_bridge\n"
+    "```\n"
+    "\n"
+    "**Setup:**\n"
+    "\n"
+    "1. (Production) Register the bot in Azure Bot Service / Teams Developer Portal\n"
+    "   and set `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__{CLIENTID,CLIENTSECRET,TENANTID}`.\n"
+    "2. (Local dev) Skip step 1 and run the bridge against the\n"
+    "   [Microsoft 365 Agents Playground](https://aka.ms/agents-playground).\n"
+    "3. Point the bot's messaging endpoint at `https://<bridge-host>:3978/api/messages`.\n"
+    "\n"
+    "The bridge handles JWT validation in production mode and falls back to an\n"
+    "anonymous-POST mode for the Agents Playground when SDK config is absent.\n"
+)
+
 
 # ── Placeholder replacement ─────────────────────────────────────────
 
@@ -224,7 +276,19 @@ def _build_replacements(
         gateway_env_blocks.append(_SLACK_ENV_BLOCK)
         gateway_readme_blocks.append(_SLACK_README_BLOCK)
 
-    # (teams contributions are added in Task 5.)
+    if with_teams:
+        # Teams runs as a sidecar; nothing to import or mount in run_adk.py.
+        gateway_requirements_lines.extend([
+            "microsoft-agents-hosting-aiohttp",
+            "microsoft-agents-authentication-msal",
+            "aiohttp",
+            "pypdf",
+        ])
+        gateway_env_blocks.append(_TEAMS_ENV_BLOCK)
+        # _TEAMS_README_BLOCK contains "{{agent_package}}" placeholder; substitute
+        # at construction time since the block goes into the replacements dict value
+        # (not a template file), so _stamp_tree won't process it again.
+        gateway_readme_blocks.append(_TEAMS_README_BLOCK.replace("{{agent_package}}", package))
 
     # State-injection block: prepend to gateway_mounts_lines when any channel is active.
     # All gateway routers depend on app.state.runner, app.state.app_name.
@@ -420,7 +484,8 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "gateway-telegram", target, replacements, files_created)
         if with_slack:
             _stamp_tree(OVERLAYS_DIR / "gateway-slack", target, replacements, files_created)
-        # Teams overlay added in Task 5.
+        if with_teams:
+            _stamp_tree(OVERLAYS_DIR / "gateway-teams", target, replacements, files_created)
 
         return {
             "status": "ok",
