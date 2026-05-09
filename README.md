@@ -62,11 +62,13 @@ git clone https://github.com/Folken2/nuvel.git
 # Skills live in nuvel/backends/adk/skills/ and a ready-made SKILL.md is at .claude/skills/nuvel/
 ```
 
-**Install the CLI from PyPI (once published):**
+**Install the CLI from PyPI:**
 
 ```bash
-pip install nuvel
+pip install nuvel-cli
 ```
+
+> The PyPI distribution is named **`nuvel-cli`** (the bare `nuvel` name was too close to an existing package). The CLI command and all imports stay `nuvel` — `pip install nuvel-cli` then `nuvel new my-agent`.
 
 **Or install from source (always available):**
 

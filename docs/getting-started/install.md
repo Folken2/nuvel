@@ -10,10 +10,13 @@
 ## Install from PyPI
 
 ```bash
-pip install nuvel
+pip install nuvel-cli
 ```
 
 This installs the `nuvel` CLI plus everything needed to scaffold and run agents on any of the supported backends.
+
+!!! note "Why `nuvel-cli` and not `nuvel`?"
+    The PyPI distribution is named **`nuvel-cli`** because the bare name was too close to an existing package. The CLI command (`nuvel`) and every Python import (`from nuvel.cli import ...`) stay unchanged. Only the name you type after `pip install` differs.
 
 ## Install from source
 
