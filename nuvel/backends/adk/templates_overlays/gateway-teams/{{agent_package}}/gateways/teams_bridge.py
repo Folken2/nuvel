@@ -37,6 +37,15 @@ from microsoft_agents.hosting.core import (
 logger = logging.getLogger(__name__)
 
 
+def _first_env(*keys: str, default: str = "") -> str:
+    """Return the value of the first non-empty env var in *keys*, or *default*."""
+    for k in keys:
+        v = os.getenv(k)
+        if v is not None and v != "":
+            return v
+    return default
+
+
 class AgentBridge(AgentApplication):
     def __init__(self) -> None:
         cfg = load_configuration_from_env(os.environ)
@@ -143,13 +152,13 @@ class AgentClient:
             "1",
             "yes",
         )
-        self.max_attachment_count = int(os.getenv("TEAMS_MAX_ATTACHMENT_COUNT", "5"))
+        self.max_attachment_count = int(_first_env("TEAMS_MAX_ATTACHMENT_COUNT", "GATEWAY_MAX_ATTACHMENT_COUNT", default="5"))
         self.enable_attachment_download = os.getenv("TEAMS_ENABLE_ATTACHMENT_DOWNLOAD", "true").lower() in (
             "true",
             "1",
             "yes",
         )
-        self.max_attachment_bytes = int(os.getenv("TEAMS_MAX_ATTACHMENT_BYTES", "500000"))
+        self.max_attachment_bytes = int(_first_env("TEAMS_MAX_ATTACHMENT_BYTES", "GATEWAY_MAX_ATTACHMENT_BYTES", default="500000"))
         self.max_inline_b64_chars = int(os.getenv("TEAMS_MAX_INLINE_B64_CHARS", "1500000"))
         self.forward_raw_attachments = os.getenv("TEAMS_FORWARD_RAW_ATTACHMENTS", "false").lower() in (
             "true",
