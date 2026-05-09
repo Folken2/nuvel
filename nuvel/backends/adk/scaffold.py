@@ -226,6 +226,9 @@ def scaffold_agent(
     system_prompt: str = "",
     persona: bool = False,
     with_composio: bool = False,
+    with_slack: bool = False,
+    with_telegram: bool = False,
+    with_teams: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -237,6 +240,11 @@ def scaffold_agent(
         persona: Activate the persona overlay (self-rewriting soul, awakening,
                  author_skill, etc.). Inappropriate for stateless task bots.
         with_composio: Activate the Composio Tool Router MCP overlay.
+        with_slack: Activate the Slack messaging-gateway overlay.
+                    Implies with_composio (Slack uses Composio Slackbot).
+        with_telegram: Activate the Telegram messaging-gateway overlay.
+        with_teams: Activate the MS Teams messaging-gateway overlay
+                    (sidecar process; runs separately from the agent server).
 
     Returns:
         A dict with status and metadata.
@@ -245,6 +253,11 @@ def scaffold_agent(
         name = validate_agent_name(name)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
+
+    # --with-slack uses Composio Slackbot end-to-end; auto-enable composio.
+    if with_slack and not with_composio:
+        print("[nuvel] --with-slack uses Composio Slackbot — enabling --with-composio.")
+        with_composio = True
 
     package = name.replace("-", "_")
     description = description or f"ADK agent: {name}"
@@ -284,6 +297,9 @@ def scaffold_agent(
             "files": files_created,
             "persona": persona,
             "with_composio": with_composio,
+            "with_slack": with_slack,
+            "with_telegram": with_telegram,
+            "with_teams": with_teams,
         }
 
     except Exception as exc:
