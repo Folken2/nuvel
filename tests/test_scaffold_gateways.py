@@ -165,6 +165,11 @@ class TestSlackOverlay(unittest.TestCase):
         self.assertIn("Slack", readme)
         self.assertIn("composio trigger create", readme)
 
+    def test_run_adk_wires_composio_client(self):
+        run_adk = (self.agent_dir / "run_adk.py").read_text()
+        self.assertIn("app.state.composio_client = get_composio_client()", run_adk)
+        self.assertIn("from agent_sl.gateways._common import get_composio_client", run_adk)
+
 
 class TestTeamsOverlay(unittest.TestCase):
     def setUp(self):

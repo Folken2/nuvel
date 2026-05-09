@@ -269,6 +269,7 @@ def _build_replacements(
         gateway_mounts_lines.append("    app.include_router(gw_telegram.router)")
         gateway_env_blocks.append(_TELEGRAM_ENV_BLOCK)
         gateway_readme_blocks.append(_TELEGRAM_README_BLOCK)
+        gateway_requirements_lines.append("httpx>=0.27.0")
 
     if with_slack:
         gateway_imports_lines.append(f"from {package}.gateways import slack as gw_slack")

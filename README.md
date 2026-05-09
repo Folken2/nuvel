@@ -140,6 +140,9 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel new <name> --description "..."` | Scaffold with a one-liner description |
 | `nuvel new <name> --persona` | *(adk only)* Self-evolving agent (SOUL.md, awakening flow) |
 | `nuvel new <name> --with-composio` | *(adk only)* Bundle ~1000 integrations via Composio Tool Router |
+| `nuvel new <name> --with-slack` | *(adk only)* Add a Slack Events API gateway (auto-enables `--with-composio`) |
+| `nuvel new <name> --with-telegram` | *(adk only)* Add a Telegram Bot webhook gateway |
+| `nuvel new <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
 | `nuvel new <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
