@@ -97,6 +97,14 @@ async def invoke_agent(
 
 
 def get_composio_client():
-    """Lazy import: only used when the Slack overlay is active."""
+    """Lazy import: only used when the Slack overlay is active.
+
+    Raises RuntimeError at construction time if COMPOSIO_API_KEY is unset,
+    so misconfiguration fails loudly at server startup instead of silently
+    at the first webhook delivery.
+    """
     from composio import Composio
-    return Composio(api_key=os.environ.get("COMPOSIO_API_KEY"))
+    api_key = os.environ.get("COMPOSIO_API_KEY")
+    if not api_key:
+        raise RuntimeError("COMPOSIO_API_KEY is required when the Slack gateway is active.")
+    return Composio(api_key=api_key)
