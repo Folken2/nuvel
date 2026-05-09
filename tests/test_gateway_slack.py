@@ -269,3 +269,51 @@ class TestSlackRouter(unittest.TestCase):
         # data was b64-encoded
         import base64
         self.assertEqual(base64.b64decode(args["content_b64"]), b"\x89PNGdata")
+
+    def test_outbound_upload_failure_falls_back_to_text_send(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        from sl_test.gateways._common import AgentReply, OutboundAttachment
+
+        async def fake_invoke(*_a, **_kw):
+            return AgentReply(text="here you go", attachments=[
+                OutboundAttachment(mime_type="image/png", display_name="x.png", data=b"\x89PNG"),
+            ])
+
+        composio = MagicMock()
+
+        def execute_side_effect(tool, *_a, **_kw):
+            if tool == self.sl.SLACK_FILES_UPLOAD_TOOL:
+                raise RuntimeError("upload boom")
+            return {"ok": True}
+        composio.tools.execute = MagicMock(side_effect=execute_side_effect)
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
+            for client in self._client(runner, composio_mock=composio):
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "draw", "ts": "1700000000.001", "channel_type": "im",
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(50):
+            send_calls = [c for c in composio.tools.execute.call_args_list
+                          if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
+            if send_calls:
+                break
+            time.sleep(0.02)
+        send_calls = [c for c in composio.tools.execute.call_args_list
+                      if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
+        self.assertEqual(len(send_calls), 1, "fallback text send should have happened")
+        args = send_calls[0].kwargs.get("arguments") or {}
+        self.assertEqual(args.get("markdown_text"), "here you go")

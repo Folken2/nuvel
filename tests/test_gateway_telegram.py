@@ -366,3 +366,56 @@ class TestTelegramRouter(unittest.TestCase):
         body = doc_calls[0]["kwargs"].get("json") or {}
         self.assertEqual(body.get("document"), "https://example.com/report.pdf")
         self.assertEqual(body.get("caption"), "here is the file")
+
+    def test_outbound_send_failure_falls_back_to_text(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        from tg_test.gateways._common import AgentReply, OutboundAttachment
+
+        async def fake_invoke(*_a, **_kw):
+            return AgentReply(text="here you go", attachments=[
+                OutboundAttachment(mime_type="image/png", display_name="x.png", data=b"\x89PNG"),
+            ])
+
+        posted = []
+        async def capture_post(self_client, url, *args, **kwargs):
+            posted.append({"url": url, "kwargs": kwargs})
+            m = MagicMock()
+            if "/sendPhoto" in url:
+                m.status_code = 500
+                m.text = "fail"
+            else:
+                m.status_code = 200
+                m.text = "{}"
+            return m
+
+        with patch.object(self.tg, "invoke_agent", side_effect=fake_invoke), \
+             patch("httpx.AsyncClient.post", new=capture_post):
+            for client in self._client(runner):
+                r = client.post(
+                    "/gateways/telegram",
+                    json={
+                        "update_id": 11,
+                        "message": {
+                            "message_id": 1,
+                            "chat": {"id": 999, "type": "private"},
+                            "from": {"id": 555},
+                            "text": "draw it",
+                        },
+                    },
+                    headers={"X-Telegram-Bot-Api-Secret-Token": "testsecret"},
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(50):
+            if any("/sendMessage" in p["url"] for p in posted):
+                break
+            time.sleep(0.02)
+        msg_calls = [p for p in posted if "/sendMessage" in p["url"]]
+        self.assertEqual(len(msg_calls), 1, "fallback text send should have happened")
+        body = msg_calls[0]["kwargs"].get("json") or {}
+        self.assertEqual(body.get("text"), "here you go")

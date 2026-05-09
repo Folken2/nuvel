@@ -95,9 +95,10 @@ async def _upload_attachment(
     thread_ts: str | None,
     attachment,  # OutboundAttachment
     initial_comment: str | None,
-) -> None:
+) -> bool:
+    """Returns True iff the upload appears to have succeeded."""
     if not attachment.data:
-        return  # URI-only handled by caller.
+        return False
     args = {
         "channel": channel,
         "filename": attachment.display_name or "agent-output",
@@ -112,8 +113,10 @@ async def _upload_attachment(
         await asyncio.to_thread(
             composio_client.tools.execute, SLACK_FILES_UPLOAD_TOOL, arguments=args,
         )
+        return True
     except Exception:
         logger.exception("Slack: %s failed for %s", SLACK_FILES_UPLOAD_TOOL, attachment.display_name)
+        return False
 
 
 async def _download_slack_file(client: httpx.AsyncClient, url: str, token: str) -> bytes | None:
@@ -216,10 +219,8 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
     thread_ts = payload.get("thread_ts") or payload.get("ts") if in_thread else None
 
     if bytes_attachments:
-        # First file carries the reply text as initial_comment; the text send
-        # below is suppressed when we used initial_comment.
         first, *rest = bytes_attachments
-        await _upload_attachment(
+        first_ok = await _upload_attachment(
             composio, channel=channel, thread_ts=thread_ts,
             attachment=first, initial_comment=reply_text or None,
         )
@@ -228,8 +229,10 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
                 composio, channel=channel, thread_ts=thread_ts,
                 attachment=a, initial_comment=None,
             )
-        # Skip the duplicate text send.
-        return
+        if first_ok:
+            # Text already delivered as initial_comment on the first upload.
+            return
+        # First upload failed — fall through so the text reply still goes out.
 
     await _send_reply(composio, channel, reply_text, thread_ts=thread_ts)
 

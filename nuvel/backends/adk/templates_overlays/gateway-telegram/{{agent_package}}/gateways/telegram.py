@@ -92,6 +92,7 @@ async def _send_photo(chat_id: int | str, *, data: bytes | None, file_uri: str |
             r = await client.post(url, json=body)
         if r.status_code != 200:
             logger.warning("Telegram sendPhoto failed: %s %s", r.status_code, r.text[:200])
+            raise RuntimeError(f"sendPhoto returned {r.status_code}")
 
 
 async def _send_document(chat_id: int | str, *, data: bytes | None, file_uri: str | None,
@@ -116,6 +117,7 @@ async def _send_document(chat_id: int | str, *, data: bytes | None, file_uri: st
             r = await client.post(url, json=body)
         if r.status_code != 200:
             logger.warning("Telegram sendDocument failed: %s %s", r.status_code, r.text[:200])
+            raise RuntimeError(f"sendDocument returned {r.status_code}")
 
 
 def _is_image(mime: str) -> bool:
@@ -270,10 +272,9 @@ async def _process_message(request: Request, msg: dict) -> None:
 
     if outbound:
         first_caption = reply_text or None
+        first_ok = False
         for i, a in enumerate(outbound):
             cap = first_caption if i == 0 else None
-            if i == 0:
-                first_caption = None  # only first carries it
             try:
                 if _is_image(a.mime_type):
                     await _send_photo(
@@ -288,9 +289,13 @@ async def _process_message(request: Request, msg: dict) -> None:
                         reply_to=reply_to, message_thread_id=thread_id,
                         filename=a.display_name,
                     )
+                if i == 0:
+                    first_ok = True
             except Exception:
                 logger.exception("Telegram: outbound send failed for %s", a.display_name)
-        return  # text already delivered as caption on the first attachment
+        if first_ok or not reply_text:
+            return  # text was carried in caption, or there was no text to send
+        # First send failed — fall through so the text reply still goes out.
 
     await _send_message(chat_id, reply_text, reply_to=reply_to, message_thread_id=thread_id)
 
