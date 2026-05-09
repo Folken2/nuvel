@@ -17,7 +17,13 @@ import httpx
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from {{agent_package}}.gateways._common import ensure_session, invoke_agent, session_key
+from {{agent_package}}.gateways._common import (
+    InboundAttachment,
+    enforce_attachment_limits,
+    ensure_session,
+    invoke_agent,
+    session_key,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/gateways", tags=["gateway:telegram"])
@@ -64,9 +70,87 @@ async def _send_chat_action(chat_id: int | str, action: str = "typing") -> None:
         pass
 
 
-def _is_text_message(update: dict) -> bool:
+def _is_invokable_message(update: dict) -> bool:
+    """Return True if the message has either text/caption or a supported file part."""
     msg = update.get("message")
-    return isinstance(msg, dict) and isinstance(msg.get("text"), str) and bool(msg["text"])
+    if not isinstance(msg, dict):
+        return False
+    if isinstance(msg.get("text"), str) and msg["text"]:
+        return True
+    if isinstance(msg.get("caption"), str) and msg["caption"]:
+        return True
+    return any(k in msg for k in ("photo", "document", "voice", "audio", "video", "video_note"))
+
+
+_TELEGRAM_FILE_KINDS: tuple[tuple[str, str, str], ...] = (
+    # (msg key, default mime, fallback display name template)
+    ("document", "", "{kind}"),
+    ("photo", "image/jpeg", "photo.jpg"),
+    ("voice", "audio/ogg", "voice.ogg"),
+    ("audio", "", "audio"),
+    ("video", "video/mp4", "video.mp4"),
+    ("video_note", "video/mp4", "video_note.mp4"),
+)
+
+
+def _select_file_descriptor(msg: dict) -> tuple[str, str, str] | None:
+    """Pick (file_id, mime_type, display_name) for the first supported file part.
+
+    For `photo`, picks the largest size.
+    """
+    for key, default_mime, default_name in _TELEGRAM_FILE_KINDS:
+        item = msg.get(key)
+        if not item:
+            continue
+        if key == "photo" and isinstance(item, list):
+            largest = max(item, key=lambda p: p.get("file_size") or 0)
+            return largest["file_id"], default_mime, default_name
+        if isinstance(item, dict):
+            file_id = item.get("file_id")
+            if not file_id:
+                continue
+            mime = str(item.get("mime_type") or default_mime or "application/octet-stream")
+            name = str(item.get("file_name") or default_name.format(kind=key))
+            return file_id, mime, name
+    return None
+
+
+async def _fetch_telegram_file(file_id: str) -> tuple[bytes | None, str | None]:
+    """Resolve file_id via getFile and download the bytes.
+
+    Returns (bytes, file_path) or (None, None) on failure.
+    """
+    token = _bot_token()
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"{TELEGRAM_API_BASE}/bot{token}/getFile",
+                json={"file_id": file_id},
+            )
+            r.raise_for_status()
+            data = r.json()
+            file_path = (data.get("result") or {}).get("file_path")
+            if not file_path:
+                return None, None
+            url = f"{TELEGRAM_API_BASE}/file/bot{token}/{file_path}"
+            dl = await client.get(url)
+            dl.raise_for_status()
+            return dl.content, file_path
+    except Exception:
+        logger.exception("Telegram: failed to fetch file_id=%s", file_id)
+        return None, None
+
+
+async def _collect_inbound_files(msg: dict) -> tuple[list[InboundAttachment], list[str]]:
+    desc = _select_file_descriptor(msg)
+    if desc is None:
+        return [], []
+    file_id, mime, name = desc
+    data, _path = await _fetch_telegram_file(file_id)
+    item = InboundAttachment(mime_type=mime, display_name=name, data=data)
+    max_count = int(os.environ.get("GATEWAY_MAX_ATTACHMENT_COUNT", "5"))
+    max_bytes = int(os.environ.get("GATEWAY_MAX_ATTACHMENT_BYTES", str(10 * 1024 * 1024)))
+    return enforce_attachment_limits([item], max_count=max_count, max_bytes=max_bytes)
 
 
 def _should_invoke_in_group(msg: dict, bot_username: str | None) -> bool:
@@ -76,7 +160,7 @@ def _should_invoke_in_group(msg: dict, bot_username: str | None) -> bool:
     chat_type = (msg.get("chat") or {}).get("type", "private")
     if chat_type == "private":
         return True
-    text = msg.get("text", "")
+    text = msg.get("text") or msg.get("caption") or ""
     if bot_username and f"@{bot_username}" in text:
         return True
     if text.startswith("/"):
@@ -97,10 +181,23 @@ async def _process_message(request: Request, msg: dict) -> None:
     thread_id = msg.get("message_thread_id")
     reply_to = msg.get("message_id") if (msg.get("chat") or {}).get("type") != "private" else None
 
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+    attachments, skip_notes = await _collect_inbound_files(msg)
+    if skip_notes:
+        text = (text + ("\n" if text else "") + "\n".join(skip_notes)).strip()
+    if not text and not attachments:
+        # Nothing to do.
+        return
+
+    inline_max_bytes = int(os.environ.get("GATEWAY_INLINE_DATA_MAX_BYTES", str(4 * 1024 * 1024)))
+
     # Best-effort typing indicator while the agent runs.
     keepalive = asyncio.create_task(_typing_keepalive(chat_id))
     try:
-        reply = await invoke_agent(runner, user_id, session_id, msg["text"])
+        reply = await invoke_agent(
+            runner, user_id, session_id, text or "(file attached)",
+            attachments=attachments, inline_max_bytes=inline_max_bytes,
+        )
         reply_text = reply.text
         outbound = reply.attachments
     except Exception:
@@ -114,8 +211,7 @@ async def _process_message(request: Request, msg: dict) -> None:
         except asyncio.CancelledError:
             pass
 
-    # Stub outbound: append URI links so they're not lost. Real sendPhoto/sendDocument
-    # uploads land in a follow-up task.
+    # Outbound upload comes in Task 6; pass URI-only as link lines for now.
     if outbound:
         link_lines = [f"\n• {a.display_name}: {a.file_uri}" for a in outbound if a.file_uri]
         if link_lines:
@@ -145,8 +241,8 @@ async def telegram_webhook(
     _verify_secret(x_telegram_bot_api_secret_token)
     update = await request.json()
 
-    if not _is_text_message(update):
-        return JSONResponse(content={"ok": True, "skipped": "non-text update"})
+    if not _is_invokable_message(update):
+        return JSONResponse(content={"ok": True, "skipped": "no text or supported file"})
 
     msg = update["message"]
     bot_username = os.environ.get("TELEGRAM_BOT_USERNAME") or None
