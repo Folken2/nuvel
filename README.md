@@ -15,6 +15,7 @@
 Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Agent SDK, or Anthropic Managed Agents with the workflow you already have.
 
 [![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
+[![Docs](https://img.shields.io/badge/docs-folken2.github.io%2Fnuvel-blue)](https://folken2.github.io/nuvel/)
 [![GitHub stars](https://img.shields.io/github/stars/Folken2/nuvel?style=flat)](https://github.com/Folken2/nuvel/stargazers)
 
 </div>
