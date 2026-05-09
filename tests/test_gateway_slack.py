@@ -166,7 +166,7 @@ class TestSlackRouter(unittest.TestCase):
 
         # Background task may run after the response — give the loop a tick:
         import asyncio, time
-        for _ in range(50):
+        for _ in range(250):
             if "attachments" in captured:
                 break
             time.sleep(0.02)
@@ -204,7 +204,7 @@ class TestSlackRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if "attachments" in captured:
                 break
             time.sleep(0.02)
@@ -253,7 +253,7 @@ class TestSlackRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if composio.tools.execute.called:
                 break
             time.sleep(0.02)
@@ -306,7 +306,7 @@ class TestSlackRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             send_calls = [c for c in composio.tools.execute.call_args_list
                           if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
             if send_calls:

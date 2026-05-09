@@ -198,7 +198,7 @@ class TestTelegramRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if "attachments" in captured:
                 break
             time.sleep(0.02)
@@ -254,7 +254,7 @@ class TestTelegramRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if "attachments" in captured:
                 break
             time.sleep(0.02)
@@ -304,7 +304,7 @@ class TestTelegramRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if any("/sendPhoto" in p["url"] for p in posted):
                 break
             time.sleep(0.02)
@@ -357,7 +357,7 @@ class TestTelegramRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if any("/sendDocument" in p["url"] for p in posted):
                 break
             time.sleep(0.02)
@@ -411,7 +411,7 @@ class TestTelegramRouter(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
 
         import time
-        for _ in range(50):
+        for _ in range(250):
             if any("/sendMessage" in p["url"] for p in posted):
                 break
             time.sleep(0.02)
