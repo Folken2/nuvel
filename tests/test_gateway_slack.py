@@ -291,6 +291,7 @@ class TestSlackRouter(unittest.TestCase):
             return {"ok": True}
         composio.tools.execute = MagicMock(side_effect=execute_side_effect)
 
+        import time
         with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
             for client in self._client(runner, composio_mock=composio):
                 r = client.post(
@@ -304,14 +305,15 @@ class TestSlackRouter(unittest.TestCase):
                     },
                 )
                 self.assertEqual(r.status_code, 200)
+                # Poll INSIDE the TestClient context so the event loop is still
+                # alive — exiting the context cancels pending background tasks.
+                for _ in range(250):
+                    send_calls = [c for c in composio.tools.execute.call_args_list
+                                  if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
+                    if send_calls:
+                        break
+                    time.sleep(0.02)
 
-        import time
-        for _ in range(250):
-            send_calls = [c for c in composio.tools.execute.call_args_list
-                          if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
-            if send_calls:
-                break
-            time.sleep(0.02)
         send_calls = [c for c in composio.tools.execute.call_args_list
                       if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
         self.assertEqual(len(send_calls), 1, "fallback text send should have happened")
