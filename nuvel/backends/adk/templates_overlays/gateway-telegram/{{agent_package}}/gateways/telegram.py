@@ -147,6 +147,8 @@ async def _collect_inbound_files(msg: dict) -> tuple[list[InboundAttachment], li
         return [], []
     file_id, mime, name = desc
     data, _path = await _fetch_telegram_file(file_id)
+    if data is None:
+        return [], [f'[attachment "{name}" skipped: fetch failed]']
     item = InboundAttachment(mime_type=mime, display_name=name, data=data)
     max_count = int(os.environ.get("GATEWAY_MAX_ATTACHMENT_COUNT", "5"))
     max_bytes = int(os.environ.get("GATEWAY_MAX_ATTACHMENT_BYTES", str(10 * 1024 * 1024)))
