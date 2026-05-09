@@ -70,6 +70,58 @@ async def _send_chat_action(chat_id: int | str, action: str = "typing") -> None:
         pass
 
 
+async def _send_photo(chat_id: int | str, *, data: bytes | None, file_uri: str | None,
+                     caption: str | None, reply_to: int | None,
+                     message_thread_id: int | None, filename: str) -> None:
+    url = f"{TELEGRAM_API_BASE}/bot{_bot_token()}/sendPhoto"
+    fields: dict = {"chat_id": str(chat_id)}
+    if caption:
+        fields["caption"] = caption
+    if reply_to is not None:
+        fields["reply_to_message_id"] = str(reply_to)
+    if message_thread_id is not None:
+        fields["message_thread_id"] = str(message_thread_id)
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        if data is not None:
+            files = {"photo": (filename, data, "application/octet-stream")}
+            r = await client.post(url, data=fields, files=files)
+        else:
+            body = dict(fields)
+            body["photo"] = file_uri
+            r = await client.post(url, json=body)
+        if r.status_code != 200:
+            logger.warning("Telegram sendPhoto failed: %s %s", r.status_code, r.text[:200])
+
+
+async def _send_document(chat_id: int | str, *, data: bytes | None, file_uri: str | None,
+                        mime_type: str, caption: str | None, reply_to: int | None,
+                        message_thread_id: int | None, filename: str) -> None:
+    url = f"{TELEGRAM_API_BASE}/bot{_bot_token()}/sendDocument"
+    fields: dict = {"chat_id": str(chat_id)}
+    if caption:
+        fields["caption"] = caption
+    if reply_to is not None:
+        fields["reply_to_message_id"] = str(reply_to)
+    if message_thread_id is not None:
+        fields["message_thread_id"] = str(message_thread_id)
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        if data is not None:
+            files = {"document": (filename, data, mime_type or "application/octet-stream")}
+            r = await client.post(url, data=fields, files=files)
+        else:
+            body = dict(fields)
+            body["document"] = file_uri
+            r = await client.post(url, json=body)
+        if r.status_code != 200:
+            logger.warning("Telegram sendDocument failed: %s %s", r.status_code, r.text[:200])
+
+
+def _is_image(mime: str) -> bool:
+    return mime.lower().startswith("image/")
+
+
 def _is_invokable_message(update: dict) -> bool:
     """Return True if the message has either text/caption or a supported file part."""
     msg = update.get("message")
@@ -213,14 +265,32 @@ async def _process_message(request: Request, msg: dict) -> None:
         except asyncio.CancelledError:
             pass
 
-    # Outbound upload comes in Task 6; pass URI-only as link lines for now.
+    if not reply_text and not outbound:
+        return
+
     if outbound:
-        link_lines = [f"\n• {a.display_name}: {a.file_uri}" for a in outbound if a.file_uri]
-        if link_lines:
-            reply_text = f"{reply_text}\n\nAttached:" + "".join(link_lines)
-        for a in outbound:
-            if a.data and not a.file_uri:
-                logger.info("Telegram: outbound attachment with bytes (%s, %d bytes) — upload deferred", a.display_name, len(a.data))
+        first_caption = reply_text or None
+        for i, a in enumerate(outbound):
+            cap = first_caption if i == 0 else None
+            if i == 0:
+                first_caption = None  # only first carries it
+            try:
+                if _is_image(a.mime_type):
+                    await _send_photo(
+                        chat_id, data=a.data, file_uri=a.file_uri,
+                        caption=cap, reply_to=reply_to,
+                        message_thread_id=thread_id, filename=a.display_name,
+                    )
+                else:
+                    await _send_document(
+                        chat_id, data=a.data, file_uri=a.file_uri,
+                        mime_type=a.mime_type, caption=cap,
+                        reply_to=reply_to, message_thread_id=thread_id,
+                        filename=a.display_name,
+                    )
+            except Exception:
+                logger.exception("Telegram: outbound send failed for %s", a.display_name)
+        return  # text already delivered as caption on the first attachment
 
     await _send_message(chat_id, reply_text, reply_to=reply_to, message_thread_id=thread_id)
 

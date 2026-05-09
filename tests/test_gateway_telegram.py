@@ -260,3 +260,109 @@ class TestTelegramRouter(unittest.TestCase):
             time.sleep(0.02)
         self.assertEqual(captured["attachments"][0].mime_type, "application/pdf")
         self.assertEqual(captured["attachments"][0].display_name, "y.pdf")
+
+    def test_outbound_inline_image_calls_send_photo(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        from tg_test.gateways._common import AgentReply, OutboundAttachment
+
+        async def fake_invoke(*_a, **_kw):
+            return AgentReply(
+                text="here you go",
+                attachments=[OutboundAttachment(
+                    mime_type="image/png", display_name="chart.png", data=b"\x89PNGdata",
+                )],
+            )
+
+        posted = []
+        async def capture_post(self_client, url, *args, **kwargs):
+            posted.append({"url": url, "kwargs": kwargs})
+            m = MagicMock()
+            m.status_code = 200
+            m.text = "{}"
+            return m
+
+        with patch.object(self.tg, "invoke_agent", side_effect=fake_invoke), \
+             patch("httpx.AsyncClient.post", new=capture_post):
+            for client in self._client(runner):
+                r = client.post(
+                    "/gateways/telegram",
+                    json={
+                        "update_id": 9,
+                        "message": {
+                            "message_id": 1,
+                            "chat": {"id": 999, "type": "private"},
+                            "from": {"id": 555},
+                            "text": "draw it",
+                        },
+                    },
+                    headers={"X-Telegram-Bot-Api-Secret-Token": "testsecret"},
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(50):
+            if any("/sendPhoto" in p["url"] for p in posted):
+                break
+            time.sleep(0.02)
+        photo_calls = [p for p in posted if "/sendPhoto" in p["url"]]
+        self.assertEqual(len(photo_calls), 1)
+        files = photo_calls[0]["kwargs"].get("files") or {}
+        data = photo_calls[0]["kwargs"].get("data") or {}
+        self.assertIn("photo", files)
+        self.assertEqual(data.get("caption"), "here you go")
+
+    def test_outbound_uri_only_calls_send_document_with_url(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        from tg_test.gateways._common import AgentReply, OutboundAttachment
+
+        async def fake_invoke(*_a, **_kw):
+            return AgentReply(
+                text="here is the file",
+                attachments=[OutboundAttachment(
+                    mime_type="application/pdf", display_name="report.pdf",
+                    file_uri="https://example.com/report.pdf",
+                )],
+            )
+
+        posted = []
+        async def capture_post(self_client, url, *args, **kwargs):
+            posted.append({"url": url, "kwargs": kwargs})
+            m = MagicMock(); m.status_code = 200; m.text = "{}"
+            return m
+
+        with patch.object(self.tg, "invoke_agent", side_effect=fake_invoke), \
+             patch("httpx.AsyncClient.post", new=capture_post):
+            for client in self._client(runner):
+                r = client.post(
+                    "/gateways/telegram",
+                    json={
+                        "update_id": 10,
+                        "message": {
+                            "message_id": 1,
+                            "chat": {"id": 999, "type": "private"},
+                            "from": {"id": 555},
+                            "text": "send it",
+                        },
+                    },
+                    headers={"X-Telegram-Bot-Api-Secret-Token": "testsecret"},
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(50):
+            if any("/sendDocument" in p["url"] for p in posted):
+                break
+            time.sleep(0.02)
+        doc_calls = [p for p in posted if "/sendDocument" in p["url"]]
+        self.assertEqual(len(doc_calls), 1)
+        body = doc_calls[0]["kwargs"].get("json") or {}
+        self.assertEqual(body.get("document"), "https://example.com/report.pdf")
+        self.assertEqual(body.get("caption"), "here is the file")
