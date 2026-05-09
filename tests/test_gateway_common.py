@@ -4,12 +4,15 @@ The module under test lives inside a *generated* agent — so each test
 scaffolds a tiny agent in a tmpdir, then imports its `_common` module.
 """
 
+import asyncio
 import importlib.util
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 from nuvel.backends.adk.scaffold import scaffold_agent
 
@@ -158,11 +161,6 @@ class TestAttachmentHelpers(unittest.TestCase):
         self.assertNotIn("no bytes available", parts[0].text)
 
 
-import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
-
-
 def _event(parts, *, author="agent", artifact_delta=None):
     """Build a minimal event-shaped object the runner emits."""
     content = SimpleNamespace(parts=parts)
@@ -253,7 +251,13 @@ class TestInvokeAgent(unittest.TestCase):
         self.assertEqual(len(reply.attachments), 1)
         self.assertEqual(reply.attachments[0].data, b"chartbytes")
         self.assertEqual(reply.attachments[0].display_name, "chart.png")
-        artifact_service.load_artifact.assert_awaited_once()
+        artifact_service.load_artifact.assert_awaited_once_with(
+            app_name="app-test",
+            user_id="u",
+            session_id="s",
+            filename="chart.png",
+            version=1,
+        )
 
     def test_artifact_delta_without_service_is_silently_skipped(self):
         Part = self.common.genai_types.Part

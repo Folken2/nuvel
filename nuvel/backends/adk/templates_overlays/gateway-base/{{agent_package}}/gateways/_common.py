@@ -7,6 +7,7 @@ independently importable.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from dataclasses import dataclass, field
@@ -197,7 +198,7 @@ async def invoke_agent(
 
     texts: list[str] = []
     out_attachments: list[OutboundAttachment] = []
-    seen_keys: set[tuple[str, int]] = set()
+    seen_digests: set[bytes] = set()
 
     artifact_service = getattr(runner, "artifact_service", None)
     app_name = getattr(runner, "app_name", "")
@@ -216,12 +217,12 @@ async def invoke_agent(
                 texts.append(piece)
             inline = getattr(part, "inline_data", None)
             if inline is not None and getattr(inline, "data", None):
-                key = (inline.mime_type, len(inline.data))
-                if key not in seen_keys:
-                    seen_keys.add(key)
+                digest = hashlib.sha256(inline.data).digest()
+                if digest not in seen_digests:
+                    seen_digests.add(digest)
                     out_attachments.append(OutboundAttachment(
                         mime_type=inline.mime_type,
-                        display_name="agent-output",
+                        display_name=f"agent-output-{len(out_attachments) + 1}",
                         data=inline.data,
                     ))
             fdata = getattr(part, "file_data", None)
@@ -258,10 +259,10 @@ async def invoke_agent(
             inline = getattr(loaded, "inline_data", None)
             fdata = getattr(loaded, "file_data", None)
             if inline is not None and getattr(inline, "data", None):
-                key = (inline.mime_type, len(inline.data))
-                if key in seen_keys:
+                digest = hashlib.sha256(inline.data).digest()
+                if digest in seen_digests:
                     continue
-                seen_keys.add(key)
+                seen_digests.add(digest)
                 out_attachments.append(OutboundAttachment(
                     mime_type=inline.mime_type,
                     display_name=filename,
