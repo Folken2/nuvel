@@ -71,13 +71,14 @@ class TestSlackRouter(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
-    def _client(self, runner_mock, composio_mock=None):
+    def _client(self, runner_mock, composio_mock=None, env_extra=None):
         app = FastAPI()
         app.state.runner = runner_mock
         app.state.app_name = "sl-test"
         app.state.composio_client = composio_mock or MagicMock()
         app.include_router(self.sl.router)
-        with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": "s3cret"}, clear=False):
+        env = {"COMPOSIO_WEBHOOK_SECRET": "s3cret", **(env_extra or {})}
+        with patch.dict("os.environ", env, clear=False):
             yield TestClient(app)
 
     def test_missing_secret_returns_401(self):
@@ -122,3 +123,93 @@ class TestSlackRouter(unittest.TestCase):
                 },
             )
             self.assertEqual(r.status_code, 200)
+
+    def test_dm_with_files_downloads_and_passes_attachments(self):
+        """Files in payload are fetched with SLACK_BOT_TOKEN and forwarded to the runner."""
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        captured = {}
+
+        async def fake_invoke(_runner, _u, _s, text, attachments=None, **_kw):
+            captured["text"] = text
+            captured["attachments"] = attachments
+            from types import SimpleNamespace
+            return SimpleNamespace(text="ok", attachments=[])
+
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.content = b"\x89PNG\x00fakebytes"
+        fake_resp.headers = {"Content-Type": "image/png"}
+        fake_resp.raise_for_status = MagicMock()
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke), \
+             patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp):
+            for client in self._client(runner, env_extra={"SLACK_BOT_TOKEN": "xoxb-test"}):
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "what's this?", "ts": "1700000000.001", "channel_type": "im",
+                            "files": [{
+                                "id": "F1", "mimetype": "image/png", "name": "x.png",
+                                "url_private": "https://files.slack.com/x.png", "size": 14,
+                            }],
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        # Background task may run after the response — give the loop a tick:
+        import asyncio, time
+        for _ in range(50):
+            if "attachments" in captured:
+                break
+            time.sleep(0.02)
+        self.assertIn("attachments", captured)
+        self.assertEqual(len(captured["attachments"]), 1)
+        self.assertEqual(captured["attachments"][0].mime_type, "image/png")
+        self.assertEqual(captured["attachments"][0].data, b"\x89PNG\x00fakebytes")
+        self.assertEqual(captured["attachments"][0].display_name, "x.png")
+
+    def test_files_without_bot_token_fall_back_to_uri(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+        captured = {}
+
+        async def fake_invoke(_r, _u, _s, text, attachments=None, **_kw):
+            captured["attachments"] = attachments
+            from types import SimpleNamespace
+            return SimpleNamespace(text="ok", attachments=[])
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
+            for client in self._client(runner):  # no SLACK_BOT_TOKEN
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "look", "ts": "1700000000.001", "channel_type": "im",
+                            "files": [{"id": "F1", "mimetype": "image/png", "name": "x.png",
+                                       "url_private": "https://files.slack.com/x.png", "size": 14}],
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(50):
+            if "attachments" in captured:
+                break
+            time.sleep(0.02)
+        self.assertIn("attachments", captured)
+        self.assertEqual(len(captured["attachments"]), 1)
+        self.assertIsNone(captured["attachments"][0].data)
+        self.assertEqual(captured["attachments"][0].file_uri, "https://files.slack.com/x.png")
