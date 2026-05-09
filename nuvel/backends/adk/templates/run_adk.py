@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from google.adk.cli.fast_api import get_fast_api_app
 from {{agent_package}}.plugins import PLUGIN_PATHS
 from {{agent_package}}.config.logging import setup_logging, generate_request_id, request_id_var
-
+{{gateway_imports}}
 # Optional: load .env automatically if python-dotenv is installed.
 try:
     from dotenv import load_dotenv
@@ -46,7 +46,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     including /docs, /openapi.json, and /debug-info.
     """
 
-    PUBLIC_PREFIXES = ("/health", "/favicon.ico")
+    PUBLIC_PREFIXES = ("/health", "/favicon.ico", "/gateways")
 
     def __init__(self, app, api_key: str):
         super().__init__(app)
@@ -283,7 +283,7 @@ def main() -> None:
         print("[ADK] WARNING: No API_KEY set — endpoints are unauthenticated")
 
     add_endpoints(app)
-
+{{gateway_mounts}}
     print(f"[ADK] Server ready: http://0.0.0.0:{port}")
     uvicorn.run(app, host="", port=port)
 

@@ -57,6 +57,9 @@ def _cmd_new(args: argparse.Namespace) -> int:
         system_prompt=args.system_prompt,
         persona=args.persona,
         with_composio=args.with_composio,
+        with_slack=args.with_slack,
+        with_telegram=args.with_telegram,
+        with_teams=args.with_teams,
     )
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
@@ -69,6 +72,12 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("composio")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
+        channels = [
+            ch for ch, key in (("slack", "with_slack"), ("telegram", "with_telegram"), ("teams", "with_teams"))
+            if result.get(key)
+        ]
+        if channels:
+            print(f"Channels: {', '.join(channels)}")
         return 0
     print(f"Error: {result['message']}", file=sys.stderr)
     return 1
@@ -174,6 +183,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-composio", action="store_true",
         help="(adk only) Wire the Composio Tool Router MCP "
              "(~1000 toolkits via one hosted endpoint).",
+    )
+    p_new.add_argument(
+        "--with-slack", action="store_true",
+        help="(adk only) Add a Slack gateway via Composio Slackbot. Implies --with-composio.",
+    )
+    p_new.add_argument(
+        "--with-telegram", action="store_true",
+        help="(adk only) Add a Telegram gateway (webhook + Bot API outbound).",
+    )
+    p_new.add_argument(
+        "--with-teams", action="store_true",
+        help="(adk only) Add an MS Teams gateway (aiohttp sidecar via Microsoft 365 Agents SDK).",
     )
     p_new.set_defaults(func=_cmd_new)
 

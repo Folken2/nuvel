@@ -92,6 +92,23 @@ One-time setup before the first release:
 - Create a GitHub environment named `pypi` (Settings → Environments → New
   environment).
 
+## Adding a new messaging-app channel
+
+Channels live as overlays under `nuvel/backends/adk/templates_overlays/gateway-*/`.
+A new channel needs:
+
+1. `gateway-<name>/{{agent_package}}/gateways/<name>.py` — FastAPI APIRouter (or a
+   sidecar module if the channel's SDK is incompatible with FastAPI, like Teams).
+2. A `--with-<name>` flag added to `nuvel/cli.py` and threaded through
+   `scaffold_agent()` in `nuvel/backends/adk/scaffold.py`.
+3. ENV / README contributions in `_build_replacements` (see how `_TELEGRAM_ENV_BLOCK`
+   is wired).
+4. Tests under `tests/test_gateway_<name>.py` and a scaffold-flag test in
+   `tests/test_scaffold_gateways.py`.
+5. The same flag added to the rejection lists in
+   `nuvel/backends/claude_agent_sdk/scaffold.py` and
+   `nuvel/backends/anthropic_managed_agents/scaffold.py`.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the

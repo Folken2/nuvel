@@ -1,0 +1,124 @@
+"""Unit tests for the generated agent's Slack gateway router."""
+
+import importlib.util
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from nuvel.backends.adk.scaffold import scaffold_agent
+
+
+def _scaffold_slack(tmpdir):
+    result = scaffold_agent("sl-test", output_dir=tmpdir, with_slack=True)
+    if result["status"] != "ok":
+        raise AssertionError(result.get("message"))
+    return Path(result["path"]) / "sl_test"
+
+
+def _import_slack(pkg_dir: Path):
+    import types as _types
+
+    # sl_test (top-level package)
+    sl_test_pkg = _types.ModuleType("sl_test")
+    sl_test_pkg.__path__ = [str(pkg_dir)]
+    sl_test_pkg.__package__ = "sl_test"
+    sys.modules["sl_test"] = sl_test_pkg
+
+    # sl_test.gateways (sub-package)
+    gw_init_path = pkg_dir / "gateways" / "__init__.py"
+    gw_spec = importlib.util.spec_from_file_location(
+        "sl_test.gateways", gw_init_path,
+        submodule_search_locations=[str(pkg_dir / "gateways")]
+    )
+    gw_pkg = importlib.util.module_from_spec(gw_spec)
+    gw_pkg.__package__ = "sl_test.gateways"
+    sys.modules["sl_test.gateways"] = gw_pkg
+    sl_test_pkg.gateways = gw_pkg
+    gw_spec.loader.exec_module(gw_pkg)
+
+    # sl_test.gateways._common
+    common_path = pkg_dir / "gateways" / "_common.py"
+    common_spec = importlib.util.spec_from_file_location("sl_test.gateways._common", common_path)
+    common_mod = importlib.util.module_from_spec(common_spec)
+    common_mod.__package__ = "sl_test.gateways"
+    sys.modules["sl_test.gateways._common"] = common_mod
+    common_spec.loader.exec_module(common_mod)
+
+    # sl_test.gateways.slack
+    sub_path = pkg_dir / "gateways" / "slack.py"
+    sub_spec = importlib.util.spec_from_file_location("sl_test.gateways.slack", sub_path)
+    sub = importlib.util.module_from_spec(sub_spec)
+    sub.__package__ = "sl_test.gateways"
+    sys.modules["sl_test.gateways.slack"] = sub
+    sub_spec.loader.exec_module(sub)
+    return sub
+
+
+class TestSlackRouter(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        pkg = _scaffold_slack(cls.tmpdir)
+        cls.sl = _import_slack(pkg)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _client(self, runner_mock, composio_mock=None):
+        app = FastAPI()
+        app.state.runner = runner_mock
+        app.state.app_name = "sl-test"
+        app.state.composio_client = composio_mock or MagicMock()
+        app.include_router(self.sl.router)
+        with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": "s3cret"}, clear=False):
+            yield TestClient(app)
+
+    def test_missing_secret_returns_401(self):
+        for client in self._client(AsyncMock()):
+            r = client.post("/gateways/slack/composio", json={"trigger_slug": "x"})
+            self.assertEqual(r.status_code, 401)
+
+    def test_wrong_secret_returns_401(self):
+        for client in self._client(AsyncMock()):
+            r = client.post("/gateways/slack/composio?secret=wrong", json={"trigger_slug": "x"})
+            self.assertEqual(r.status_code, 401)
+
+    def test_unknown_trigger_is_noop_200(self):
+        for client in self._client(AsyncMock()):
+            r = client.post(
+                "/gateways/slack/composio?secret=s3cret",
+                json={"trigger_slug": "SLACKBOT_FUTURE_THING", "payload": {}},
+            )
+            self.assertEqual(r.status_code, 200)
+
+    def test_dm_trigger_invokes_agent(self):
+        for client in self._client(AsyncMock()):
+            r = client.post(
+                "/gateways/slack/composio?secret=s3cret",
+                json={
+                    "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                    "payload": {
+                        "team_id": "T01", "channel": "D456", "user": "U012",
+                        "text": "hello", "ts": "1700000000.001", "channel_type": "im",
+                    },
+                },
+            )
+            self.assertEqual(r.status_code, 200)
+
+    def test_bot_message_is_dropped_to_prevent_loops(self):
+        for client in self._client(AsyncMock()):
+            r = client.post(
+                "/gateways/slack/composio?secret=s3cret",
+                json={
+                    "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                    "payload": {"channel": "D1", "user": "U2", "text": "hi", "bot_id": "B1"},
+                },
+            )
+            self.assertEqual(r.status_code, 200)

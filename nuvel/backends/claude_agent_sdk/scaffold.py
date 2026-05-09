@@ -115,6 +115,9 @@ def scaffold_agent(
     system_prompt: str = "",
     persona: bool = False,
     with_composio: bool = False,
+    with_slack: bool = False,
+    with_telegram: bool = False,
+    with_teams: bool = False,
 ) -> dict:
     """Scaffold a Claude Agent SDK project from the template skeleton.
 
@@ -131,6 +134,12 @@ def scaffold_agent(
             "status": "error",
             "message": "--with-composio is an ADK-only bundle; use --framework adk if you want it.",
         }
+    for flag_name, flag_set in (("with-slack", with_slack), ("with-telegram", with_telegram), ("with-teams", with_teams)):
+        if flag_set:
+            return {
+                "status": "error",
+                "message": f"--{flag_name} is not yet supported for the claude-agent-sdk backend. Use --framework adk.",
+            }
 
     try:
         name = validate_agent_name(name)

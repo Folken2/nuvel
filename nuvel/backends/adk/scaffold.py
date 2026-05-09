@@ -120,6 +120,121 @@ _COMPOSIO_ENV_BLOCK = (
 
 _COMPOSIO_REQUIREMENT = "composio>=1.0.0rc10\n"
 
+_TELEGRAM_ENV_BLOCK = (
+    "# ── Telegram gateway ─────────────────────────────────────────────\n"
+    "# Required: bot token from @BotFather\n"
+    "TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here\n"
+    "# Required: random string passed to Telegram when calling setWebhook;\n"
+    "# Telegram echoes it back via the X-Telegram-Bot-Api-Secret-Token header.\n"
+    "TELEGRAM_WEBHOOK_SECRET=change_me_to_a_long_random_string\n"
+    "# Optional: bot username (without @) for group-mention detection.\n"
+    "# TELEGRAM_BOT_USERNAME=your_bot_username\n"
+    "\n"
+)
+
+_TELEGRAM_README_BLOCK = (
+    "\n## Channel: Telegram\n"
+    "\n"
+    "1. Create a bot via @BotFather and copy the token into `TELEGRAM_BOT_TOKEN`.\n"
+    "2. Set a long random string as `TELEGRAM_WEBHOOK_SECRET`.\n"
+    "3. After deploying, register the webhook:\n"
+    "\n"
+    "   ```\n"
+    "   curl -F \"url=https://<your-deployment>/gateways/telegram\" \\\n"
+    "        -F \"secret_token=$TELEGRAM_WEBHOOK_SECRET\" \\\n"
+    "        \"https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook\"\n"
+    "   ```\n"
+    "\n"
+    "4. For local dev, run `ngrok http 8000` first and pass the ngrok URL above.\n"
+    "5. The bot replies inline in DMs and in the same thread/topic in groups.\n"
+)
+
+_SLACK_ENV_BLOCK = (
+    "# ── Slack gateway (via Composio Slackbot) ────────────────────────\n"
+    "# Required: random shared secret used by Composio when delivering\n"
+    "# trigger webhooks. Set the same value when running\n"
+    "# `composio trigger create ... --webhook ...?secret=<this>`.\n"
+    "COMPOSIO_WEBHOOK_SECRET=change_me_to_a_long_random_string\n"
+    "# Optional: bot user ID for @-mention detection in channels.\n"
+    "# SLACK_BOT_USER_ID=U0BOT...\n"
+    "# Optional: 'all' to invoke on every channel message; default 'mention'.\n"
+    "# SLACK_CHANNEL_TRIGGER_MODE=mention\n"
+    "\n"
+)
+
+_SLACK_README_BLOCK = (
+    "\n## Channel: Slack\n"
+    "\n"
+    "This gateway uses [Composio's Slackbot toolkit](https://docs.composio.dev/) for\n"
+    "both inbound (webhook triggers) and outbound (`SLACKBOT_SEND_MESSAGE`).\n"
+    "\n"
+    "1. In the Composio dashboard, connect Slack to your workspace.\n"
+    "2. Set `COMPOSIO_WEBHOOK_SECRET` in `.env` to a long random string.\n"
+    "3. After deploying, register the triggers you want. Minimum:\n"
+    "\n"
+    "   ```\n"
+    "   composio trigger create SLACKBOT_DIRECT_MESSAGE_RECEIVED \\\n"
+    "       --webhook \"https://<your-deployment>/gateways/slack/composio?secret=$COMPOSIO_WEBHOOK_SECRET\"\n"
+    "   composio trigger create SLACKBOT_CHANNEL_MESSAGE_RECEIVED \\\n"
+    "       --webhook \"https://<your-deployment>/gateways/slack/composio?secret=$COMPOSIO_WEBHOOK_SECRET\"\n"
+    "   ```\n"
+    "\n"
+    "4. (Optional) Set `SLACK_BOT_USER_ID` so channel-mentions only trigger replies\n"
+    "   when the bot is explicitly @-mentioned (default behavior).\n"
+)
+
+_TEAMS_ENV_BLOCK = (
+    "# ── Teams gateway (sidecar — runs separately) ───────────────────\n"
+    "# The Teams bridge is a separate process. Run it with:\n"
+    "#   python -m <agent_package>.gateways.teams_bridge\n"
+    "#\n"
+    "# SDK mode (production) — Azure Bot Service + Teams:\n"
+    "# CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID=...\n"
+    "# CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET=...\n"
+    "# CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID=...\n"
+    "#\n"
+    "# Anonymous mode (Agents Playground / local dev): leave the three above\n"
+    "# unset; the bridge accepts unauthenticated POSTs to /api/messages.\n"
+    "#\n"
+    "# Bridge → agent connection (defaults usually fine):\n"
+    "# AGENT_BASE_URL=http://127.0.0.1:8000\n"
+    "# AGENT_APP_NAME=<scaffolded agent name>\n"
+    "# AGENT_TIMEOUT_SECONDS=120\n"
+    "#\n"
+    "# Bridge runtime:\n"
+    "TEAMS_BRIDGE_PORT=3978\n"
+    "# TEAMS_BRIDGE_HOST=localhost\n"
+    "# TEAMS_ENABLE_INTERMEDIATE_MESSAGES=true\n"
+    "# TEAMS_PROGRESS_TEXTS=Analyzing request...|Inspecting available data...|Running tools...|Preparing final response...\n"
+    "# TEAMS_PROGRESS_MIN_DELAY_MS=350\n"
+    "\n"
+)
+
+_TEAMS_README_BLOCK = (
+    "\n## Channel: Microsoft Teams (sidecar)\n"
+    "\n"
+    "Teams is implemented as a separate process that proxies to this agent's\n"
+    "REST API. It uses the Microsoft 365 Agents SDK, which is aiohttp-based\n"
+    "and runs alongside (not inside) the FastAPI agent server.\n"
+    "\n"
+    "**Run command:**\n"
+    "\n"
+    "```\n"
+    "python -m {{agent_package}}.gateways.teams_bridge\n"
+    "```\n"
+    "\n"
+    "**Setup:**\n"
+    "\n"
+    "1. (Production) Register the bot in Azure Bot Service / Teams Developer Portal\n"
+    "   and set `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__{CLIENTID,CLIENTSECRET,TENANTID}`.\n"
+    "2. (Local dev) Skip step 1 and run the bridge against the\n"
+    "   [Microsoft 365 Agents Playground](https://aka.ms/agents-playground).\n"
+    "3. Point the bot's messaging endpoint at `https://<bridge-host>:3978/api/messages`.\n"
+    "\n"
+    "The bridge handles JWT validation in production mode and falls back to an\n"
+    "anonymous-POST mode for the Agents Playground when SDK config is absent.\n"
+)
+
 
 # ── Placeholder replacement ─────────────────────────────────────────
 
@@ -131,6 +246,9 @@ def _build_replacements(
     system_prompt: str,
     persona: bool,
     with_composio: bool,
+    with_slack: bool = False,
+    with_telegram: bool = False,
+    with_teams: bool = False,
 ) -> dict[str, str]:
     # Frame priority: user's --system-prompt wins, else persona-aware default.
     if system_prompt:
@@ -139,6 +257,73 @@ def _build_replacements(
         frame = _PERSONA_FRAME
     else:
         frame = _DEFAULT_FRAME
+
+    gateway_imports_lines: list[str] = []
+    gateway_mounts_lines: list[str] = []
+    gateway_requirements_lines: list[str] = []
+    gateway_env_blocks: list[str] = []
+    gateway_readme_blocks: list[str] = []
+
+    if with_telegram:
+        gateway_imports_lines.append(f"from {package}.gateways import telegram as gw_telegram")
+        gateway_mounts_lines.append("    app.include_router(gw_telegram.router)")
+        gateway_env_blocks.append(_TELEGRAM_ENV_BLOCK)
+        gateway_readme_blocks.append(_TELEGRAM_README_BLOCK)
+        gateway_requirements_lines.append("httpx>=0.27.0")
+
+    if with_slack:
+        gateway_imports_lines.append(f"from {package}.gateways import slack as gw_slack")
+        gateway_mounts_lines.append("    app.include_router(gw_slack.router)")
+        gateway_env_blocks.append(_SLACK_ENV_BLOCK)
+        gateway_readme_blocks.append(_SLACK_README_BLOCK)
+
+    if with_teams:
+        # Teams runs as a sidecar; nothing to import or mount in run_adk.py.
+        gateway_requirements_lines.extend([
+            "microsoft-agents-hosting-aiohttp",
+            "microsoft-agents-authentication-msal",
+            "aiohttp",
+            "pypdf",
+        ])
+        gateway_env_blocks.append(_TEAMS_ENV_BLOCK)
+        # _TEAMS_README_BLOCK contains "{{agent_package}}" placeholder; substitute
+        # at construction time since the block goes into the replacements dict value
+        # (not a template file), so _stamp_tree won't process it again.
+        gateway_readme_blocks.append(_TEAMS_README_BLOCK.replace("{{agent_package}}", package))
+
+    # State-injection block: prepend to gateway_mounts_lines when any channel is active.
+    # All gateway routers depend on app.state.runner, app.state.app_name.
+    # Slack also requires app.state.composio_client.
+    if with_slack or with_telegram or with_teams:
+        state_lines = [
+            f'    app.state.app_name = "{name}"',
+            f"    from {package}.agent import root_agent as _root",
+            "    from google.adk.runners import Runner as _Runner",
+            "    from google.adk.sessions import InMemorySessionService as _InMem",
+            "    # Build a parallel session service for in-process gateway invocations.",
+            "    # In dev mode (DEV_MODE=true), use in-memory; in prod, use the same DB URI.",
+            "    if dev_mode:",
+            "        _gw_session_service = _InMem()",
+            "    else:",
+            "        from google.adk.sessions import DatabaseSessionService as _DbSess",
+            "        _gw_session_service = _DbSess(",
+            '            db_url=_normalize_to_asyncpg_uri(os.getenv("SESSION_SERVICE_URI")),',
+            '            connect_args={"ssl": "require"},',
+            "        )",
+            f'    app.state.runner = _Runner(app_name="{name}", agent=_root, session_service=_gw_session_service)',
+        ]
+        if with_slack:
+            state_lines.append(
+                f"    from {package}.gateways._common import get_composio_client"
+            )
+            state_lines.append("    app.state.composio_client = get_composio_client()")
+        gateway_mounts_lines = state_lines + gateway_mounts_lines
+
+    gateway_imports = ("\n".join(gateway_imports_lines) + "\n") if gateway_imports_lines else ""
+    gateway_mounts = ("\n".join(gateway_mounts_lines) + "\n") if gateway_mounts_lines else ""
+    gateway_requirements = ("\n".join(gateway_requirements_lines) + "\n") if gateway_requirements_lines else ""
+    gateway_env_block = "\n".join(gateway_env_blocks)
+    gateway_readme_section = "\n".join(gateway_readme_blocks)
 
     return {
         "{{agent_package}}": package,
@@ -160,6 +345,12 @@ def _build_replacements(
         "{{composio_env_block}}": _COMPOSIO_ENV_BLOCK if with_composio else "",
         # requirements.txt
         "{{composio_requirement}}": _COMPOSIO_REQUIREMENT if with_composio else "",
+        # Gateway placeholders (populated by per-channel tasks 3–5)
+        "{{gateway_imports}}": gateway_imports,
+        "{{gateway_mounts}}": gateway_mounts,
+        "{{gateway_requirements}}": gateway_requirements,
+        "{{gateway_env_block}}": gateway_env_block,
+        "{{gateway_readme_section}}": gateway_readme_section,
     }
 
 
@@ -226,6 +417,9 @@ def scaffold_agent(
     system_prompt: str = "",
     persona: bool = False,
     with_composio: bool = False,
+    with_slack: bool = False,
+    with_telegram: bool = False,
+    with_teams: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -237,6 +431,11 @@ def scaffold_agent(
         persona: Activate the persona overlay (self-rewriting soul, awakening,
                  author_skill, etc.). Inappropriate for stateless task bots.
         with_composio: Activate the Composio Tool Router MCP overlay.
+        with_slack: Activate the Slack messaging-gateway overlay.
+                    Implies with_composio (Slack uses Composio Slackbot).
+        with_telegram: Activate the Telegram messaging-gateway overlay.
+        with_teams: Activate the MS Teams messaging-gateway overlay
+                    (sidecar process; runs separately from the agent server).
 
     Returns:
         A dict with status and metadata.
@@ -245,6 +444,11 @@ def scaffold_agent(
         name = validate_agent_name(name)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
+
+    # --with-slack uses Composio Slackbot end-to-end; auto-enable composio.
+    if with_slack and not with_composio:
+        print("[nuvel] --with-slack uses Composio Slackbot — enabling --with-composio.")
+        with_composio = True
 
     package = name.replace("-", "_")
     description = description or f"ADK agent: {name}"
@@ -262,6 +466,7 @@ def scaffold_agent(
 
     replacements = _build_replacements(
         name, package, description, system_prompt, persona, with_composio,
+        with_slack, with_telegram, with_teams,
     )
     files_created: list[str] = []
 
@@ -274,6 +479,14 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "persona", target, replacements, files_created)
         if with_composio:
             _stamp_tree(OVERLAYS_DIR / "composio", target, replacements, files_created)
+        if with_slack or with_telegram or with_teams:
+            _stamp_tree(OVERLAYS_DIR / "gateway-base", target, replacements, files_created)
+        if with_telegram:
+            _stamp_tree(OVERLAYS_DIR / "gateway-telegram", target, replacements, files_created)
+        if with_slack:
+            _stamp_tree(OVERLAYS_DIR / "gateway-slack", target, replacements, files_created)
+        if with_teams:
+            _stamp_tree(OVERLAYS_DIR / "gateway-teams", target, replacements, files_created)
 
         return {
             "status": "ok",
@@ -284,6 +497,9 @@ def scaffold_agent(
             "files": files_created,
             "persona": persona,
             "with_composio": with_composio,
+            "with_slack": with_slack,
+            "with_telegram": with_telegram,
+            "with_teams": with_teams,
         }
 
     except Exception as exc:

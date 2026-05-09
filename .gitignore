@@ -26,6 +26,7 @@ env/
 # Editor / tooling state
 .claude/settings.local.json
 .adk/
+.worktrees/
 .idea/
 .vscode/
 *.swp
