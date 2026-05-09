@@ -11,6 +11,7 @@ Setup is documented in this agent's README.md ("Channel: Slack" section).
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import secrets
@@ -26,6 +27,9 @@ from {{agent_package}}.gateways._common import (
     invoke_agent,
     session_key,
 )
+
+# Verified at impl time (Task 4.1). Adjust if Composio slug has changed.
+SLACK_FILES_UPLOAD_TOOL = "SLACK_FILES_UPLOAD_V2"
 
 logger = logging.getLogger(__name__)
 _warned_no_bot_token = False
@@ -75,6 +79,41 @@ async def _send_reply(composio_client, channel: str, text: str,
         )
     except Exception:
         logger.exception("Slack: SLACKBOT_SEND_MESSAGE failed")
+
+
+def _filetype_from_mime(mime: str) -> str:
+    """Map mime to Slack `filetype` shortcut."""
+    if "/" in mime:
+        return mime.split("/", 1)[1].split(";")[0] or "auto"
+    return "auto"
+
+
+async def _upload_attachment(
+    composio_client,
+    *,
+    channel: str,
+    thread_ts: str | None,
+    attachment,  # OutboundAttachment
+    initial_comment: str | None,
+) -> None:
+    if not attachment.data:
+        return  # URI-only handled by caller.
+    args = {
+        "channel": channel,
+        "filename": attachment.display_name or "agent-output",
+        "filetype": _filetype_from_mime(attachment.mime_type),
+        "content_b64": base64.b64encode(attachment.data).decode("ascii"),
+    }
+    if thread_ts:
+        args["thread_ts"] = thread_ts
+    if initial_comment:
+        args["initial_comment"] = initial_comment
+    try:
+        await asyncio.to_thread(
+            composio_client.tools.execute, SLACK_FILES_UPLOAD_TOOL, arguments=args,
+        )
+    except Exception:
+        logger.exception("Slack: %s failed for %s", SLACK_FILES_UPLOAD_TOOL, attachment.display_name)
 
 
 async def _download_slack_file(client: httpx.AsyncClient, url: str, token: str) -> bytes | None:
@@ -165,17 +204,33 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
         reply_text = reply.text
         outbound = reply.attachments
 
-    # Outbound upload comes in Task 4; for now pass through URI-only attachments as links.
-    if outbound:
-        link_lines = [f"\n• {a.display_name}: {a.file_uri}" for a in outbound if a.file_uri]
-        if link_lines:
-            reply_text = f"{reply_text}\n\nAttached:" + "".join(link_lines)
-        for a in outbound:
-            if a.data and not a.file_uri:
-                logger.info("Slack: outbound attachment with bytes (%s, %d bytes) — upload deferred", a.display_name, len(a.data))
+    # Outbound: upload attachments with bytes; URI-only become link lines.
+    uri_only = [a for a in outbound if a.file_uri and not a.data]
+    bytes_attachments = [a for a in outbound if a.data]
+
+    if uri_only:
+        link_lines = [f"\n• {a.display_name}: {a.file_uri}" for a in uri_only]
+        reply_text = f"{reply_text}\n\nAttached:" + "".join(link_lines)
 
     channel = payload.get("channel")
     thread_ts = payload.get("thread_ts") or payload.get("ts") if in_thread else None
+
+    if bytes_attachments:
+        # First file carries the reply text as initial_comment; the text send
+        # below is suppressed when we used initial_comment.
+        first, *rest = bytes_attachments
+        await _upload_attachment(
+            composio, channel=channel, thread_ts=thread_ts,
+            attachment=first, initial_comment=reply_text or None,
+        )
+        for a in rest:
+            await _upload_attachment(
+                composio, channel=channel, thread_ts=thread_ts,
+                attachment=a, initial_comment=None,
+            )
+        # Skip the duplicate text send.
+        return
+
     await _send_reply(composio, channel, reply_text, thread_ts=thread_ts)
 
 

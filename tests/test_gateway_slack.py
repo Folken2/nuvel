@@ -212,3 +212,60 @@ class TestSlackRouter(unittest.TestCase):
         self.assertEqual(len(captured["attachments"]), 1)
         self.assertIsNone(captured["attachments"][0].data)
         self.assertEqual(captured["attachments"][0].file_uri, "https://files.slack.com/x.png")
+
+    def test_outbound_inline_image_uploads_via_composio(self):
+        runner = AsyncMock()
+        runner.session_service = AsyncMock()
+        runner.session_service.get_session = AsyncMock(return_value=None)
+        runner.session_service.create_session = AsyncMock()
+
+        # Build an AgentReply with one inline outbound attachment.
+        common = self.sl  # import sibling
+        Reply = self.sl.AgentReply if hasattr(self.sl, "AgentReply") else None
+        # Fall back to importing from _common via the existing module path:
+        if Reply is None:
+            from sl_test.gateways._common import AgentReply, OutboundAttachment
+        else:
+            from sl_test.gateways._common import OutboundAttachment
+
+        reply = AgentReply(text="here you go", attachments=[
+            OutboundAttachment(mime_type="image/png", display_name="chart.png", data=b"\x89PNGdata"),
+        ])
+
+        async def fake_invoke(*_a, **_kw):
+            return reply
+
+        composio = MagicMock()
+        composio.tools.execute = MagicMock(return_value={"ok": True})
+
+        with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
+            for client in self._client(runner, composio_mock=composio):
+                r = client.post(
+                    "/gateways/slack/composio?secret=s3cret",
+                    json={
+                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
+                        "payload": {
+                            "team_id": "T01", "channel": "D456", "user": "U012",
+                            "text": "draw", "ts": "1700000000.001", "channel_type": "im",
+                        },
+                    },
+                )
+                self.assertEqual(r.status_code, 200)
+
+        import time
+        for _ in range(50):
+            if composio.tools.execute.called:
+                break
+            time.sleep(0.02)
+
+        # Find the upload call (there may also be a SLACKBOT_SEND_MESSAGE call).
+        upload_calls = [c for c in composio.tools.execute.call_args_list
+                        if c.args and c.args[0] == self.sl.SLACK_FILES_UPLOAD_TOOL]
+        self.assertEqual(len(upload_calls), 1)
+        args = upload_calls[0].kwargs.get("arguments") or upload_calls[0].args[1]
+        self.assertEqual(args["channel"], "D456")
+        self.assertEqual(args["filename"], "chart.png")
+        self.assertEqual(args["filetype"], "png")
+        # data was b64-encoded
+        import base64
+        self.assertEqual(base64.b64decode(args["content_b64"]), b"\x89PNGdata")
