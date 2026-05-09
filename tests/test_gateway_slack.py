@@ -271,6 +271,14 @@ class TestSlackRouter(unittest.TestCase):
         self.assertEqual(base64.b64decode(args["content_b64"]), b"\x89PNGdata")
 
     def test_outbound_upload_failure_falls_back_to_text_send(self):
+        """When the file upload raises, _process must still send the text reply.
+
+        Tests _process directly as a coroutine to avoid the asyncio.create_task
+        + TestClient timing fragility — the failure mode here is a logic bug,
+        not a routing one, so the HTTP layer adds no signal.
+        """
+        import asyncio
+
         runner = AsyncMock()
         runner.session_service = AsyncMock()
         runner.session_service.get_session = AsyncMock(return_value=None)
@@ -291,28 +299,20 @@ class TestSlackRouter(unittest.TestCase):
             return {"ok": True}
         composio.tools.execute = MagicMock(side_effect=execute_side_effect)
 
-        import time
+        # Build a minimal fake Request with the app.state attributes _process reads.
+        from types import SimpleNamespace
+        fake_request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(
+                runner=runner, app_name="sl-test", composio_client=composio,
+            )),
+        )
+        payload = {
+            "team_id": "T01", "channel": "D456", "user": "U012",
+            "text": "draw", "ts": "1700000000.001", "channel_type": "im",
+        }
+
         with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):
-            for client in self._client(runner, composio_mock=composio):
-                r = client.post(
-                    "/gateways/slack/composio?secret=s3cret",
-                    json={
-                        "trigger_slug": "SLACKBOT_DIRECT_MESSAGE_RECEIVED",
-                        "payload": {
-                            "team_id": "T01", "channel": "D456", "user": "U012",
-                            "text": "draw", "ts": "1700000000.001", "channel_type": "im",
-                        },
-                    },
-                )
-                self.assertEqual(r.status_code, 200)
-                # Poll INSIDE the TestClient context so the event loop is still
-                # alive — exiting the context cancels pending background tasks.
-                for _ in range(250):
-                    send_calls = [c for c in composio.tools.execute.call_args_list
-                                  if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
-                    if send_calls:
-                        break
-                    time.sleep(0.02)
+            asyncio.run(self.sl._process(fake_request, payload, in_thread=False))
 
         send_calls = [c for c in composio.tools.execute.call_args_list
                       if c.args and c.args[0] == "SLACKBOT_SEND_MESSAGE"]
