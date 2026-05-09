@@ -85,5 +85,66 @@ class TestSessionKey(unittest.TestCase):
             self.common.session_key("discord", {})
 
 
+class TestAttachmentHelpers(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pkg = _scaffold_with(cls.tmpdir, with_telegram=True)
+        cls.common = _import_module(cls.pkg, "gateways._common")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_inline_data_path(self):
+        items = [self.common.InboundAttachment(
+            mime_type="image/png", display_name="x.png", data=b"\x89PNG\x00" * 10,
+        )]
+        parts = self.common.attachments_to_parts(items, inline_max_bytes=10_000)
+        self.assertEqual(len(parts), 1)
+        self.assertIsNotNone(getattr(parts[0], "inline_data", None))
+        self.assertEqual(parts[0].inline_data.mime_type, "image/png")
+
+    def test_file_data_fallback_when_bytes_too_large(self):
+        items = [self.common.InboundAttachment(
+            mime_type="application/pdf", display_name="big.pdf",
+            data=b"x" * 100, file_uri="https://example.com/big.pdf",
+        )]
+        parts = self.common.attachments_to_parts(items, inline_max_bytes=10)
+        self.assertEqual(len(parts), 1)
+        self.assertIsNotNone(getattr(parts[0], "file_data", None))
+        self.assertEqual(parts[0].file_data.file_uri, "https://example.com/big.pdf")
+
+    def test_text_skip_part_when_no_bytes_no_uri(self):
+        items = [self.common.InboundAttachment(
+            mime_type="image/png", display_name="orphan.png",
+        )]
+        parts = self.common.attachments_to_parts(items, inline_max_bytes=10_000)
+        self.assertEqual(len(parts), 1)
+        self.assertTrue(getattr(parts[0], "text", "").startswith("[attachment "))
+        self.assertIn("orphan.png", parts[0].text)
+
+    def test_enforce_count_cap_trims_excess(self):
+        items = [
+            self.common.InboundAttachment(mime_type="text/plain", display_name=f"f{i}.txt", data=b"hi")
+            for i in range(7)
+        ]
+        kept, notes = self.common.enforce_attachment_limits(items, max_count=5, max_bytes=1024)
+        self.assertEqual(len(kept), 5)
+        self.assertEqual(len(notes), 2)
+        self.assertIn("f5.txt", notes[0])
+
+    def test_enforce_size_cap_drops_oversize(self):
+        items = [
+            self.common.InboundAttachment(mime_type="text/plain", display_name="ok.txt", data=b"hi"),
+            self.common.InboundAttachment(mime_type="application/pdf", display_name="big.pdf", data=b"x" * 1000),
+        ]
+        kept, notes = self.common.enforce_attachment_limits(items, max_count=10, max_bytes=100)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].display_name, "ok.txt")
+        self.assertEqual(len(notes), 1)
+        self.assertIn("big.pdf", notes[0])
+
+
 if __name__ == "__main__":
     unittest.main()

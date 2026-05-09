@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk.runners import Runner
@@ -16,6 +17,104 @@ from google.adk.sessions import BaseSessionService
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InboundAttachment:
+    """A platform-side file inbound to the agent.
+
+    Either `data` (preferred) or `file_uri` should be set.
+    """
+    mime_type: str
+    display_name: str
+    data: bytes | None = None
+    file_uri: str | None = None
+
+
+@dataclass
+class OutboundAttachment:
+    """An agent-side artifact outbound to the platform."""
+    mime_type: str
+    display_name: str
+    data: bytes | None = None
+    file_uri: str | None = None
+
+
+@dataclass
+class AgentReply:
+    text: str
+    attachments: list[OutboundAttachment] = field(default_factory=list)
+
+
+def _humanize_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def attachments_to_parts(
+    items: list[InboundAttachment],
+    *,
+    inline_max_bytes: int,
+) -> list[genai_types.Part]:
+    """Convert inbound attachments to ADK Parts.
+
+    - bytes <= inline_max_bytes -> Part(inline_data=Blob)
+    - else if file_uri set -> Part(file_data=FileData)
+    - else -> Part(text=...) skip note (so the agent has a hint)
+    """
+    parts: list[genai_types.Part] = []
+    for item in items:
+        if item.data is not None and len(item.data) <= inline_max_bytes:
+            parts.append(genai_types.Part(
+                inline_data=genai_types.Blob(mime_type=item.mime_type, data=item.data)
+            ))
+            continue
+        if item.file_uri:
+            parts.append(genai_types.Part(
+                file_data=genai_types.FileData(
+                    file_uri=item.file_uri,
+                    mime_type=item.mime_type,
+                    display_name=item.display_name,
+                )
+            ))
+            continue
+        size_hint = _humanize_bytes(len(item.data)) if item.data is not None else "no bytes available"
+        parts.append(genai_types.Part(
+            text=f'[attachment "{item.display_name}" ({size_hint}) skipped: no usable representation]'
+        ))
+    return parts
+
+
+def enforce_attachment_limits(
+    items: list[InboundAttachment],
+    *,
+    max_count: int,
+    max_bytes: int,
+) -> tuple[list[InboundAttachment], list[str]]:
+    """Trim list to max_count and drop items whose `data` exceeds max_bytes.
+
+    Returns (kept_items, skip_notes). Each skip_note is a single-line string
+    suitable for appending to the user's prompt.
+    """
+    kept: list[InboundAttachment] = []
+    notes: list[str] = []
+    for i, item in enumerate(items):
+        if i >= max_count:
+            notes.append(
+                f'[attachment "{item.display_name}" skipped: exceeds GATEWAY_MAX_ATTACHMENT_COUNT ({max_count})]'
+            )
+            continue
+        if item.data is not None and len(item.data) > max_bytes:
+            notes.append(
+                f'[attachment "{item.display_name}" ({_humanize_bytes(len(item.data))}) '
+                f'skipped: exceeds GATEWAY_MAX_ATTACHMENT_BYTES ({_humanize_bytes(max_bytes)})]' 
+            )
+            continue
+        kept.append(item)
+    return kept, notes
 
 
 def session_key(platform: str, payload: dict[str, Any]) -> tuple[str, str]:
