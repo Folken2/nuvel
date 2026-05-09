@@ -131,6 +131,9 @@ def _build_replacements(
     system_prompt: str,
     persona: bool,
     with_composio: bool,
+    with_slack: bool = False,
+    with_telegram: bool = False,
+    with_teams: bool = False,
 ) -> dict[str, str]:
     # Frame priority: user's --system-prompt wins, else persona-aware default.
     if system_prompt:
@@ -139,6 +142,16 @@ def _build_replacements(
         frame = _PERSONA_FRAME
     else:
         frame = _DEFAULT_FRAME
+
+    gateway_imports = ""
+    gateway_mounts = ""
+    gateway_requirements = ""
+    gateway_env_block = ""
+    gateway_readme_section = ""
+
+    # Channel-specific contributions are stitched in the next tasks (3, 4, 5).
+    # For now: any channel flag set means at least the base overlay applies,
+    # which contributes nothing to imports/mounts directly — that's per-channel.
 
     return {
         "{{agent_package}}": package,
@@ -160,6 +173,12 @@ def _build_replacements(
         "{{composio_env_block}}": _COMPOSIO_ENV_BLOCK if with_composio else "",
         # requirements.txt
         "{{composio_requirement}}": _COMPOSIO_REQUIREMENT if with_composio else "",
+        # Gateway placeholders (populated by per-channel tasks 3–5)
+        "{{gateway_imports}}": gateway_imports,
+        "{{gateway_mounts}}": gateway_mounts,
+        "{{gateway_requirements}}": gateway_requirements,
+        "{{gateway_env_block}}": gateway_env_block,
+        "{{gateway_readme_section}}": gateway_readme_section,
     }
 
 
@@ -275,6 +294,7 @@ def scaffold_agent(
 
     replacements = _build_replacements(
         name, package, description, system_prompt, persona, with_composio,
+        with_slack, with_telegram, with_teams,
     )
     files_created: list[str] = []
 
@@ -287,6 +307,9 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "persona", target, replacements, files_created)
         if with_composio:
             _stamp_tree(OVERLAYS_DIR / "composio", target, replacements, files_created)
+        if with_slack or with_telegram or with_teams:
+            _stamp_tree(OVERLAYS_DIR / "gateway-base", target, replacements, files_created)
+        # Per-channel overlays added in subsequent tasks.
 
         return {
             "status": "ok",

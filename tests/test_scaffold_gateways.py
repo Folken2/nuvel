@@ -77,3 +77,30 @@ class TestCLIParsing(unittest.TestCase):
         self.assertTrue(args.with_slack)
         self.assertTrue(args.with_telegram)
         self.assertTrue(args.with_teams)
+
+
+class TestNoFlagsByteIdentical(unittest.TestCase):
+    """Scaffolding with no channel flags must produce the same files as today."""
+
+    def setUp(self):
+        self.tmp_a = tempfile.mkdtemp()
+        self.tmp_b = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_a, ignore_errors=True)
+        shutil.rmtree(self.tmp_b, ignore_errors=True)
+
+    def test_no_flags_run_adk_has_no_gateway_imports(self):
+        adk_scaffold("agent-base", output_dir=self.tmp_a)
+        run_adk = (Path(self.tmp_a) / "agent-base" / "run_adk.py").read_text()
+        self.assertNotIn("{{gateway", run_adk,
+                         "no gateway placeholder substrings should remain")
+        self.assertNotIn("from agent_base.gateways", run_adk,
+                         "run_adk.py must not import gateways when no channel flags are set")
+        self.assertNotIn("include_router", run_adk,
+                         "run_adk.py must not mount gateway routers when no channel flags are set")
+
+    def test_no_flags_env_example_has_no_gateway_block(self):
+        adk_scaffold("agent-base2", output_dir=self.tmp_b)
+        env = (Path(self.tmp_b) / "agent-base2" / ".env.example").read_text()
+        self.assertNotIn("{{gateway", env)
