@@ -82,11 +82,27 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
         reply = await invoke_agent(runner, user_id, session_id, text)
     except Exception:
         logger.exception("Slack: agent invocation failed")
-        reply = "Sorry, something went wrong."
+        reply_text = "Sorry, something went wrong."
+        outbound: list = []
+    else:
+        reply_text = reply.text
+        outbound = reply.attachments
+
+    # Stub outbound: if the agent emitted artifacts, append URI links so they're
+    # not lost. Real upload via SLACK_FILES_UPLOAD_V2 lands in a follow-up task.
+    if outbound:
+        link_lines = [
+            f"\n• {a.display_name}: {a.file_uri}" for a in outbound if a.file_uri
+        ]
+        if link_lines:
+            reply_text = f"{reply_text}\n\nAttached:" + "".join(link_lines)
+        for a in outbound:
+            if a.data and not a.file_uri:
+                logger.info("Slack: outbound attachment with bytes (%s, %d bytes) — upload deferred", a.display_name, len(a.data))
 
     channel = payload.get("channel")
     thread_ts = payload.get("thread_ts") or payload.get("ts") if in_thread else None
-    await _send_reply(composio, channel, reply, thread_ts=thread_ts)
+    await _send_reply(composio, channel, reply_text, thread_ts=thread_ts)
 
 
 @router.post("/slack/composio")

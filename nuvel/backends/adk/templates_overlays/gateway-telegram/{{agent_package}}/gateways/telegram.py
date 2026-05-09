@@ -101,9 +101,12 @@ async def _process_message(request: Request, msg: dict) -> None:
     keepalive = asyncio.create_task(_typing_keepalive(chat_id))
     try:
         reply = await invoke_agent(runner, user_id, session_id, msg["text"])
+        reply_text = reply.text
+        outbound = reply.attachments
     except Exception:
         logger.exception("Telegram: agent invocation failed")
-        reply = "Sorry, something went wrong."
+        reply_text = "Sorry, something went wrong."
+        outbound = []
     finally:
         keepalive.cancel()
         try:
@@ -111,7 +114,17 @@ async def _process_message(request: Request, msg: dict) -> None:
         except asyncio.CancelledError:
             pass
 
-    await _send_message(chat_id, reply, reply_to=reply_to, message_thread_id=thread_id)
+    # Stub outbound: append URI links so they're not lost. Real sendPhoto/sendDocument
+    # uploads land in a follow-up task.
+    if outbound:
+        link_lines = [f"\n• {a.display_name}: {a.file_uri}" for a in outbound if a.file_uri]
+        if link_lines:
+            reply_text = f"{reply_text}\n\nAttached:" + "".join(link_lines)
+        for a in outbound:
+            if a.data and not a.file_uri:
+                logger.info("Telegram: outbound attachment with bytes (%s, %d bytes) — upload deferred", a.display_name, len(a.data))
+
+    await _send_message(chat_id, reply_text, reply_to=reply_to, message_thread_id=thread_id)
 
 
 async def _typing_keepalive(chat_id: int | str) -> None:

@@ -176,28 +176,108 @@ async def invoke_agent(
     user_id: str,
     session_id: str,
     text: str,
-) -> str:
-    """Run the agent in-process and return the final assistant text reply.
+    attachments: list[InboundAttachment] | None = None,
+    *,
+    inline_max_bytes: int = 4_194_304,
+) -> AgentReply:
+    """Run the agent in-process and return text + collected outbound artifacts.
 
-    Iterates `runner.run_async(...)` events, collects all text parts emitted
-    by non-user events, and returns the **last non-empty** text — matching
-    the v1 Teams bridge's extraction rule.
+    Reads three sources for outbound attachments on each non-user event:
+      - `inline_data` parts (Blob)
+      - `file_data` parts (FileData with file_uri)
+      - `actions.artifact_delta` (loaded via runner.artifact_service if set)
+
+    Inbound attachments are converted via `attachments_to_parts` and prepended
+    after the user-text part.
     """
-    new_message = genai_types.Content(role="user", parts=[genai_types.Part(text=text)])
+    parts: list[genai_types.Part] = [genai_types.Part(text=text)]
+    if attachments:
+        parts.extend(attachments_to_parts(attachments, inline_max_bytes=inline_max_bytes))
+    new_message = genai_types.Content(role="user", parts=parts)
+
     texts: list[str] = []
+    out_attachments: list[OutboundAttachment] = []
+    seen_keys: set[tuple[str, int]] = set()
+
+    artifact_service = getattr(runner, "artifact_service", None)
+    app_name = getattr(runner, "app_name", "")
+
     async for event in runner.run_async(
         user_id=user_id, session_id=session_id, new_message=new_message
     ):
         if getattr(event, "author", None) == "user":
             continue
+
+        # Walk content parts.
         content = getattr(event, "content", None)
-        if not content:
-            continue
-        for part in getattr(content, "parts", None) or []:
+        for part in (getattr(content, "parts", None) or []):
             piece = getattr(part, "text", None)
             if piece:
                 texts.append(piece)
-    return texts[-1] if texts else "Agent did not return text."
+            inline = getattr(part, "inline_data", None)
+            if inline is not None and getattr(inline, "data", None):
+                key = (inline.mime_type, len(inline.data))
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    out_attachments.append(OutboundAttachment(
+                        mime_type=inline.mime_type,
+                        display_name="agent-output",
+                        data=inline.data,
+                    ))
+            fdata = getattr(part, "file_data", None)
+            if fdata is not None and getattr(fdata, "file_uri", None):
+                out_attachments.append(OutboundAttachment(
+                    mime_type=getattr(fdata, "mime_type", "") or "application/octet-stream",
+                    display_name=getattr(fdata, "display_name", "") or "agent-file",
+                    file_uri=fdata.file_uri,
+                ))
+
+        # Walk artifact_delta entries (saved via tool_context.save_artifact).
+        actions = getattr(event, "actions", None)
+        delta = getattr(actions, "artifact_delta", None) or {}
+        if delta and artifact_service is None:
+            logger.info(
+                "Gateway: agent emitted %d artifact(s) but no artifact_service is configured; skipping.",
+                len(delta),
+            )
+            continue
+        for filename, version in delta.items():
+            try:
+                loaded = await artifact_service.load_artifact(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id,
+                    filename=filename,
+                    version=version,
+                )
+            except Exception:
+                logger.exception("Gateway: load_artifact failed for %s@%s", filename, version)
+                continue
+            if loaded is None:
+                continue
+            inline = getattr(loaded, "inline_data", None)
+            fdata = getattr(loaded, "file_data", None)
+            if inline is not None and getattr(inline, "data", None):
+                key = (inline.mime_type, len(inline.data))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                out_attachments.append(OutboundAttachment(
+                    mime_type=inline.mime_type,
+                    display_name=filename,
+                    data=inline.data,
+                ))
+            elif fdata is not None and getattr(fdata, "file_uri", None):
+                out_attachments.append(OutboundAttachment(
+                    mime_type=getattr(fdata, "mime_type", "") or "application/octet-stream",
+                    display_name=filename,
+                    file_uri=fdata.file_uri,
+                ))
+
+    return AgentReply(
+        text=texts[-1] if texts else "Agent did not return text.",
+        attachments=out_attachments,
+    )
 
 
 def get_composio_client():
