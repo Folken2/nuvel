@@ -42,6 +42,7 @@ class OutboundAttachment:
 
 @dataclass
 class AgentReply:
+    """Structured reply returned by `invoke_agent`."""
     text: str
     attachments: list[OutboundAttachment] = field(default_factory=list)
 
@@ -82,6 +83,10 @@ def attachments_to_parts(
             ))
             continue
         size_hint = _humanize_bytes(len(item.data)) if item.data is not None else "no bytes available"
+        logger.warning(
+            "Gateway: dropping attachment %r — no usable representation (%s)",
+            item.display_name, size_hint,
+        )
         parts.append(genai_types.Part(
             text=f'[attachment "{item.display_name}" ({size_hint}) skipped: no usable representation]'
         ))
@@ -110,7 +115,7 @@ def enforce_attachment_limits(
         if item.data is not None and len(item.data) > max_bytes:
             notes.append(
                 f'[attachment "{item.display_name}" ({_humanize_bytes(len(item.data))}) '
-                f'skipped: exceeds GATEWAY_MAX_ATTACHMENT_BYTES ({_humanize_bytes(max_bytes)})]' 
+                f'skipped: exceeds GATEWAY_MAX_ATTACHMENT_BYTES ({_humanize_bytes(max_bytes)})]'
             )
             continue
         kept.append(item)

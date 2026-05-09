@@ -145,6 +145,18 @@ class TestAttachmentHelpers(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertIn("big.pdf", notes[0])
 
+    def test_text_skip_part_when_oversize_bytes_and_no_uri(self):
+        items = [self.common.InboundAttachment(
+            mime_type="application/pdf", display_name="huge.pdf",
+            data=b"x" * 10_000,
+        )]
+        parts = self.common.attachments_to_parts(items, inline_max_bytes=100)
+        self.assertEqual(len(parts), 1)
+        self.assertTrue(getattr(parts[0], "text", "").startswith("[attachment "))
+        self.assertIn("huge.pdf", parts[0].text)
+        # Size hint should be humanized, not "no bytes available"
+        self.assertNotIn("no bytes available", parts[0].text)
+
 
 if __name__ == "__main__":
     unittest.main()
