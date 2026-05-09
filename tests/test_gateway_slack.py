@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
@@ -136,7 +137,6 @@ class TestSlackRouter(unittest.TestCase):
         async def fake_invoke(_runner, _u, _s, text, attachments=None, **_kw):
             captured["text"] = text
             captured["attachments"] = attachments
-            from types import SimpleNamespace
             return SimpleNamespace(text="ok", attachments=[])
 
         fake_resp = MagicMock()
@@ -185,7 +185,6 @@ class TestSlackRouter(unittest.TestCase):
 
         async def fake_invoke(_r, _u, _s, text, attachments=None, **_kw):
             captured["attachments"] = attachments
-            from types import SimpleNamespace
             return SimpleNamespace(text="ok", attachments=[])
 
         with patch.object(self.sl, "invoke_agent", side_effect=fake_invoke):

@@ -28,6 +28,7 @@ from {{agent_package}}.gateways._common import (
 )
 
 logger = logging.getLogger(__name__)
+_warned_no_bot_token = False
 router = APIRouter(prefix="/gateways", tags=["gateway:slack"])
 
 # Triggers that produce a user-facing reply.
@@ -76,14 +77,13 @@ async def _send_reply(composio_client, channel: str, text: str,
         logger.exception("Slack: SLACKBOT_SEND_MESSAGE failed")
 
 
-async def _download_slack_file(url: str, token: str) -> bytes | None:
+async def _download_slack_file(client: httpx.AsyncClient, url: str, token: str) -> bytes | None:
     """Download a Slack file via its url_private with bot-token auth."""
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(url, headers=headers)
-            r.raise_for_status()
-            return r.content
+        r = await client.get(url, headers=headers)
+        r.raise_for_status()
+        return r.content
     except Exception:
         logger.exception("Slack: failed to download file %s", url)
         return None
@@ -99,26 +99,39 @@ async def _collect_inbound_files(payload: dict) -> tuple[list[InboundAttachment]
         return [], []
 
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
-    if not bot_token:
+    global _warned_no_bot_token
+    if not bot_token and not _warned_no_bot_token:
         logger.warning(
             "Slack: payload contains %d file(s) but SLACK_BOT_TOKEN is unset — "
             "falling back to URL forwarding (most agent models cannot fetch authenticated URLs).",
             len(files),
         )
+        _warned_no_bot_token = True
 
     items: list[InboundAttachment] = []
-    for f in files:
-        if not isinstance(f, dict):
-            continue
-        url = str(f.get("url_private") or f.get("url_private_download") or "")
-        mime = str(f.get("mimetype") or "application/octet-stream")
-        name = str(f.get("name") or "slack-file")
-        data: bytes | None = None
-        if bot_token and url:
-            data = await _download_slack_file(url, bot_token)
-        items.append(InboundAttachment(
-            mime_type=mime, display_name=name, data=data, file_uri=url or None,
-        ))
+    if bot_token:
+        async with httpx.AsyncClient(timeout=20) as client:
+            for f in files:
+                if not isinstance(f, dict):
+                    continue
+                url = str(f.get("url_private") or f.get("url_private_download") or "")
+                mime = str(f.get("mimetype") or "application/octet-stream")
+                name = str(f.get("name") or "slack-file")
+                data = await _download_slack_file(client, url, bot_token) if url else None
+                items.append(InboundAttachment(
+                    mime_type=mime, display_name=name, data=data,
+                    file_uri=url or None,
+                ))
+    else:
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            url = str(f.get("url_private") or f.get("url_private_download") or "")
+            mime = str(f.get("mimetype") or "application/octet-stream")
+            name = str(f.get("name") or "slack-file")
+            items.append(InboundAttachment(
+                mime_type=mime, display_name=name, data=None, file_uri=url or None,
+            ))
 
     max_count = int(os.environ.get("GATEWAY_MAX_ATTACHMENT_COUNT", "5"))
     max_bytes = int(os.environ.get("GATEWAY_MAX_ATTACHMENT_BYTES", str(10 * 1024 * 1024)))
