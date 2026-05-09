@@ -1,0 +1,102 @@
+site_name: nuvel
+site_description: Production-ready agents, your way — skills, scaffolder, and meta-agent for Google ADK, Claude Agent SDK, and Anthropic Managed Agents.
+site_url: https://folken2.github.io/nuvel/
+repo_url: https://github.com/Folken2/nuvel
+repo_name: Folken2/nuvel
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+# Exclude internal-process artifacts (specs, plans) from the published site.
+# These are kept in-repo for design history but are not reader-facing docs.
+exclude_docs: |
+  superpowers/
+  advent-of-agents-review.md
+  assets/banner-candidates/
+  assets/banner-brief.md
+
+theme:
+  name: material
+  logo: assets/logo-light.svg
+  favicon: assets/logo-light.svg
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting started:
+    - getting-started/index.md
+    - Install: getting-started/install.md
+    - Your first agent: getting-started/first-agent.md
+    - Concepts: getting-started/concepts.md
+  - How-to:
+    - how-to/index.md
+    - Pick a backend: how-to/pick-a-backend.md
+    - Add skills to an agent: how-to/add-skills.md
+    - Wire 1000+ tools with Composio: how-to/add-composio-tools.md
+    - Activate the persona overlay: how-to/activate-persona.md
+    - Reach an agent on Slack: how-to/add-slack.md
+    - Reach an agent on Telegram: how-to/add-telegram.md
+    - Reach an agent on MS Teams: how-to/add-teams.md
+    - Deploy to Railway: how-to/deploy-to-railway.md
+  - Reference:
+    - reference/index.md
+    - CLI: reference/cli.md
+    - Environment variables: reference/env-vars.md
+    - Repository layout: reference/repo-layout.md
+  - Contributing: contributing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Folken2/nuvel

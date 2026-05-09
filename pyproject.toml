@@ -37,11 +37,19 @@ classifiers = [
 ]
 dynamic = ["dependencies"]
 
+[project.optional-dependencies]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.7",
+]
+
 [project.scripts]
 nuvel = "nuvel.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Folken2/nuvel"
+Documentation = "https://folken2.github.io/nuvel/"
 Repository = "https://github.com/Folken2/nuvel"
 Issues = "https://github.com/Folken2/nuvel/issues"
 Changelog = "https://github.com/Folken2/nuvel/releases"

@@ -44,3 +44,6 @@ data-analysis-agent/
 
 # Visual asset working files (image-gen candidates, raw originals)
 docs/assets/banner-candidates/
+
+# MkDocs build output
+/site/
