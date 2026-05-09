@@ -120,6 +120,35 @@ _COMPOSIO_ENV_BLOCK = (
 
 _COMPOSIO_REQUIREMENT = "composio>=1.0.0rc10\n"
 
+_TELEGRAM_ENV_BLOCK = (
+    "# ── Telegram gateway ─────────────────────────────────────────────\n"
+    "# Required: bot token from @BotFather\n"
+    "TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here\n"
+    "# Required: random string passed to Telegram when calling setWebhook;\n"
+    "# Telegram echoes it back via the X-Telegram-Bot-Api-Secret-Token header.\n"
+    "TELEGRAM_WEBHOOK_SECRET=change_me_to_a_long_random_string\n"
+    "# Optional: bot username (without @) for group-mention detection.\n"
+    "# TELEGRAM_BOT_USERNAME=your_bot_username\n"
+    "\n"
+)
+
+_TELEGRAM_README_BLOCK = (
+    "\n## Channel: Telegram\n"
+    "\n"
+    "1. Create a bot via @BotFather and copy the token into `TELEGRAM_BOT_TOKEN`.\n"
+    "2. Set a long random string as `TELEGRAM_WEBHOOK_SECRET`.\n"
+    "3. After deploying, register the webhook:\n"
+    "\n"
+    "   ```\n"
+    "   curl -F \"url=https://<your-deployment>/gateways/telegram\" \\\n"
+    "        -F \"secret_token=$TELEGRAM_WEBHOOK_SECRET\" \\\n"
+    "        \"https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook\"\n"
+    "   ```\n"
+    "\n"
+    "4. For local dev, run `ngrok http 8000` first and pass the ngrok URL above.\n"
+    "5. The bot replies inline in DMs and in the same thread/topic in groups.\n"
+)
+
 
 # ── Placeholder replacement ─────────────────────────────────────────
 
@@ -143,15 +172,25 @@ def _build_replacements(
     else:
         frame = _DEFAULT_FRAME
 
-    gateway_imports = ""
-    gateway_mounts = ""
-    gateway_requirements = ""
-    gateway_env_block = ""
-    gateway_readme_section = ""
+    gateway_imports_lines: list[str] = []
+    gateway_mounts_lines: list[str] = []
+    gateway_requirements_lines: list[str] = []
+    gateway_env_blocks: list[str] = []
+    gateway_readme_blocks: list[str] = []
 
-    # Channel-specific contributions are stitched in the next tasks (3, 4, 5).
-    # For now: any channel flag set means at least the base overlay applies,
-    # which contributes nothing to imports/mounts directly — that's per-channel.
+    if with_telegram:
+        gateway_imports_lines.append(f"from {package}.gateways import telegram as gw_telegram")
+        gateway_mounts_lines.append("    app.include_router(gw_telegram.router)")
+        gateway_env_blocks.append(_TELEGRAM_ENV_BLOCK)
+        gateway_readme_blocks.append(_TELEGRAM_README_BLOCK)
+
+    # (slack, teams contributions are added in Tasks 4 and 5.)
+
+    gateway_imports = ("\n".join(gateway_imports_lines) + "\n") if gateway_imports_lines else ""
+    gateway_mounts = ("\n".join(gateway_mounts_lines) + "\n") if gateway_mounts_lines else ""
+    gateway_requirements = ("\n".join(gateway_requirements_lines) + "\n") if gateway_requirements_lines else ""
+    gateway_env_block = "\n".join(gateway_env_blocks)
+    gateway_readme_section = "\n".join(gateway_readme_blocks)
 
     return {
         "{{agent_package}}": package,
@@ -309,7 +348,9 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "composio", target, replacements, files_created)
         if with_slack or with_telegram or with_teams:
             _stamp_tree(OVERLAYS_DIR / "gateway-base", target, replacements, files_created)
-        # Per-channel overlays added in subsequent tasks.
+        if with_telegram:
+            _stamp_tree(OVERLAYS_DIR / "gateway-telegram", target, replacements, files_created)
+        # Per-channel overlays for slack and teams added in subsequent tasks.
 
         return {
             "status": "ok",

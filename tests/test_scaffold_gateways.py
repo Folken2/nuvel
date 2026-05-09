@@ -104,3 +104,33 @@ class TestNoFlagsByteIdentical(unittest.TestCase):
         adk_scaffold("agent-base2", output_dir=self.tmp_b)
         env = (Path(self.tmp_b) / "agent-base2" / ".env.example").read_text()
         self.assertNotIn("{{gateway", env)
+
+
+class TestTelegramOverlay(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        result = adk_scaffold("agent-tg", output_dir=self.tmpdir, with_telegram=True)
+        self.assertEqual(result["status"], "ok")
+        self.agent_dir = Path(result["path"])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_telegram_module_exists(self):
+        self.assertTrue((self.agent_dir / "agent_tg" / "gateways" / "telegram.py").is_file())
+        self.assertTrue((self.agent_dir / "agent_tg" / "gateways" / "_common.py").is_file())
+
+    def test_run_adk_imports_and_mounts_telegram(self):
+        run_adk = (self.agent_dir / "run_adk.py").read_text()
+        self.assertIn("from agent_tg.gateways import telegram as gw_telegram", run_adk)
+        self.assertIn("app.include_router(gw_telegram.router)", run_adk)
+
+    def test_env_example_has_telegram_block(self):
+        env = (self.agent_dir / ".env.example").read_text()
+        self.assertIn("TELEGRAM_BOT_TOKEN", env)
+        self.assertIn("TELEGRAM_WEBHOOK_SECRET", env)
+
+    def test_readme_has_telegram_section(self):
+        readme = (self.agent_dir / "README.md").read_text()
+        self.assertIn("Telegram", readme)
+        self.assertIn("setWebhook", readme)
