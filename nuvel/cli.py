@@ -151,6 +151,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return subprocess.call([sys.executable, "-m", "nuvel.run_adk"], env=env)
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from nuvel.doctor import run_doctor
+
+    cwd = Path(args.path).resolve() if args.path else None
+    return run_doctor(cwd=cwd)
+
+
 def _add_framework_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--framework", "-f",
@@ -213,6 +220,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Launch the meta-agent server.")
     p_run.add_argument("--dev", action="store_true", help="Run with DEV_MODE=true.")
     p_run.set_defaults(func=_cmd_run)
+
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="Diagnose the nuvel install and the agent in the current directory.",
+    )
+    p_doctor.add_argument(
+        "--path", default=None,
+        help="Directory to inspect (defaults to current working directory).",
+    )
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     return parser
 
