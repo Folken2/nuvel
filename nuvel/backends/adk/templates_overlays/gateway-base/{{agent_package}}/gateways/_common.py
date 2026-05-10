@@ -191,7 +191,19 @@ async def invoke_agent(
     Inbound attachments are converted via `attachments_to_parts` and prepended
     after the user-text part.
     """
-    parts: list[genai_types.Part] = [genai_types.Part(text=text)]
+    # If a runtime personality overlay is active for this session, prepend it
+    # as a system-style preamble on the user message. The heavier --persona
+    # SOUL.md system is unaffected and runs alongside if both are configured.
+    try:
+        from {{agent_package}}.gateways.commands import get_active_personality
+        overlay = get_active_personality(session_id)
+    except Exception:
+        overlay = None
+    effective_text = (
+        f"[Personality overlay]\n{overlay}\n\n[User message]\n{text}" if overlay else text
+    )
+
+    parts: list[genai_types.Part] = [genai_types.Part(text=effective_text)]
     if attachments:
         parts.extend(attachments_to_parts(attachments, inline_max_bytes=inline_max_bytes))
     new_message = genai_types.Content(role="user", parts=parts)
