@@ -70,28 +70,27 @@ Skills are auto-discovered at startup via `SkillToolset`.
 
 #### Self-improving skills (opt-in)
 
-The `skill_curator` `after_agent_callback` (in `nuvel.callbacks.skill_curator`)
-inspects the transcript at the end of complex runs and proposes either a new
-skill or a patch to an existing one. **Off by default and never auto-applies.**
+The `SkillCuratorPlugin` (in `{{agent_package}}.plugins.skill_curator_plugin`)
+ships pre-wired in your generated agent's plugin chain. It observes the **full
+run trajectory** — tool calls, events, and errors across every sub-agent — and
+at the end of complex runs proposes either a new skill or a patch to an
+existing one. **Off by default and never auto-applies.**
 
 ```bash
 export NUVEL_SKILL_CURATOR=1                 # turn it on
 export NUVEL_SKILL_CURATOR_MIN_TOOLS=5       # complexity threshold (default 5)
 export NUVEL_SKILL_CURATOR_MIN_EVENTS=12     # complexity threshold (default 12)
+export NUVEL_SKILL_CURATOR_MIN_ERRORS=3      # repeated errors trigger (default 3)
 # Override the proposal directory (default: ~/.nuvel/skill-proposals/)
 # export NUVEL_SKILL_PROPOSALS_DIR=/path/outside/repo
 ```
 
-Wire it on the root agent:
-
-```python
-from nuvel.callbacks.skill_curator import skill_curator
-
-root_agent = LlmAgent(
-    ...,
-    after_agent_callback=skill_curator,
-)
-```
+The plugin is already in `PLUGIN_PATHS` (last entry), so no code changes are
+needed — flip the env var and run as usual. Because it runs at Runner scope
+(`after_run_callback`), proposal frontmatter lists every agent that
+contributed to the trajectory under `triggering_agents:`. Repeated errors on
+the same tool (>= `MIN_ERRORS`) are a strong "missing skill" signal and are
+surfaced in the curator prompt.
 
 Proposals land as Markdown files under `~/.nuvel/skill-proposals/` for human
 review — they live outside the repo so they don't accidentally get committed.
