@@ -105,6 +105,17 @@ If any is missing → anonymous mode (Agents Playground / local dev only; **not*
 | `TEAMS_MAX_INLINE_B64_CHARS` | `1500000` | Max base64-encoded chars when forwarding raw inline attachments. |
 | `TEAMS_FORWARD_RAW_ATTACHMENTS` | `false` | If `true`, forward raw `inline_data` / `file_data` parts to ADK instead of just text-extracted context. |
 
+## Cron / scheduled jobs (opt-in)
+
+Embedded scheduler ticks every minute and runs due jobs in fresh ADK sessions. Jobs and outputs persist on disk; on Railway, attach a Volume (see [Deploy to Railway](../how-to/deploy-to-railway.md#cron-scheduled-jobs-on-railway)).
+
+| Var | Default | Description |
+|---|---|---|
+| `NUVEL_CRON_ENABLED` | `0` | `1` = start the scheduler in the agent's FastAPI lifespan. Off → no scheduler, but `/cron/*` HTTP endpoints and the `cronjob` tool still work for storage. |
+| `NUVEL_CRON_TICK_SECONDS` | `60` | Scheduler tick interval. Lower for tests; higher to reduce load. |
+| `NUVEL_CRON_DIR` | `~/.nuvel/cron` | Where `jobs.json`, `output/`, and `.tick.lock` live. Override on Railway to point at a Volume mount. |
+| `NUVEL_CRON_RUNNING` | *(internal)* | Set by the scheduler during a cron-spawned run. The `cronjob` tool checks this to refuse mutations from inside cron sessions (recursion guard). Don't set manually. |
+
 ## Voice transcription (Slack + Telegram)
 
 Opt-in audio transcription. When enabled, voice memos are converted to text before reaching the agent and the audio attachment is replaced with `[Voice memo, M:SS]: <transcript>`. Teams is not yet supported.
