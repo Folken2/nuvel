@@ -11,6 +11,7 @@ Every gateway-enabled agent (`--with-slack`, `--with-telegram`, `--with-teams`) 
 | `/usage` | — | Turn count and a token-cost estimate for the current session. |
 | `/stop` | — | Cooperatively cancels the running turn (tools that check `get_cancel_event(session_id)` exit early). |
 | `/personality` | `/persona` | Switch a runtime personality overlay. See below. |
+| `/cron` | — | Schedule, list, pause, resume, run, or remove jobs. See below. |
 
 Anything that isn't a registered command is forwarded to the agent unchanged.
 
@@ -67,6 +68,59 @@ async def cmd_insights(ctx: CommandContext) -> CommandResult:
 ```
 
 `CommandContext` carries `user_id`, `channel`, `session_id`, the raw text, and a `reply(text)` callable. `CommandResult` is `{handled: bool, replies: list[str]}`. New commands work on every channel automatically — no per-gateway code.
+
+## Cron / scheduled jobs
+
+The `/cron` command lets you schedule recurring or one-shot agent runs. The scheduler is opt-in — set `NUVEL_CRON_ENABLED=1` on the agent service. See [Cron env vars](../reference/env-vars.md#cron-scheduled-jobs-opt-in) for tuning, and [Deploy to Railway → cron](deploy-to-railway.md#cron-scheduled-jobs-on-railway) before shipping.
+
+### Subcommands
+
+```
+/cron list
+/cron add "<schedule>" "<prompt>" [--name <n>] [--deliver origin|local|slack:<ch>|telegram:<chat_id>]
+/cron pause <id>
+/cron resume <id>
+/cron run <id>
+/cron remove <id>
+```
+
+### Schedule formats
+
+| Format | Example | Behavior |
+|---|---|---|
+| Relative one-shot | `30m`, `2h`, `1d` | Runs once after that delay. |
+| Interval recurring | `every 30m`, `every 2h`, `every 1d` | Runs forever until removed. |
+| Cron expression | `0 9 * * *`, `0 */6 * * *` | Standard 5-field cron. Runs forever. |
+| ISO timestamp | `2026-12-15T09:00:00` | One-shot at that absolute time (UTC if no offset). |
+
+### Delivery options
+
+| Token | What it does |
+|---|---|
+| `origin` *(default on a gateway)* | Deliver back to the channel where `/cron add` was sent. |
+| `local` | Write the output file only — no message. Useful for log-only jobs. |
+| `slack:<channel>` | Send to a specific Slack channel. |
+| `telegram:<chat_id>` | Send to a specific Telegram chat. |
+
+### Silent suppression
+
+If the agent's response starts with `[SILENT]`, delivery is suppressed (the output file is still written). Useful for monitoring jobs that should only ping when something is wrong:
+
+```
+/cron add "every 5m" "Check if our health endpoint returns 200. Reply [SILENT] if healthy, otherwise describe the failure." --name health-watch
+```
+
+### From chat (without typing /cron)
+
+Because `cronjob` is a registered tool, you can also just ask:
+
+> *"Every morning at 9am, summarize my unread emails and post to #standup."*
+
+The agent will call `cronjob(action="create", ...)` itself. The `/cron` command is the explicit-control path; natural language is the conversational path. Both write to the same job store.
+
+### Recursion guard
+
+A cron-spawned agent run cannot create or modify other cron jobs. This is enforced via an internal `NUVEL_CRON_RUNNING` env flag — the `cronjob` tool refuses mutations when it's set. Read-only `list`/`get` still work.
 
 ## Voice memos
 
