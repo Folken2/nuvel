@@ -27,6 +27,7 @@ from {{agent_package}}.gateways._common import (
     invoke_agent,
     session_key,
 )
+from {{agent_package}}.gateways.commands import CommandContext, try_dispatch
 
 # Verified at impl time (Task 4.1). Adjust if Composio slug has changed.
 SLACK_FILES_UPLOAD_TOOL = "SLACK_FILES_UPLOAD_V2"
@@ -189,6 +190,21 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
     await ensure_session(runner.session_service, app_name, user_id, session_id)
 
     text = str(payload.get("text") or "")
+    channel = payload.get("channel")
+    thread_ts = payload.get("thread_ts") or payload.get("ts") if in_thread else None
+
+    # Slash-command interception. Runs before forwarding to the agent.
+    cmd_ctx = CommandContext(
+        user_id=user_id, channel=str(channel or ""), session_id=session_id,
+        text=text, runner=runner, app_name=app_name,
+        reply=lambda t: _send_reply(composio, channel, t, thread_ts=thread_ts),
+    )
+    cmd_result = await try_dispatch(text, cmd_ctx)
+    if cmd_result.handled:
+        for line in cmd_result.replies:
+            await _send_reply(composio, channel, line, thread_ts=thread_ts)
+        return
+
     attachments, skip_notes = await _collect_inbound_files(payload)
     if skip_notes:
         text = text + ("\n" + "\n".join(skip_notes) if text else "\n".join(skip_notes))
@@ -214,9 +230,6 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
     if uri_only:
         link_lines = [f"\n• {a.display_name}: {a.file_uri}" for a in uri_only]
         reply_text = f"{reply_text}\n\nAttached:" + "".join(link_lines)
-
-    channel = payload.get("channel")
-    thread_ts = payload.get("thread_ts") or payload.get("ts") if in_thread else None
 
     if bytes_attachments:
         first, *rest = bytes_attachments

@@ -36,7 +36,28 @@ def _load_bridge_with_mocks(bridge_path: Path) -> types.ModuleType:
         "microsoft_agents.hosting.core": MagicMock(),
     }
 
+    # The bridge imports `from tm_test.gateways.commands import ...`. Resolve
+    # that to the actual generated module so the registry is real, but stub
+    # the parent packages so importlib doesn't try to load __init__.py
+    # (which would in turn pull in google.adk and friends).
+    pkg_root = bridge_path.parent.parent.parent  # .../tm-test/
+    pkg_name = bridge_path.parent.parent.name    # 'tm_test'
+    commands_path = bridge_path.parent / "commands.py"
+
+    cmd_spec = importlib.util.spec_from_file_location(f"{pkg_name}.gateways.commands", commands_path)
+    cmd_mod = importlib.util.module_from_spec(cmd_spec)
+
+    pkg_stub = types.ModuleType(pkg_name)
+    pkg_stub.__path__ = [str(pkg_root / pkg_name)]
+    gw_stub = types.ModuleType(f"{pkg_name}.gateways")
+    gw_stub.__path__ = [str(pkg_root / pkg_name / "gateways")]
+
+    mock_mods[pkg_name] = pkg_stub
+    mock_mods[f"{pkg_name}.gateways"] = gw_stub
+    mock_mods[f"{pkg_name}.gateways.commands"] = cmd_mod
+
     with patch.dict(sys.modules, mock_mods):
+        cmd_spec.loader.exec_module(cmd_mod)
         spec = importlib.util.spec_from_file_location("teams_bridge_test_mod", bridge_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
