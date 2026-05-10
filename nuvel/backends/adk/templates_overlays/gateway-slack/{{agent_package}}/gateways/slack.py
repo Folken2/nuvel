@@ -28,6 +28,14 @@ from {{agent_package}}.gateways._common import (
     session_key,
 )
 from {{agent_package}}.gateways.commands import CommandContext, try_dispatch
+from {{agent_package}}.gateways.transcription import (
+    FALLBACK_MARKER,
+    TranscriptionError,
+    audio_marker,
+    is_audio_attachment,
+    transcribe_audio,
+    transcription_enabled,
+)
 
 # Verified at impl time (Task 4.1). Adjust if Composio slug has changed.
 SLACK_FILES_UPLOAD_TOOL = "SLACK_FILES_UPLOAD_V2"
@@ -181,6 +189,50 @@ async def _collect_inbound_files(payload: dict) -> tuple[list[InboundAttachment]
     return enforce_attachment_limits(items, max_count=max_count, max_bytes=max_bytes)
 
 
+async def _transcribe_voice_attachments(
+    attachments: list[InboundAttachment],
+    payload: dict,
+) -> tuple[list[InboundAttachment], list[str]]:
+    """Strip audio attachments and transcribe them inline.
+
+    Returns (kept_attachments, voice_markers). When transcription is disabled
+    or no attachments are audio, returns (attachments, []) unchanged.
+    """
+    if not transcription_enabled() or not attachments:
+        return attachments, []
+
+    # Map filename -> duration (Slack files[].duration_ms when present).
+    durations: dict[str, float] = {}
+    for f in payload.get("files") or []:
+        if isinstance(f, dict):
+            name = f.get("name")
+            ms = f.get("duration_ms") or f.get("duration") or 0
+            if name and ms:
+                try:
+                    durations[str(name)] = float(ms) / 1000.0 if ms > 1000 else float(ms)
+                except (TypeError, ValueError):
+                    pass
+
+    kept: list[InboundAttachment] = []
+    markers: list[str] = []
+    for item in attachments:
+        if not is_audio_attachment(item.mime_type, item.display_name):
+            kept.append(item)
+            continue
+        if item.data is None:
+            logger.warning("Slack: skipping voice memo %r (no bytes)", item.display_name)
+            markers.append(FALLBACK_MARKER)
+            continue
+        try:
+            transcript = await transcribe_audio(item.data, item.mime_type)
+        except TranscriptionError:
+            logger.exception("Slack: transcription failed for %r", item.display_name)
+            markers.append(FALLBACK_MARKER)
+            continue
+        markers.append(audio_marker(transcript, durations.get(item.display_name)))
+    return kept, markers
+
+
 async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
     runner = request.app.state.runner
     app_name = request.app.state.app_name
@@ -208,6 +260,13 @@ async def _process(request: Request, payload: dict, *, in_thread: bool) -> None:
     attachments, skip_notes = await _collect_inbound_files(payload)
     if skip_notes:
         text = text + ("\n" + "\n".join(skip_notes) if text else "\n".join(skip_notes))
+
+    # Voice-memo transcription (opt-in via GATEWAY_TRANSCRIBE_AUDIO=1).
+    # Audio attachments are removed from the forwarded list and replaced with
+    # an inline marker in the text so the agent sees a regular text turn.
+    attachments, voice_markers = await _transcribe_voice_attachments(attachments, payload)
+    if voice_markers:
+        text = (text + ("\n" if text else "") + "\n".join(voice_markers)).strip()
 
     inline_max_bytes = int(os.environ.get("GATEWAY_INLINE_DATA_MAX_BYTES", str(4 * 1024 * 1024)))
     try:
