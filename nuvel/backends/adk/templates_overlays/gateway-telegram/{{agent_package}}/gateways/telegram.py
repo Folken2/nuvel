@@ -25,6 +25,14 @@ from {{agent_package}}.gateways._common import (
     session_key,
 )
 from {{agent_package}}.gateways.commands import CommandContext, try_dispatch
+from {{agent_package}}.gateways.transcription import (
+    FALLBACK_MARKER,
+    TranscriptionError,
+    audio_marker,
+    is_audio_attachment,
+    transcribe_audio,
+    transcription_enabled,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/gateways", tags=["gateway:telegram"])
@@ -228,6 +236,49 @@ def _should_invoke_in_group(msg: dict, bot_username: str | None) -> bool:
     return False
 
 
+async def _transcribe_voice_attachments(
+    attachments: list[InboundAttachment],
+    msg: dict,
+) -> tuple[list[InboundAttachment], list[str]]:
+    """Strip audio attachments and transcribe them inline.
+
+    Returns (kept_attachments, voice_markers). When transcription is disabled
+    or no attachments are audio, returns (attachments, []) unchanged.
+    """
+    if not transcription_enabled() or not attachments:
+        return attachments, []
+
+    # Telegram exposes duration (seconds) on `voice` and `audio` parts.
+    duration: float | None = None
+    for key in ("voice", "audio", "video_note"):
+        item = msg.get(key)
+        if isinstance(item, dict) and item.get("duration"):
+            try:
+                duration = float(item["duration"])
+                break
+            except (TypeError, ValueError):
+                pass
+
+    kept: list[InboundAttachment] = []
+    markers: list[str] = []
+    for att in attachments:
+        if not is_audio_attachment(att.mime_type, att.display_name):
+            kept.append(att)
+            continue
+        if att.data is None:
+            logger.warning("Telegram: skipping voice memo %r (no bytes)", att.display_name)
+            markers.append(FALLBACK_MARKER)
+            continue
+        try:
+            transcript = await transcribe_audio(att.data, att.mime_type)
+        except TranscriptionError:
+            logger.exception("Telegram: transcription failed for %r", att.display_name)
+            markers.append(FALLBACK_MARKER)
+            continue
+        markers.append(audio_marker(transcript, duration))
+    return kept, markers
+
+
 async def _process_message(request: Request, msg: dict) -> None:
     runner = request.app.state.runner
     app_name = request.app.state.app_name
@@ -255,6 +306,14 @@ async def _process_message(request: Request, msg: dict) -> None:
     attachments, skip_notes = await _collect_inbound_files(msg)
     if skip_notes:
         text = (text + ("\n" if text else "") + "\n".join(skip_notes)).strip()
+
+    # Voice-memo transcription (opt-in via GATEWAY_TRANSCRIBE_AUDIO=1).
+    # Audio attachments are removed from the forwarded list and replaced with
+    # an inline marker in the text so the agent sees a regular text turn.
+    attachments, voice_markers = await _transcribe_voice_attachments(attachments, msg)
+    if voice_markers:
+        text = (text + ("\n" if text else "") + "\n".join(voice_markers)).strip()
+
     if not text and not attachments:
         # Nothing to do.
         return

@@ -292,6 +292,10 @@ def _has_service_connection_config() -> bool:
     )
 
 
+# TODO(voice-transcription): wire `gateways.transcription.transcribe_audio`
+# into Teams once the sidecar gains full inbound-attachment plumbing. Today
+# Teams only surfaces inline metadata + best-effort text extraction, so voice
+# memos cannot be downloaded and transcribed reliably from this bridge.
 async def _extract_attachment_context(payload: dict, client: AgentClient) -> tuple[str, list[str], bool]:
     attachments = payload.get("attachments") or []
     if not isinstance(attachments, list):
