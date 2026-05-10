@@ -104,3 +104,31 @@ If any is missing → anonymous mode (Agents Playground / local dev only; **not*
 | `TEAMS_MAX_ATTACHMENT_BYTES` | `500000` | Max bytes downloaded per attachment. |
 | `TEAMS_MAX_INLINE_B64_CHARS` | `1500000` | Max base64-encoded chars when forwarding raw inline attachments. |
 | `TEAMS_FORWARD_RAW_ATTACHMENTS` | `false` | If `true`, forward raw `inline_data` / `file_data` parts to ADK instead of just text-extracted context. |
+
+## Voice transcription (Slack + Telegram)
+
+Opt-in audio transcription. When enabled, voice memos are converted to text before reaching the agent and the audio attachment is replaced with `[Voice memo, M:SS]: <transcript>`. Teams is not yet supported.
+
+| Var | Default | Description |
+|---|---|---|
+| `GATEWAY_TRANSCRIBE_AUDIO` | `0` | `1` = enable transcription. Off → audio falls through unchanged. |
+| `GATEWAY_TRANSCRIBE_PROVIDER` | `openai` | `openai` (Whisper) or `groq` (Whisper, faster/cheaper). |
+| `GATEWAY_TRANSCRIBE_MODEL` | `whisper-1` / `whisper-large-v3` | Override the model. Defaults depend on provider. |
+| `GATEWAY_TRANSCRIBE_TIMEOUT_SEC` | `60` | HTTP timeout for the provider call. |
+| `OPENAI_API_KEY` | — | Required when `GATEWAY_TRANSCRIBE_PROVIDER=openai`. |
+| `GROQ_API_KEY` | — | Required when `GATEWAY_TRANSCRIBE_PROVIDER=groq`. |
+
+On provider error / missing key / oversized audio, the user message becomes `[Voice memo received but transcription failed]` so the turn isn't silently dropped.
+
+## Skill curator (opt-in plugin)
+
+The `SkillCuratorPlugin` is registered in the generated agent's plugin chain but stays inert until explicitly enabled. When active, it watches each run and — on complex turns — proposes new skills or patches to existing ones. Proposals are written to `~/.nuvel/skill-proposals/` for human review; nothing is auto-applied.
+
+| Var | Default | Description |
+|---|---|---|
+| `NUVEL_SKILL_CURATOR` | `0` | `1` = enable the plugin. Off → no LLM calls, no proposals. |
+| `NUVEL_SKILL_CURATOR_MIN_TOOLS` | `5` | Trigger threshold: minimum tool calls in a single run. |
+| `NUVEL_SKILL_CURATOR_MIN_EVENTS` | `12` | Trigger threshold: minimum events in a single run. |
+| `NUVEL_SKILL_CURATOR_MIN_ERRORS` | `3` | Trigger threshold: same tool failing this many times. |
+| `NUVEL_SKILLS_DIR` | `<pkg>/skills/` | Directory enumerated to give the curator a view of existing skills. |
+| `NUVEL_SKILL_PROPOSALS_DIR` | `~/.nuvel/skill-proposals/` | Where proposals are written. Always outside the repo by default. |

@@ -27,6 +27,7 @@ env/
 .claude/settings.local.json
 .adk/
 .worktrees/
+.claude/worktrees/
 .idea/
 .vscode/
 *.swp
