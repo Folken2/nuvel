@@ -68,6 +68,34 @@ Create a subdirectory under `{{agent_package}}/skills/` with a `SKILL.md` file:
 
 Skills are auto-discovered at startup via `SkillToolset`.
 
+#### Self-improving skills (opt-in)
+
+The `skill_curator` `after_agent_callback` (in `nuvel.callbacks.skill_curator`)
+inspects the transcript at the end of complex runs and proposes either a new
+skill or a patch to an existing one. **Off by default and never auto-applies.**
+
+```bash
+export NUVEL_SKILL_CURATOR=1                 # turn it on
+export NUVEL_SKILL_CURATOR_MIN_TOOLS=5       # complexity threshold (default 5)
+export NUVEL_SKILL_CURATOR_MIN_EVENTS=12     # complexity threshold (default 12)
+# Override the proposal directory (default: ~/.nuvel/skill-proposals/)
+# export NUVEL_SKILL_PROPOSALS_DIR=/path/outside/repo
+```
+
+Wire it on the root agent:
+
+```python
+from nuvel.callbacks.skill_curator import skill_curator
+
+root_agent = LlmAgent(
+    ...,
+    after_agent_callback=skill_curator,
+)
+```
+
+Proposals land as Markdown files under `~/.nuvel/skill-proposals/` for human
+review — they live outside the repo so they don't accidentally get committed.
+
 ### Adding Domain Knowledge
 
 Place `.md` files in `{{agent_package}}/contexts/`. They are injected into the system prompt automatically.
