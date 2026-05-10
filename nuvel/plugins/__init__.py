@@ -29,6 +29,7 @@ from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
 from .cost_guard_plugin import CostGuardPlugin
 from .trace_plugin import TracePlugin
+from .skill_curator_plugin import SkillCuratorPlugin
 
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
@@ -50,8 +51,12 @@ self_healing = ReflectAndRetryToolPlugin(
 save_files = SaveFilesAsArtifactsPlugin()
 recordings = RecordingsPlugin()
 replay = ReplayPlugin()
+skill_curator = SkillCuratorPlugin()
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
+# skill_curator is intentionally last — it observes the trajectory built by
+# every plugin/agent above. Opt-in via NUVEL_SKILL_CURATOR=1 (it no-ops
+# otherwise, so it's always safe to leave in the chain).
 PLUGIN_PATHS = [
     "nuvel.plugins.cost_guard",
     "nuvel.plugins.trace",
@@ -64,6 +69,7 @@ PLUGIN_PATHS = [
     "nuvel.plugins.save_files",
     "nuvel.plugins.recordings",
     "nuvel.plugins.replay",
+    "nuvel.plugins.skill_curator",
 ]
 
 __all__ = [
@@ -72,5 +78,6 @@ __all__ = [
     "ToolEventsPlugin",
     "ResiliencePlugin",
     "TracePlugin",
+    "SkillCuratorPlugin",
     "PLUGIN_PATHS",
 ]
