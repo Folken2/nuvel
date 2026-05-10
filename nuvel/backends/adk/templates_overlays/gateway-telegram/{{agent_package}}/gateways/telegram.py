@@ -24,6 +24,7 @@ from {{agent_package}}.gateways._common import (
     invoke_agent,
     session_key,
 )
+from {{agent_package}}.gateways.commands import CommandContext, try_dispatch
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/gateways", tags=["gateway:telegram"])
@@ -238,6 +239,19 @@ async def _process_message(request: Request, msg: dict) -> None:
     reply_to = msg.get("message_id") if (msg.get("chat") or {}).get("type") != "private" else None
 
     text = (msg.get("text") or msg.get("caption") or "").strip()
+
+    # Slash-command interception. Runs before forwarding to the agent.
+    cmd_ctx = CommandContext(
+        user_id=user_id, channel=str(chat_id), session_id=session_id,
+        text=text, runner=runner, app_name=app_name,
+        reply=lambda t: _send_message(chat_id, t, reply_to=reply_to, message_thread_id=thread_id),
+    )
+    cmd_result = await try_dispatch(text, cmd_ctx)
+    if cmd_result.handled:
+        for line in cmd_result.replies:
+            await _send_message(chat_id, line, reply_to=reply_to, message_thread_id=thread_id)
+        return
+
     attachments, skip_notes = await _collect_inbound_files(msg)
     if skip_notes:
         text = (text + ("\n" if text else "") + "\n".join(skip_notes)).strip()

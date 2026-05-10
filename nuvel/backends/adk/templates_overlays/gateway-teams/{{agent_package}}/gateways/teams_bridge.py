@@ -34,6 +34,8 @@ from microsoft_agents.hosting.core import (
     TurnState,
 )
 
+from {{agent_package}}.gateways.commands import CommandContext, try_dispatch
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +76,20 @@ class AgentBridge(AgentApplication):
             prompt = (context.activity.text or "").strip()
             if not prompt:
                 await context.send_activity("Please send a message and I will forward it to the agent.")
+                return
+
+            # Slash-command interception. Runs before forwarding to the agent.
+            conversation_id = (getattr(context.activity.conversation, "id", None) or "default-conversation").replace(" ", "_")
+            user_id_for_cmd = getattr(context.activity.from_property, "id", None) or "m365-anonymous"
+            cmd_ctx = CommandContext(
+                user_id=user_id_for_cmd, channel=conversation_id,
+                session_id=f"m365-{conversation_id}", text=prompt,
+                reply=lambda t: context.send_activity(t),
+            )
+            cmd_result = await try_dispatch(prompt, cmd_ctx)
+            if cmd_result.handled:
+                for line in cmd_result.replies:
+                    await context.send_activity(line)
                 return
 
             await context.send_activity("Working on it...")
@@ -433,6 +449,18 @@ def main() -> None:
 
             conversation_id = (conversation.get("id") or "default-conversation")
             user_id = (from_user.get("id") or "m365-anonymous")
+
+            # Slash-command interception. Runs before forwarding to the agent.
+            cmd_ctx = CommandContext(
+                user_id=user_id, channel=conversation_id,
+                session_id=f"m365-{conversation_id}", text=text,
+            )
+            cmd_result = await try_dispatch(text, cmd_ctx)
+            if cmd_result.handled:
+                acts = [_activity(line) for line in cmd_result.replies]
+                if not acts:
+                    acts = [_activity("")]
+                return web.json_response({"activities": acts}, status=200)
             attachment_suffix = ""
             attachment_names: list[str] = []
             has_unparsed_attachments = False
