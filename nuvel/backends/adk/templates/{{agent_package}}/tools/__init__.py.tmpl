@@ -7,10 +7,12 @@ others are absent.
 """
 
 from .memory_tools import memory_tool_list
+from ..cron.tools import cronjob_tool_list
 {{persona_imports}}{{composio_imports}}
 
 def get_tools() -> list:
     """Return the list of tools available to the agent."""
     tools: list = []
     tools.extend(memory_tool_list)
+    tools.extend(cronjob_tool_list)
 {{persona_extends}}{{composio_extends}}    return tools

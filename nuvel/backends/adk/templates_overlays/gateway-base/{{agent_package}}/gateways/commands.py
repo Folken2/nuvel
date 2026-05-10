@@ -356,6 +356,139 @@ async def _cmd_personality(ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True, replies=[f"Personality set to {name!r}."])
 
 
+# --- /cron slash command ---------------------------------------------------
+
+
+def _split_argv(text: str) -> list[str]:
+    """Lightweight shlex with mismatched-quote tolerance."""
+    import shlex
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _origin_for_ctx(ctx: "CommandContext") -> dict[str, Any] | None:
+    """Best-effort origin metadata for the gateway dispatching the command.
+
+    The gateway populates ``ctx.extra`` with platform-specific keys when it
+    creates the context. Slack/Telegram set ``platform`` plus the channel
+    identifiers needed to route a future delivery back to the same place.
+    """
+    ex = ctx.extra or {}
+    platform = ex.get("platform")
+    if not platform:
+        return None
+    if platform == "slack":
+        return {
+            "platform": "slack",
+            "channel": ex.get("channel") or ctx.channel,
+            "thread_ts": ex.get("thread_ts"),
+        }
+    if platform == "telegram":
+        return {
+            "platform": "telegram",
+            "chat_id": ex.get("chat_id") or ctx.channel,
+            "message_thread_id": ex.get("message_thread_id"),
+        }
+    return {"platform": platform}
+
+
+@command("/cron", help="Manage scheduled prompts (list/add/pause/resume/run/remove)")
+async def _cmd_cron(ctx: CommandContext) -> CommandResult:
+    try:
+        from {{agent_package}}.cron.service import get_service
+    except Exception:
+        return CommandResult(handled=True, replies=["Cron is not available in this build."])
+
+    svc = get_service()
+    argv = _split_argv((ctx.text or "").strip())
+
+    if not argv:
+        return CommandResult(handled=True, replies=[
+            "Cron commands:\n"
+            "  /cron list\n"
+            "  /cron add \"<schedule>\" \"<prompt>\" [--name <n>] [--deliver origin|local|slack:<ch>|telegram:<chat>]\n"
+            "  /cron pause <id>\n"
+            "  /cron resume <id>\n"
+            "  /cron run <id>\n"
+            "  /cron remove <id>"
+        ])
+
+    sub = argv[0].lower()
+    rest = argv[1:]
+
+    if sub == "list":
+        jobs = svc.list_jobs()
+        if not jobs:
+            return CommandResult(handled=True, replies=["No cron jobs."])
+        lines = ["Cron jobs:"]
+        for j in jobs:
+            lines.append(
+                f"  {j.get('id')}  {j.get('status'):8s}  {j.get('schedule'):20s}"
+                f"  next={j.get('next_run_at')}  name={j.get('name')!r}"
+            )
+        return CommandResult(handled=True, replies=["\n".join(lines)])
+
+    if sub in {"pause", "resume", "run", "remove", "rm", "del", "delete"}:
+        if not rest:
+            return CommandResult(handled=True, replies=[f"Usage: /cron {sub} <id>"])
+        jid = rest[0]
+        try:
+            if sub == "pause":
+                svc.pause(jid)
+                return CommandResult(handled=True, replies=[f"Paused {jid}."])
+            if sub == "resume":
+                svc.resume(jid)
+                return CommandResult(handled=True, replies=[f"Resumed {jid}."])
+            if sub == "run":
+                svc.trigger_now(jid)
+                return CommandResult(handled=True, replies=[f"Job {jid} queued for the next tick."])
+            # remove/rm/del/delete
+            if not svc.delete_job(jid):
+                return CommandResult(handled=True, replies=[f"No job {jid!r}."])
+            return CommandResult(handled=True, replies=[f"Removed {jid}."])
+        except KeyError:
+            return CommandResult(handled=True, replies=[f"No job {jid!r}."])
+        except ValueError as exc:
+            return CommandResult(handled=True, replies=[f"Error: {exc}"])
+
+    if sub == "add":
+        # Parse: <schedule> <prompt> [--name N] [--deliver D]
+        positional: list[str] = []
+        name = ""
+        delivery = "origin" if (ctx.extra or {}).get("platform") else "local"
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            if tok in ("--name", "-n") and i + 1 < len(rest):
+                name = rest[i + 1]; i += 2; continue
+            if tok in ("--deliver", "-d") and i + 1 < len(rest):
+                delivery = rest[i + 1]; i += 2; continue
+            positional.append(tok); i += 1
+        if len(positional) < 2:
+            return CommandResult(handled=True, replies=[
+                "Usage: /cron add \"<schedule>\" \"<prompt>\" [--name <n>] [--deliver <target>]"
+            ])
+        schedule = positional[0]
+        prompt = " ".join(positional[1:])
+        if not name:
+            name = f"job-{schedule}"
+        origin = _origin_for_ctx(ctx) if delivery == "origin" else None
+        try:
+            job = svc.create_job(
+                name=name, prompt=prompt, schedule=schedule,
+                delivery=delivery, origin=origin,
+            )
+        except ValueError as exc:
+            return CommandResult(handled=True, replies=[f"Error: {exc}"])
+        return CommandResult(handled=True, replies=[
+            f"Scheduled {job['id']}: {job['name']!r} — next run at {job['next_run_at']}"
+        ])
+
+    return CommandResult(handled=True, replies=[f"Unknown subcommand: /cron {sub}"])
+
+
 __all__ = [
     "CommandContext",
     "CommandResult",

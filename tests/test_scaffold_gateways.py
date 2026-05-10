@@ -97,8 +97,17 @@ class TestNoFlagsByteIdentical(unittest.TestCase):
                          "no gateway placeholder substrings should remain")
         self.assertNotIn("from agent_base.gateways", run_adk,
                          "run_adk.py must not import gateways when no channel flags are set")
-        self.assertNotIn("include_router", run_adk,
-                         "run_adk.py must not mount gateway routers when no channel flags are set")
+        # Cron routes are always mounted (cron is opt-in via env, not flags),
+        # so the only `include_router` line in a no-flags scaffold is the
+        # cron one. Confirm no *gateway* routers are mounted.
+        gateway_router_lines = [
+            l for l in run_adk.splitlines()
+            if "include_router" in l and "cron" not in l.lower()
+        ]
+        self.assertEqual(
+            gateway_router_lines, [],
+            "run_adk.py must not mount gateway routers when no channel flags are set",
+        )
 
     def test_no_flags_env_example_has_no_gateway_block(self):
         adk_scaffold("agent-base2", output_dir=self.tmp_b)

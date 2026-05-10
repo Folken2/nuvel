@@ -5,3 +5,4 @@ fastapi>=0.135.0,<1.0.0
 uvicorn>=0.40.0,<1.0.0
 pyyaml>=6.0,<7.0
 composio>=0.7.0
+croniter>=2.0.0,<7.0.0

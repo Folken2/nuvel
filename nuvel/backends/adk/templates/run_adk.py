@@ -284,6 +284,45 @@ def main() -> None:
 
     add_endpoints(app)
 {{gateway_mounts}}
+    # ── Cron scheduling ──────────────────────────────────────────────
+    # Always mount the /cron HTTP routes (CRUD over jobs.json). The
+    # background tick loop is opt-in via NUVEL_CRON_ENABLED=1.
+    from {{agent_package}}.cron.routes import router as cron_router
+    from {{agent_package}}.cron import scheduler as cron_scheduler
+    app.include_router(cron_router)
+
+    @app.on_event("startup")
+    async def _start_cron_scheduler():  # noqa: D401
+        if not cron_scheduler.is_enabled():
+            return
+        # Reuse the gateway runner if a gateway already built one. Otherwise
+        # spin up a parallel in-memory runner so the scheduler still works
+        # in headless/no-gateway deployments.
+        if not getattr(app.state, "runner", None):
+            try:
+                from {{agent_package}}.agent import root_agent as _cron_root
+                from google.adk.runners import Runner as _CronRunner
+                from google.adk.sessions import InMemorySessionService as _CronInMem
+                app.state.app_name = getattr(app.state, "app_name", "{{agent_name}}")
+                app.state.runner = _CronRunner(
+                    app_name=app.state.app_name, agent=_cron_root,
+                    session_service=_CronInMem(),
+                )
+            except Exception:
+                import logging as _lg
+                _lg.getLogger(__name__).exception(
+                    "[cron] failed to build scheduler runner; scheduler disabled"
+                )
+                return
+        invoker = cron_scheduler.make_default_invoker(
+            runner=app.state.runner, app_name=app.state.app_name,
+        )
+        cron_scheduler.start_scheduler(invoker)
+
+    @app.on_event("shutdown")
+    async def _stop_cron_scheduler():  # noqa: D401
+        await cron_scheduler.stop_scheduler()
+
     print(f"[ADK] Server ready: http://0.0.0.0:{port}")
     uvicorn.run(app, host="", port=port)
 
