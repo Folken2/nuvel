@@ -19,10 +19,81 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
+
+
+# --- Personalities (lightweight runtime overlays) ---------------------------
+#
+# Cousin of the heavier ``--persona`` build-time SOUL.md system. A personality
+# is a plain markdown file at ``~/.nuvel/personalities/<name>.md`` whose body
+# is prepended to the user message as a system-style preamble. Active
+# personality is tracked per ``session_id`` in-process — no DB.
+
+PERSONALITIES_DIR = Path(os.path.expanduser("~/.nuvel/personalities"))
+
+# session_id -> personality name (lowercase, no extension)
+_ACTIVE_PERSONALITIES: dict[str, str] = {}
+
+
+def _personality_path(name: str) -> Path:
+    return PERSONALITIES_DIR / f"{name}.md"
+
+
+def _list_personality_names() -> list[str]:
+    if not PERSONALITIES_DIR.is_dir():
+        return []
+    return sorted(p.stem for p in PERSONALITIES_DIR.glob("*.md") if p.is_file())
+
+
+def _read_personality(name: str) -> tuple[str, dict[str, str]]:
+    """Return (body, frontmatter) for ``name``. Raises FileNotFoundError if missing."""
+    path = _personality_path(name)
+    raw = path.read_text(encoding="utf-8")
+    fm: dict[str, str] = {}
+    body = raw
+    if raw.startswith("---\n"):
+        end = raw.find("\n---", 4)
+        if end != -1:
+            front = raw[4:end]
+            body = raw[end + 4 :].lstrip("\n")
+            try:
+                import yaml  # type: ignore
+                parsed = yaml.safe_load(front) or {}
+                if isinstance(parsed, dict):
+                    fm = {str(k): str(v) for k, v in parsed.items()}
+            except Exception:
+                logger.warning("personalities: malformed YAML frontmatter in %s", path)
+    return body.strip(), fm
+
+
+def get_active_personality(session_id: str) -> str | None:
+    """Return the active personality body for ``session_id`` or None."""
+    name = _ACTIVE_PERSONALITIES.get(session_id)
+    if not name:
+        return None
+    try:
+        body, _ = _read_personality(name)
+    except FileNotFoundError:
+        # File deleted out from under us — clear and ignore.
+        _ACTIVE_PERSONALITIES.pop(session_id, None)
+        return None
+    except Exception:
+        logger.exception("personalities: failed to read %s", name)
+        return None
+    return body or None
+
+
+def _set_active_personality(session_id: str, name: str) -> None:
+    _ACTIVE_PERSONALITIES[session_id] = name
+
+
+def _clear_active_personality(session_id: str) -> None:
+    _ACTIVE_PERSONALITIES.pop(session_id, None)
 
 
 # --- Public dataclasses ------------------------------------------------------
@@ -236,6 +307,55 @@ async def _cmd_stop(ctx: CommandContext) -> CommandResult:
     )
 
 
+@command(
+    "/personality",
+    "/persona",
+    help="List/set a personality overlay (~/.nuvel/personalities/<name>.md)",
+)
+async def _cmd_personality(ctx: CommandContext) -> CommandResult:
+    arg = (ctx.text or "").strip()
+    if not arg:
+        names = _list_personality_names()
+        active = _ACTIVE_PERSONALITIES.get(ctx.session_id)
+        if not names:
+            return CommandResult(
+                handled=True,
+                replies=[
+                    "No personalities found. Drop markdown files into "
+                    f"{PERSONALITIES_DIR} (e.g. concise.md), then run /personality <name>."
+                ],
+            )
+        lines = ["Available personalities:"]
+        for n in names:
+            marker = " (active)" if n == active else ""
+            try:
+                _, fm = _read_personality(n)
+                desc = fm.get("description", "")
+            except Exception:
+                desc = ""
+            suffix = f" — {desc}" if desc else ""
+            lines.append(f"  {n}{marker}{suffix}")
+        if active and active not in names:
+            lines.append(f"Active: {active} (file missing)")
+        elif not active:
+            lines.append("No personality is active. Use /personality <name>.")
+        return CommandResult(handled=True, replies=["\n".join(lines)])
+
+    if arg.lower() in {"off", "reset", "clear", "none"}:
+        _clear_active_personality(ctx.session_id)
+        return CommandResult(handled=True, replies=["Personality cleared."])
+
+    name = arg.split()[0].lower()
+    if not _personality_path(name).is_file():
+        avail = ", ".join(_list_personality_names()) or "(none)"
+        return CommandResult(
+            handled=True,
+            replies=[f"No personality named {name!r}. Available: {avail}"],
+        )
+    _set_active_personality(ctx.session_id, name)
+    return CommandResult(handled=True, replies=[f"Personality set to {name!r}."])
+
+
 __all__ = [
     "CommandContext",
     "CommandResult",
@@ -245,4 +365,6 @@ __all__ = [
     "try_dispatch",
     "get_cancel_event",
     "clear_cancel_event",
+    "get_active_personality",
+    "PERSONALITIES_DIR",
 ]
