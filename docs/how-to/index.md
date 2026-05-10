@@ -17,6 +17,11 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 - [Slack](add-slack.md) — `--with-slack`.
 - [Telegram](add-telegram.md) — `--with-telegram`.
 - [MS Teams](add-teams.md) — `--with-teams`.
+- [Use slash commands](use-slash-commands.md) — `/help`, `/new`, `/personality`, voice memos, and adding your own.
+
+## Operating an agent
+
+- [Diagnose with `nuvel doctor`](../reference/cli.md#nuvel-doctor) — health check for the install and any generated agent.
 
 ## Shipping it
 

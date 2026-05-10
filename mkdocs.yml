@@ -91,6 +91,7 @@ nav:
     - Reach an agent on Slack: how-to/add-slack.md
     - Reach an agent on Telegram: how-to/add-telegram.md
     - Reach an agent on MS Teams: how-to/add-teams.md
+    - Use slash commands: how-to/use-slash-commands.md
     - Deploy to Railway: how-to/deploy-to-railway.md
   - Reference:
     - reference/index.md

@@ -54,6 +54,11 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
   - **Slack:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and uploads agent artifacts back to chat. See the per-channel README for details.
   - **Telegram:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and uploads agent artifacts back to chat. See the per-channel README for details.
   - **Teams:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and surfaces inline agent artifacts back to chat. Inline agent artifacts only; saved artifacts via `tool_context.save_artifact(...)` are surfaced on Slack and Telegram but not yet on the Teams sidecar. See the per-channel README for details.
+- **Unified slash commands** — `/help`, `/new`, `/usage`, `/stop`, `/personality` work the same way on every gateway. Add your own with one decorator and it's live on all channels. *(ADK only.)*
+- **Runtime personalities** — drop a markdown overlay at `~/.nuvel/personalities/<name>.md` and switch with `/personality <name>` per session. Lighter than `--persona` and composes with it. *(ADK only.)*
+- **Voice memo transcription** — set `GATEWAY_TRANSCRIBE_AUDIO=1` and Slack/Telegram voice notes are transcribed via Whisper (OpenAI or Groq) before reaching the agent. *(ADK only.)*
+- **Self-improving skills loop** — opt-in `SkillCuratorPlugin` watches each run and proposes new skills (or patches to existing ones) to `~/.nuvel/skill-proposals/` for human review. Never auto-applies. *(ADK only.)*
+- **`nuvel doctor`** — one command diagnoses the install and any generated agent in your cwd: missing env vars, broken deps, framework SDKs, Docker reachability.
 - **Vendor-neutral by default** — pick OpenRouter (ADK) or Anthropic direct (Claude Agent SDK), optional PostgreSQL for sessions, runs on any host that takes a Docker container.
 
 ## Quick Install

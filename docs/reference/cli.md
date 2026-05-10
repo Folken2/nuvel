@@ -67,6 +67,25 @@ nuvel skills search <query> [--framework <fw>]
 
 Substring match (case-insensitive) against skill slug, name, and description.
 
+## `nuvel doctor`
+
+Diagnose the nuvel install and (if run inside a generated agent) that agent's configuration.
+
+```bash
+nuvel doctor [--path <dir>]
+```
+
+Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines. Exits non-zero if any check fails.
+
+| Flag | Description |
+|---|---|
+| `--path` | Run agent-mode checks against this directory instead of the cwd. |
+
+**What it checks:**
+
+- **Install** — Python version, core deps importable (`yaml`, `fastapi`, `uvicorn`, `dotenv`, `litellm`), framework SDKs per extra (`google-adk`, `claude-agent-sdk`, `anthropic`), `git` on PATH.
+- **Agent** *(when run inside a generated agent)* — framework auto-detected from `requirements.txt`; verifies `.env` exists and the right keys are present (`OPENROUTER_API_KEY` for ADK, `ANTHROPIC_API_KEY` for Claude SDK, plus gateway/Composio keys if those overlays are wired); checks Docker daemon if a `Dockerfile` is present.
+
 ## `nuvel run`
 
 Launch the meta-agent — an interactive ADK agent that helps you scaffold, configure, and ship other agents.
