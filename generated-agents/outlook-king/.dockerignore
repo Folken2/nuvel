@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets (provided via Railway env vars)
+.env
+
+# Runtime state (persisted via Railway volumes if needed)
+traces/
+memory/
+
+# Development
+.git/
+.gitignore
+tests/
+docs/
+*.md
+!README.md
+
+# OS
+.DS_Store
+Thumbs.db
