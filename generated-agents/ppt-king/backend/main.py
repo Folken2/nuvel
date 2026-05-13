@@ -51,6 +51,7 @@ logger = logging.getLogger("ppt_king.backend")
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.artifacts import InMemoryArtifactService
+from google.adk.events import Event, EventActions
 from google.genai import types
 
 from ppt_king.agent import root_agent
@@ -168,7 +169,12 @@ async def _write_ppt_state(
     current_slide: CurrentSlidePayload | None,
     deck_outline: DeckOutlinePayload | None,
 ) -> None:
-    """Persist the current PowerPoint context into ADK session state."""
+    """Persist the current PowerPoint context into ADK session state.
+
+    State mutations must go through ``session_service.append_event`` with
+    ``EventActions(state_delta=…)`` — directly mutating ``session.state[k]``
+    bypasses ADK's state tracking and the agent's tools never see the value.
+    """
     await _ensure_session(session_id, user_id)
     session = await session_service.get_session(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
@@ -176,10 +182,20 @@ async def _write_ppt_state(
     if session is None:
         raise HTTPException(500, "Failed to load session after creation")
 
+    state_delta: dict = {}
     if current_slide is not None:
-        session.state[CURRENT_SLIDE_KEY] = current_slide.model_dump()
+        state_delta[CURRENT_SLIDE_KEY] = current_slide.model_dump()
     if deck_outline is not None:
-        session.state[DECK_OUTLINE_KEY] = deck_outline.model_dump()
+        state_delta[DECK_OUTLINE_KEY] = deck_outline.model_dump()
+    if not state_delta:
+        return
+
+    event = Event(
+        invocation_id=f"ctx-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta=state_delta),
+    )
+    await session_service.append_event(session, event)
 
 
 # ── Routes ──────────────────────────────────────────────────────────

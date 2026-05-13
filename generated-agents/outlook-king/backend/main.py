@@ -51,6 +51,7 @@ logger = logging.getLogger("outlook_king.backend")
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.artifacts import InMemoryArtifactService
+from google.adk.events import Event, EventActions
 from google.genai import types
 
 from outlook_king.agent import root_agent
@@ -170,7 +171,12 @@ async def _write_outlook_state(
     compose: ComposePayload | None,
     selected: SelectedMessagePayload | None,
 ) -> None:
-    """Persist the current Outlook context into ADK session state."""
+    """Persist the current Outlook context into ADK session state.
+
+    State mutations must go through ``session_service.append_event`` with
+    ``EventActions(state_delta=…)`` — directly mutating ``session.state[k]``
+    bypasses ADK's state tracking and the agent's tools never see the value.
+    """
     await _ensure_session(session_id, user_id)
     session = await session_service.get_session(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
@@ -178,10 +184,20 @@ async def _write_outlook_state(
     if session is None:
         raise HTTPException(500, "Failed to load session after creation")
 
+    state_delta: dict = {}
     if compose is not None:
-        session.state[COMPOSE_KEY] = compose.model_dump()
+        state_delta[COMPOSE_KEY] = compose.model_dump()
     if selected is not None:
-        session.state[MESSAGE_KEY] = selected.model_dump(by_alias=True)
+        state_delta[MESSAGE_KEY] = selected.model_dump(by_alias=True)
+    if not state_delta:
+        return
+
+    event = Event(
+        invocation_id=f"ctx-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta=state_delta),
+    )
+    await session_service.append_event(session, event)
 
 
 # ── Routes ──────────────────────────────────────────────────────────
