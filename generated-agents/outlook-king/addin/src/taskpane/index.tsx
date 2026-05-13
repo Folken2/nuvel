@@ -5,6 +5,9 @@ import App from "./components/App";
 /* global Office */
 
 Office.onReady(() => {
-  const el = document.getElementById("root");
-  if (el) createRoot(el).render(<App />);
+  const container = document.getElementById("root");
+  if (container) {
+    const root = createRoot(container);
+    root.render(<App />);
+  }
 });
