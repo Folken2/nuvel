@@ -111,9 +111,11 @@ def update_skill(name: str, description: str, body: str) -> dict:
     return author_skill(name, description, body)
 
 
+# Note: discovery + reading is provided by the built-in
+# google.adk.tools.skill_toolset.SkillToolset (list_skills, load_skill,
+# load_skill_resource). Registering list_skills/read_skill here would
+# duplicate those names and Gemini rejects duplicate function declarations.
 skill_tool_list = [
-    FunctionTool(list_skills),
-    FunctionTool(read_skill),
     FunctionTool(author_skill),
     FunctionTool(update_skill),
 ]
