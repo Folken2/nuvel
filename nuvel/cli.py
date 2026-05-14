@@ -11,6 +11,8 @@ Subcommands:
         Launch the meta-agent (ADK-based) for autonomous scaffolding.
     nuvel traces list|show|stats
         Inspect JSONL trace logs across all local agents.
+    nuvel pricing list|sync|add <model>
+        Inspect and sync model pricing.json against OpenRouter.
 """
 
 from __future__ import annotations
@@ -235,6 +237,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     from nuvel import traces_cli
     traces_cli.register(sub)
+
+    from nuvel import pricing
+    pricing.register(sub)
 
     return parser
 
