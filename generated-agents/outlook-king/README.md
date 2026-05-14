@@ -123,6 +123,36 @@ npm run validate:json
 # or: npx office-addin-manifest validate manifest.json
 ```
 
+#### JSON manifest features
+
+The following Outlook surfaces are declared **only** in `manifest.json` —
+they don't activate when the add-in is sideloaded via `manifest.xml`. The
+XML build keeps its existing behavior unchanged.
+
+| Surface | Fired on | Handler (commands.ts) | Backend route |
+|---|---|---|---|
+| `OnNewMessageCompose` (`newMessageComposeCreated`, Mailbox 1.10+) | New compose window opens (incl. reply/forward) | `onNewMessageComposeHandler` | `POST /api/outlook/compose-opened` |
+| `OnMessageCompose` (`messageComposeOpened`, Mailbox 1.12+) | Any compose window (incl. editing a draft) | `onMessageComposeOpenedHandler` | `POST /api/outlook/compose-opened` |
+| `OnMessageSend` (`messageSending`, Mailbox 1.12+, Smart Alerts `softBlock`) | User clicks Send on a message | `onMessageSendHandler` | `POST /api/outlook/pre-send-check` |
+| Integrated spam reporting (`spamReportingOverride` + `spamPreProcessingDialog`, Mailbox 1.14+) | User clicks the native Report button | `onSpamReportHandler` | `POST /api/outlook/report-spam` |
+
+Notes:
+
+- The compose-opened events ship a draft snapshot to the backend *before*
+  the task pane is even opened. The agent reads it via the new
+  `get_compose_draft_snapshot` tool (state key `outlook:compose_draft`).
+- Smart Alerts uses `sendMode: softBlock` — if the backend is unreachable
+  or the check passes, `event.completed({allowEvent: true})` always fires.
+  The current concrete check is a missing-attachment heuristic; tone /
+  missing-recipient / agent-side review are stubs in `backend/main.py`.
+- The spam-reporting surface logs to session state under
+  `outlook:spam_reports`; agent-side triage is intentionally stubbed.
+- In addition, `App.tsx` subscribes to `Office.EventType.ItemChanged` so
+  the task pane refreshes context on item switch in **both** manifest
+  builds (the handler API works under the XML manifest too). Only the
+  manifest-declared `autoRunEvents` / spam-reporting surfaces above are
+  JSON-only.
+
 > Note: as of May 2026, `office-addin-manifest validate` emits a false-positive against `groups[].builtInGroupId` whenever a tab uses `builtInTabId` (a known quirk in how the bundled ajv evaluates the schema's `dependencies` clause — see [OfficeDev/microsoft-teams-app-schema#190](https://github.com/OfficeDev/microsoft-teams-app-schema/issues/190) and related). Our manifest does **not** set `builtInGroupId`; the structure matches what `yo office` scaffolds for Outlook. Sideloading via `npm run start:json` works regardless.
 
 In Outlook you'll see an **outlook-king** group on the Home tab, in both read and compose modes:

@@ -122,3 +122,178 @@ function notify(type: "informational" | "warning" | "error", message: string) {
 // Expose for the manifest's <FunctionName> hooks.
 (window as any).coachCurrentDraft = coachCurrentDraft;
 Office.actions.associate("coachCurrentDraft", coachCurrentDraft);
+
+/* ──────────────────────────────────────────────────────────────────
+ * JSON-manifest-only event handlers.
+ *
+ * These functions are wired via manifest.json's `autoRunEvents` and the
+ * `spamPreProcessingDialog` ribbon surface. The XML manifest doesn't
+ * declare any of them, so under the XML build they're inert — Outlook
+ * never fires them.
+ * ────────────────────────────────────────────────────────────────── */
+
+const sessionUserId = (): string | undefined =>
+  Office.context?.mailbox?.userProfile?.emailAddress;
+
+async function postJson(path: string, body: unknown, timeoutMs = 4000): Promise<Response | null> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    const res = await fetch(`${BACKEND_URL}${path}`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    return res;
+  } catch {
+    return null;
+  }
+}
+
+async function readAttachmentMetadata(): Promise<{ name: string; size: number }[]> {
+  const item: any = Office.context?.mailbox?.item;
+  if (!item?.getAttachmentsAsync) return [];
+  return new Promise((resolve) => {
+    try {
+      item.getAttachmentsAsync((r: any) => {
+        if (r?.status !== Office.AsyncResultStatus.Succeeded) return resolve([]);
+        resolve((r.value || []).map((a: any) => ({ name: a.name || "", size: a.size || 0 })));
+      });
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+async function readComposeTypeIfAvailable(): Promise<string> {
+  const item: any = Office.context?.mailbox?.item;
+  if (!item?.getComposeTypeAsync) return "newMail";
+  return new Promise((resolve) => {
+    try {
+      item.getComposeTypeAsync((r: any) => {
+        if (r?.status !== Office.AsyncResultStatus.Succeeded) return resolve("newMail");
+        // r.value is e.g. { composeType: "newMail" | "reply" | "forward", coercionType: ... }
+        resolve(r.value?.composeType || "newMail");
+      });
+    } catch {
+      resolve("newMail");
+    }
+  });
+}
+
+async function pushComposeOpened(composeType: string, event: Office.AddinCommands.Event) {
+  try {
+    const snap = await readComposeSnapshot();
+    const attachments = await readAttachmentMetadata();
+    await postJson("/api/outlook/compose-opened", {
+      session_id: getSessionId(),
+      user_id: sessionUserId(),
+      compose_type: composeType,
+      compose: {
+        body: snap?.body || "",
+        subject: snap?.subject || "",
+        to: snap?.to || [],
+        cc: snap?.cc || [],
+        attachments,
+        conversation_id: (Office.context.mailbox.item as any)?.conversationId || null,
+      },
+    });
+  } catch {
+    /* fire-and-forget */
+  } finally {
+    event.completed();
+  }
+}
+
+async function onNewMessageComposeHandler(event: Office.AddinCommands.Event) {
+  // OnNewMessageCompose — fires for genuinely new compose windows.
+  await pushComposeOpened("newMail", event);
+}
+
+async function onMessageComposeOpenedHandler(event: Office.AddinCommands.Event) {
+  // OnMessageCompose — covers replies, forwards, and editing drafts.
+  const composeType = await readComposeTypeIfAvailable();
+  await pushComposeOpened(composeType, event);
+}
+
+async function onMessageSendHandler(event: Office.AddinCommands.Event) {
+  // Smart Alerts on-send. Default to allowing send if anything goes wrong —
+  // the backend must never become a hard send blocker if it's offline.
+  try {
+    const snap = await readComposeSnapshot();
+    const attachments = await readAttachmentMetadata();
+    const res = await postJson("/api/outlook/pre-send-check", {
+      session_id: getSessionId(),
+      user_id: sessionUserId(),
+      compose: {
+        body: snap?.body || "",
+        subject: snap?.subject || "",
+        to: snap?.to || [],
+        cc: snap?.cc || [],
+        attachments,
+      },
+    });
+
+    if (!res || !res.ok) {
+      (event as any).completed({ allowEvent: true });
+      return;
+    }
+    const data: any = await res.json().catch(() => null);
+    if (data && data.allow === false) {
+      (event as any).completed({
+        allowEvent: false,
+        errorMessage: data.message || "outlook-king flagged this draft. Please review before sending.",
+      });
+      return;
+    }
+    (event as any).completed({ allowEvent: true });
+  } catch {
+    (event as any).completed({ allowEvent: true });
+  }
+}
+
+async function onSpamReportHandler(event: any) {
+  // Integrated spam reporting (Mailbox 1.14+). Best-effort POST then
+  // signal completion with a thank-you dialog. We never fail closed.
+  try {
+    const item: any = Office.context?.mailbox?.item;
+    const meta: Record<string, unknown> = {
+      session_id: getSessionId(),
+      user_id: sessionUserId(),
+      message_id: item?.itemId || null,
+      conversation_id: item?.conversationId || null,
+      subject: typeof item?.subject === "string" ? item.subject : "",
+      sender: item?.from?.emailAddress || item?.sender?.emailAddress || "",
+      options: (event as any)?.options || null,
+      free_text: (event as any)?.freeText || "",
+    };
+    await postJson("/api/outlook/report-spam", meta);
+  } catch {
+    /* swallow — never let a network blip break the report flow */
+  } finally {
+    try {
+      event.completed({
+        onErrorDeleteItem: false,
+        moveItemTo: Office.MailboxEnums?.MoveSpamItemTo?.JunkFolder,
+        showPostProcessingDialog: {
+          title: "outlook-king",
+          description: "Thanks — logged for the agent to review.",
+        },
+      });
+    } catch {
+      event.completed();
+    }
+  }
+}
+
+(window as any).onNewMessageComposeHandler = onNewMessageComposeHandler;
+(window as any).onMessageComposeOpenedHandler = onMessageComposeOpenedHandler;
+(window as any).onMessageSendHandler = onMessageSendHandler;
+(window as any).onSpamReportHandler = onSpamReportHandler;
+
+Office.actions.associate("onNewMessageComposeHandler", onNewMessageComposeHandler);
+Office.actions.associate("onMessageComposeOpenedHandler", onMessageComposeOpenedHandler);
+Office.actions.associate("onMessageSendHandler", onMessageSendHandler);
+Office.actions.associate("onSpamReportHandler", onSpamReportHandler);

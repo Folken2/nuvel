@@ -25,6 +25,12 @@ COMPOSE_KEY = "outlook:current_compose"
 MESSAGE_KEY = "outlook:selected_message"
 ACCOUNT_KEY = "outlook:account"
 RECENT_ACTIONS_KEY = "outlook:recent_actions"
+# Stashed by the JSON-manifest OnNewMessageCompose / OnMessageCompose events.
+# Lives in parallel to outlook:current_compose so the agent can see the draft
+# even before the taskpane is opened.
+COMPOSE_DRAFT_KEY = "outlook:compose_draft"
+# Append-only log written by the integrated spam-reporting handler.
+SPAM_REPORTS_KEY = "outlook:spam_reports"
 
 
 def get_current_compose(tool_context: ToolContext) -> dict:
@@ -104,9 +110,32 @@ def get_full_outlook_state(tool_context: ToolContext) -> dict:
     }
 
 
+def get_compose_draft_snapshot(tool_context: ToolContext) -> dict:
+    """Return the early compose snapshot captured by event-based activation.
+
+    Populated by the JSON manifest's ``OnNewMessageCompose`` and
+    ``OnMessageCompose`` handlers as soon as the user opens a draft —
+    before the task pane is even shown. Use this when the user asks
+    "what's in my current draft?" outside of a task-pane interaction
+    or when ``get_current_compose`` returns ``no_compose`` (e.g. the
+    task pane hasn't pushed yet but the event handler already fired).
+
+    Returns ``{"status": "ok", "compose_type", ...compose fields}`` on
+    success, otherwise ``{"status": "no_draft", "message": str}``.
+    """
+    payload = tool_context.state.get(COMPOSE_DRAFT_KEY)
+    if not payload:
+        return {
+            "status": "no_draft",
+            "message": "No compose-opened event has fired yet (or the add-in is sideloaded via XML manifest).",
+        }
+    return {"status": "ok", **payload}
+
+
 outlook_context_tool_list = [
     FunctionTool(get_current_compose),
     FunctionTool(get_selected_message),
     FunctionTool(get_outlook_account),
     FunctionTool(get_full_outlook_state),
+    FunctionTool(get_compose_draft_snapshot),
 ]

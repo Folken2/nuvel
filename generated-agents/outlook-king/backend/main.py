@@ -66,6 +66,8 @@ from outlook_king.tools.outlook_context import (
     MESSAGE_KEY,
     ACCOUNT_KEY,
     RECENT_ACTIONS_KEY,
+    COMPOSE_DRAFT_KEY,
+    SPAM_REPORTS_KEY,
 )
 from outlook_king.tools.outlook_actions import (
     PENDING_ACTIONS_KEY,
@@ -192,6 +194,30 @@ class LearnSentRequest(BaseModel):
     body: str
     recipient: str = ""
     subject: str = ""
+
+
+class ComposeOpenedRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    compose_type: str = "newMail"  # "newMail" | "reply" | "forward"
+    compose: ComposePayload | None = None
+
+
+class PreSendCheckRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    compose: ComposePayload | None = None
+
+
+class SpamReportRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    message_id: str | None = None
+    conversation_id: str | None = None
+    subject: str = ""
+    sender: str = ""
+    options: list | dict | None = None
+    free_text: str = ""
 
 
 class ActionResultRequest(BaseModel):
@@ -449,4 +475,112 @@ async def action_result(req: ActionResultRequest):
         user_id,
         {ACTION_RESULTS_KEY: existing_results, RECENT_ACTIONS_KEY: recent},
     )
+    return {"status": "ok"}
+
+
+# ── JSON-manifest-only event hooks ──────────────────────────────────
+#
+# Powered by manifest.json's `autoRunEvents` + spamPreProcessingDialog
+# surfaces. The XML manifest doesn't wire any of these, so they only
+# fire when the add-in is sideloaded as JSON.
+
+
+_ATTACHMENT_HINTS = (
+    "attached",
+    "attachment",
+    "attachments",
+    "enclosed",
+    "adjunto",
+    "adjunta",
+    "adjuntos",
+    "se adjunta",
+    "ci-joint",
+    "anexo",
+    "anbei",
+    "allegato",
+)
+
+
+def _missing_attachment_heuristic(body: str, attachments: list) -> tuple[bool, str]:
+    """Block-friendly heuristic: body mentions an attachment but none exist.
+
+    Returns ``(allow, message)``. ``allow=False`` triggers a soft-block in
+    the Smart Alerts dialog. Kept intentionally dumb — the agent will own
+    smarter checks later.
+    """
+    text = (body or "").lower()
+    if not text.strip():
+        return True, ""
+    if attachments:
+        return True, ""
+    if any(h in text for h in _ATTACHMENT_HINTS):
+        return (
+            False,
+            "Your draft mentions an attachment, but nothing is attached. "
+            "Attach the file or remove the reference, then send again.",
+        )
+    return True, ""
+
+
+@app.post("/api/outlook/compose-opened")
+async def compose_opened(req: ComposeOpenedRequest):
+    """Push an early compose-mode snapshot into session state.
+
+    Fired by the JSON manifest's ``OnNewMessageCompose`` / ``OnMessageCompose``
+    event handlers. Lets the agent answer "what's in my draft?" before the
+    user opens the task pane. Stored under ``outlook:compose_draft``.
+    """
+    user_id = req.user_id or DEFAULT_USER_ID
+    snapshot = (req.compose.model_dump() if req.compose else {}) | {
+        "compose_type": req.compose_type,
+    }
+    await _append_state_delta(req.session_id, user_id, {COMPOSE_DRAFT_KEY: snapshot})
+    return {"status": "ok"}
+
+
+@app.post("/api/outlook/pre-send-check")
+async def pre_send_check(req: PreSendCheckRequest):
+    """Smart Alerts pre-send check.
+
+    Runs cheap heuristics and returns ``{allow, message}``. The add-in
+    soft-blocks the send when ``allow=False`` and surfaces ``message``.
+
+    Currently only the missing-attachment heuristic is wired. Future
+    checks (tone, missing recipients, agent-side review) should be added
+    here — call the agent via ``Runner`` if you need a model in the loop.
+    The contract back to the add-in must stay ``{allow, message}``.
+    """
+    body = req.compose.body if req.compose else ""
+    atts = [a.model_dump() for a in (req.compose.attachments if req.compose else [])]
+    allow, message = _missing_attachment_heuristic(body, atts)
+    # TODO(agent): wire optional agent-side review here. For now this is
+    # the only concrete check; tone / missing-recipient / etc. are stubs.
+    return {"allow": allow, "message": message}
+
+
+@app.post("/api/outlook/report-spam")
+async def report_spam(req: SpamReportRequest):
+    """Integrated spam-reporting sink.
+
+    Logs the report and appends metadata to session state so the agent
+    can later triage. Full agent integration is intentionally stubbed.
+    """
+    user_id = req.user_id or DEFAULT_USER_ID
+    entry = {
+        "message_id": req.message_id,
+        "conversation_id": req.conversation_id,
+        "subject": req.subject,
+        "sender": req.sender,
+        "options": req.options,
+        "free_text": req.free_text,
+    }
+    logger.info("spam-report received: %s", entry)
+    await _ensure_session(req.session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    existing = list((session.state.get(SPAM_REPORTS_KEY) if session else None) or [])
+    existing.append(entry)
+    existing = existing[-MAX_RECENT_ACTIONS:]
+    await _append_state_delta(req.session_id, user_id, {SPAM_REPORTS_KEY: existing})
     return {"status": "ok"}

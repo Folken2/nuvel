@@ -82,6 +82,79 @@
               "type": "executeFunction"
             }
           ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.10" }
+            ]
+          },
+          "id": "AutoRunRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            { "id": "onNewMessageComposeHandler", "type": "executeFunction" },
+            { "id": "onMessageComposeOpenedHandler", "type": "executeFunction" },
+            { "id": "onMessageSendHandler", "type": "executeFunction" }
+          ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.14" }
+            ]
+          },
+          "id": "SpamReportingRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            { "id": "onSpamReportHandler", "type": "executeFunction" }
+          ]
+        }
+      ],
+      "autoRunEvents": [
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.10" }
+            ],
+            "scopes": ["mail"]
+          },
+          "events": [
+            {
+              "type": "newMessageComposeCreated",
+              "actionId": "onNewMessageComposeHandler"
+            }
+          ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.12" }
+            ],
+            "scopes": ["mail"]
+          },
+          "events": [
+            {
+              "type": "messageComposeOpened",
+              "actionId": "onMessageComposeOpenedHandler"
+            },
+            {
+              "type": "messageSending",
+              "actionId": "onMessageSendHandler",
+              "options": {
+                "sendMode": "softBlock"
+              }
+            }
+          ]
         }
       ],
       "ribbons": [
@@ -165,6 +238,44 @@
               ]
             }
           ]
+        }
+        ,
+        {
+          "contexts": ["spamReportingOverride"],
+          "tabs": [],
+          "fixedControls": [
+            {
+              "id": "spamReportingButton",
+              "type": "button",
+              "label": "Report to outlook-king",
+              "enabled": false,
+              "icons": [
+                { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+              ],
+              "supertip": {
+                "title": "Report to outlook-king",
+                "description": "Send this message to outlook-king for spam/phishing triage."
+              },
+              "actionId": "onSpamReportHandler"
+            }
+          ],
+          "spamPreProcessingDialog": {
+            "title": "Report to outlook-king",
+            "description": "Help the agent learn what's noise. We'll log the message for triage.",
+            "spamNeverShowAgainOption": false,
+            "spamReportingOptions": {
+              "title": "Why are you reporting this email?",
+              "options": [
+                "Spam / unsolicited",
+                "Phishing attempt",
+                "Not sure it's legitimate"
+              ],
+              "type": "checkbox"
+            },
+            "spamFreeTextSectionTitle": "Anything else worth noting?"
+          }
         }
       ],
       "alternates": [
