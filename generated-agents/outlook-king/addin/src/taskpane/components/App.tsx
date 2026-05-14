@@ -299,11 +299,16 @@ function extractDraft(text: string): string | null {
 }
 
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const sessionIdRef = useRef(getSessionId());
+  // Restore the prior chat for this stable sessionId so the taskpane survives
+  // remounts (Outlook can rebuild the iframe even when the pane is pinned).
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const prior = loadHistory().find((h) => h.sessionId === sessionIdRef.current);
+    return prior?.messages ?? [];
+  });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [liveEvents, setLiveEvents] = useState<ToolEvent[]>([]);
-  const sessionIdRef = useRef(getSessionId());
   const userIdRef = useRef<string>(
     Office.context?.mailbox?.userProfile?.emailAddress || "outlook-user"
   );
