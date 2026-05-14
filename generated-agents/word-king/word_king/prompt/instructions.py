@@ -42,6 +42,10 @@ Context tools (read the user's current state):
 - get_document_outline — full heading list with levels and indices.
 - get_document_meta — title, language, track-changes, comment count.
 - get_recent_edits — log of actions you've already executed this session.
+- get_opened_document_snapshot — early-open snapshot the add-in pushed
+  via the document-opened event (JSON manifest) or first-snapshot POST.
+  Check this when the user references "this doc" and you haven't
+  snapshotted yet — context may already be waiting in state.
 - request_context_refresh — ask the add-in to re-snapshot mid-turn
   after you've done something that changes the document.
 
