@@ -188,11 +188,18 @@ def _parse_file_runs(path: Path, keep_events: bool = False) -> list[Run]:
             run.prompt_tokens = rec.get("total_prompt_tokens") or run.prompt_tokens
             run.completion_tokens = rec.get("total_completion_tokens") or run.completion_tokens
             run.total_tokens = rec.get("total_tokens") or run.total_tokens
+            cost = rec.get("total_cost_usd")
+            if cost is not None:
+                run.cost_usd = float(cost)
         elif ev == "llm_response":
             usage = rec.get("usage") or {}
             run.prompt_tokens += int(usage.get("prompt_tokens") or 0)
             run.completion_tokens += int(usage.get("completion_tokens") or 0)
             run.total_tokens += int(usage.get("total_tokens") or 0)
+            # Aggregate per-call cost as a fallback when run_end omits it.
+            cost = rec.get("cost_usd")
+            if cost is not None:
+                run.cost_usd = (run.cost_usd or 0.0) + float(cost)
 
     return list(runs.values())
 
@@ -345,8 +352,10 @@ def _print_run(r: Run) -> None:
     for ev in r.events:
         name = ev.get("event") or "(record)"
         ts = (ev.get("timestamp") or ev.get("ts") or "")[11:23]
+        depth = int(ev.get("agent_depth") or 0)
+        indent = "  " * max(depth - 1, 0)
         detail = _event_detail(ev)
-        print(f"   {ts}  {name:<14} {detail}")
+        print(f"   {ts}  {indent}{name:<14} {detail}")
     print()
 
 
@@ -369,9 +378,36 @@ def _event_detail(ev: dict) -> str:
     if name == "run_start":
         return _short(ev.get("user_input"), 80)
     if name == "run_end":
+        cost = ev.get("total_cost_usd")
+        cost_part = f"  cost=${cost:.4f}" if cost else ""
         return (f"dur={ev.get('duration_ms')}ms  "
                 f"llm={ev.get('llm_calls')}  tool={ev.get('tool_calls')}  "
-                f"tok={ev.get('total_tokens')}")
+                f"tok={ev.get('total_tokens')}{cost_part}")
+    if name == "agent_start":
+        return f"agent={ev.get('agent')}"
+    if name == "agent_end":
+        return f"agent={ev.get('agent')}"
+    if name == "agent_transfer":
+        return f"{ev.get('from_agent')} → {ev.get('to_agent')}"
+    if name == "agent_escalate":
+        return f"agent={ev.get('agent')}  (escalating up)"
+    if name == "agent_end_of_turn":
+        return f"agent={ev.get('agent')}"
+    if name == "auth_requested":
+        ids = ev.get("function_call_ids") or []
+        return f"agent={ev.get('agent')}  fn_call_ids={len(ids)}"
+    if name == "event":
+        actions = ev.get("actions") or {}
+        bits = []
+        if actions.get("transfer_to_agent"):
+            bits.append(f"→{actions['transfer_to_agent']}")
+        if actions.get("escalate"):
+            bits.append("escalate")
+        if actions.get("state_delta_keys"):
+            bits.append(f"state[{','.join(actions['state_delta_keys'])}]")
+        if actions.get("artifact_delta"):
+            bits.append(f"artifacts={list(actions['artifact_delta'].keys())}")
+        return "  ".join(bits)
     if not name:
         return _short(ev.get("subtype"), 80)
     return ""

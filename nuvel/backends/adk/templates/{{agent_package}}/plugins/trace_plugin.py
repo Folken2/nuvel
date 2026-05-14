@@ -151,6 +151,46 @@ def _extract_usage(resp: LlmResponse) -> Optional[dict]:
     }
 
 
+def _summarize_actions(actions: Any) -> Optional[dict]:
+    """Compact summary of an ADK EventActions object.
+
+    Captures the control-flow signals (transfers, escalations, state deltas,
+    etc.) that drive multi-agent orchestration. Returns None if the actions
+    object carries nothing meaningful — keeps records small for the common
+    case where actions is a default-constructed empty object.
+    """
+    if actions is None:
+        return None
+    out: dict[str, Any] = {}
+    transfer = getattr(actions, "transfer_to_agent", None)
+    if transfer:
+        out["transfer_to_agent"] = transfer
+    if getattr(actions, "escalate", None):
+        out["escalate"] = True
+    if getattr(actions, "skip_summarization", None):
+        out["skip_summarization"] = True
+    if getattr(actions, "end_of_agent", None):
+        out["end_of_agent"] = True
+    state_delta = getattr(actions, "state_delta", None) or {}
+    if state_delta:
+        # Record keys only; values can be arbitrarily large/sensitive and
+        # are reachable from state snapshots if the consumer needs them.
+        out["state_delta_keys"] = sorted(state_delta.keys())
+    artifact_delta = getattr(actions, "artifact_delta", None) or {}
+    if artifact_delta:
+        out["artifact_delta"] = dict(artifact_delta)
+    auth = getattr(actions, "requested_auth_configs", None) or {}
+    if auth:
+        out["requested_auth_function_call_ids"] = sorted(auth.keys())
+    tool_confirm = getattr(actions, "requested_tool_confirmations", None) or {}
+    if tool_confirm:
+        out["requested_tool_confirmation_ids"] = sorted(tool_confirm.keys())
+    rewind = getattr(actions, "rewind_before_invocation_id", None)
+    if rewind:
+        out["rewind_before_invocation_id"] = rewind
+    return out or None
+
+
 def _safe_serialize(obj: Any, max_len: int = 5000) -> Any:
     """Make an object JSON-serializable, truncating large values."""
     if obj is None:
@@ -426,20 +466,34 @@ class TracePlugin(BasePlugin):
         self._first_tools_available: list[str] = []
         self._pricing = _load_pricing()
         self._total_cost: float = 0.0
+        # Stack of currently active agents, deepest last. Drives parent_agent
+        # and agent_depth on every record so multi-agent runs are legible
+        # in the flat JSONL.
+        self._agent_stack: list[str] = []
 
         if _TRACE_DB:
             logger.info("[TracePlugin] DB tracing enabled (TRACE_DB=true)")
         logger.info("[TracePlugin] File tracing to %s", _TRACE_DIR)
 
     def _record(self, event_type: str, data: dict) -> None:
-        """Build and dispatch a trace record to all writers."""
+        """Build and dispatch a trace record to all writers.
+
+        Every record carries the current agent hierarchy: `agent_depth` and
+        `parent_agent` (the agent immediately above the active one, or None
+        at the root). For records emitted while no agent is active (e.g.
+        run_start), depth is 0 and parent_agent is None.
+        """
         if not _TRACE_ENABLED:
             return
+        depth = len(self._agent_stack)
+        parent = self._agent_stack[-2] if depth >= 2 else None
         record = {
             "trace_id": self._run_id,
             "session_id": self._session_id,
             "event": event_type,
             "timestamp": _now_iso(),
+            "agent_depth": depth,
+            "parent_agent": parent,
             **data,
         }
         self._file_writer.write(record)
@@ -471,6 +525,7 @@ class TracePlugin(BasePlugin):
         self._llm_count = 0
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
+        self._agent_stack.clear()
 
         self._record("run_start", {
             "invocation_id": invocation_context.invocation_id,
@@ -525,6 +580,8 @@ class TracePlugin(BasePlugin):
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
+        # Push BEFORE recording so the record reflects this agent as active.
+        self._agent_stack.append(agent.name)
         self._record("agent_start", {"agent": agent.name})
         return None
 
@@ -532,6 +589,12 @@ class TracePlugin(BasePlugin):
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
         self._record("agent_end", {"agent": agent.name})
+        # Pop AFTER recording; tolerate mismatched stack on error paths.
+        if self._agent_stack and self._agent_stack[-1] == agent.name:
+            self._agent_stack.pop()
+        elif agent.name in self._agent_stack:
+            # Mid-stack pop (shouldn't happen, but don't leak depth on bugs).
+            self._agent_stack.remove(agent.name)
         return None
 
     # ── LLM lifecycle ────────────────────────────────────────────────
@@ -713,14 +776,49 @@ class TracePlugin(BasePlugin):
     async def on_event_callback(
         self, *, invocation_context: InvocationContext, event: Event
     ) -> Optional[Event]:
-        if event.content and event.content.parts:
-            self._record("event", {
+        actions_summary = _summarize_actions(event.actions)
+
+        # Always emit a record when there's content OR meaningful actions.
+        # Actions-only events (transfer/escalate/state-delta) used to be
+        # invisible because we required content.parts.
+        if (event.content and event.content.parts) or actions_summary:
+            base: dict[str, Any] = {
                 "event_id": event.id,
                 "author": event.author,
                 "invocation_id": event.invocation_id,
                 "turn_complete": event.turn_complete,
-                "has_text": any(p.text for p in event.content.parts),
-                "has_function_call": any(p.function_call for p in event.content.parts),
-                "has_function_response": any(p.function_response for p in event.content.parts),
-            })
+            }
+            if event.content and event.content.parts:
+                base["has_text"] = any(p.text for p in event.content.parts)
+                base["has_function_call"] = any(p.function_call for p in event.content.parts)
+                base["has_function_response"] = any(p.function_response for p in event.content.parts)
+            if actions_summary:
+                base["actions"] = actions_summary
+            self._record("event", base)
+
+        # Emit dedicated records for control-flow signals so they're
+        # trivially queryable without re-parsing the `actions` blob.
+        if event.actions:
+            if event.actions.transfer_to_agent:
+                self._record("agent_transfer", {
+                    "from_agent": event.author,
+                    "to_agent": event.actions.transfer_to_agent,
+                    "event_id": event.id,
+                })
+            if event.actions.escalate:
+                self._record("agent_escalate", {
+                    "agent": event.author,
+                    "event_id": event.id,
+                })
+            if event.actions.end_of_agent:
+                self._record("agent_end_of_turn", {
+                    "agent": event.author,
+                    "event_id": event.id,
+                })
+            if event.actions.requested_auth_configs:
+                self._record("auth_requested", {
+                    "agent": event.author,
+                    "event_id": event.id,
+                    "function_call_ids": list(event.actions.requested_auth_configs.keys()),
+                })
         return None
