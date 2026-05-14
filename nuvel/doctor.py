@@ -9,12 +9,13 @@ the whole report.
 from __future__ import annotations
 
 import importlib
+import json
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 OK = "OK"
 WARN = "WARN"
@@ -203,6 +204,82 @@ def _check_docker_running() -> Check:
     return Check("Docker available", WARN, "daemon not reachable")
 
 
+def _find_pricing_entry(model: str, pricing: dict) -> Optional[str]:
+    """Mirror cost_guard_plugin._find_pricing: exact then prefix-stripped match.
+
+    Returns the matched pricing key (so we can show which entry covers the
+    model), or None.
+    """
+    if not model:
+        return None
+    if model in pricing:
+        return model
+    parts = model.split("/")
+    for i in range(len(parts)):
+        candidate = "/".join(parts[i:])
+        if candidate in pricing:
+            return candidate
+    return None
+
+
+def _find_agent_plugins_dir(cwd: Path) -> Optional[Path]:
+    """Locate the agent's plugins/ directory (sits inside the package dir)."""
+    for sub in cwd.iterdir() if cwd.is_dir() else []:
+        if sub.is_dir() and (sub / "plugins").is_dir():
+            return sub / "plugins"
+    return None
+
+
+# Defaults must mirror config/llm.py — if those defaults change in the
+# template, update here.
+_MODEL_DEFAULTS = {
+    "FAST_MODEL": "openrouter/moonshotai/kimi-k2.5",
+    "REASONING_MODEL": "openrouter/google/gemini-3-pro-preview",
+}
+
+
+def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
+    """Verify pricing.json has entries for every active model.
+
+    ADK agents resolve FAST_MODEL and REASONING_MODEL with hard-coded
+    fallbacks in config/llm.py — so a missing .env entry isn't a failure
+    on its own; the fallback model is what actually runs and is what
+    pricing must cover.
+
+    Without coverage, llm_response.cost_usd and run_end.total_cost_usd
+    stay null and the traces command center can't show cost.
+    """
+    plugins = _find_agent_plugins_dir(cwd)
+    if plugins is None:
+        return [Check("pricing.json coverage", WARN, "no plugins/ dir found")]
+
+    pricing_path = plugins / "pricing.json"
+    if not pricing_path.is_file():
+        return [Check("pricing.json coverage", WARN, f"missing {pricing_path}")]
+
+    try:
+        raw = json.loads(pricing_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [Check("pricing.json coverage", FAIL, f"parse error: {exc}")]
+
+    pricing = {k: v for k, v in raw.items() if not k.startswith("_")}
+    checks: list[Check] = []
+    for var, default in _MODEL_DEFAULTS.items():
+        model = env.get(var) or default
+        source = ".env" if env.get(var) else "default"
+        matched = _find_pricing_entry(model, pricing)
+        name = f"pricing.json: {var}"
+        if matched:
+            via = "" if matched == model else f" via {matched!r}"
+            checks.append(Check(name, OK, f"{model} ({source}){via}"))
+        else:
+            checks.append(Check(
+                name, WARN,
+                f"no entry for {model!r} ({source}) — costs will be null"
+            ))
+    return checks
+
+
 def _composio_in_use(cwd: Path) -> bool:
     for candidate in cwd.rglob("composio_mcp.py"):
         if ".venv" not in candidate.parts and "site-packages" not in candidate.parts:
@@ -246,6 +323,15 @@ def run_agent_checks(cwd: Path, info: AgentInfo) -> list[Check]:
 
     if (cwd / "Dockerfile").is_file():
         checks.append(_safe(_check_docker_running, "Docker available"))
+
+    if info.framework == "adk":
+        try:
+            checks.extend(check_pricing_coverage(cwd, env))
+        except Exception as exc:  # noqa: BLE001
+            checks.append(Check(
+                "pricing.json coverage", FAIL,
+                f"check raised {type(exc).__name__}: {exc}",
+            ))
 
     return checks
 

@@ -396,6 +396,11 @@ def _event_detail(ev: dict) -> str:
     if name == "auth_requested":
         ids = ev.get("function_call_ids") or []
         return f"agent={ev.get('agent')}  fn_call_ids={len(ids)}"
+    if name == "cost_guard_intervention":
+        spent = ev.get("session_cost_usd") or 0.0
+        budget = ev.get("budget_usd") or 0.0
+        return (f"BLOCKED  agent={ev.get('agent')}  "
+                f"spent=${spent:.4f}  budget=${budget:.2f}")
     if name == "event":
         actions = ev.get("actions") or {}
         bits = []
@@ -425,15 +430,19 @@ def _cmd_stats(args: argparse.Namespace) -> int:
         bucket = by_agent.setdefault(agent, {
             "runs": 0, "llm": 0, "tools": 0, "tokens": 0,
             "duration_ms": 0, "cost": 0.0, "any_cost": False,
+            "runs_with_tokens": 0, "runs_with_cost": 0,
         })
         bucket["runs"] += 1
         bucket["llm"] += r.llm_calls or 0
         bucket["tools"] += r.tool_calls or 0
         bucket["tokens"] += r.total_tokens or 0
         bucket["duration_ms"] += r.duration_ms or 0
+        if r.total_tokens:
+            bucket["runs_with_tokens"] += 1
         if r.cost_usd is not None:
             bucket["cost"] += r.cost_usd
             bucket["any_cost"] = True
+            bucket["runs_with_cost"] += 1
 
     header = ("AGENT", "RUNS", "LLM", "TOOLS", "TOKENS", "DUR", "COST")
     rows = []
@@ -460,6 +469,20 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     total_cost = sum(b["cost"] for b in by_agent.values() if b["any_cost"])
     print(f"\nTotal: {total_runs} run(s), {_fmt_tokens(total_tokens)} tokens"
           + (f", ${total_cost:.4f}" if total_cost else ""))
+
+    # Cost-coverage warning: runs that have token usage but no cost mean
+    # pricing.json is missing the model that actually ran. Surfacing this
+    # at the bottom of `stats` is the cheapest way to catch silent gaps.
+    missing = [
+        (agent, b) for agent, b in by_agent.items()
+        if b["runs_with_tokens"] and b["runs_with_cost"] < b["runs_with_tokens"]
+    ]
+    if missing:
+        print("\nwarning: cost missing on some runs (pricing.json likely "
+              "lacks the active model). Run `nuvel doctor` to verify.")
+        for agent, b in missing:
+            gap = b["runs_with_tokens"] - b["runs_with_cost"]
+            print(f"  {agent}: {gap}/{b['runs_with_tokens']} runs missing cost")
     return 0
 
 
