@@ -1,21 +1,28 @@
 """
 FastAPI bridge between the Outlook add-in (Office.js) and outlook-king.
 
-Three responsibilities:
+Responsibilities:
 
 1. POST /api/outlook/context — taskpane pushes the user's current compose
-   window and selected message into ADK session state. The agent's
-   ``get_current_compose`` / ``get_selected_message`` tools read from there.
+   window, selected message, and account info into ADK session state. The
+   agent's ``get_current_compose`` / ``get_selected_message`` /
+   ``get_outlook_account`` tools read from there.
 
-2. POST /api/outlook/chat — the user types a prompt in the taskpane.
-   Backend runs the agent and returns the final response.
+2. POST /api/outlook/chat — non-streaming chat. Returns the agent's final
+   response *plus* any pending Outlook actions the agent queued during
+   the turn (see outlook_actions.py).
 
-3. POST /api/outlook/chat/stream — same, but SSE-streamed so the UI can
-   render tool calls + tokens as they arrive.
+3. POST /api/outlook/chat/stream — same as /chat but SSE-streamed so the
+   UI can render tool calls + tokens + queued actions as they arrive.
 
-4. POST /api/outlook/learn-sent — the taskpane fires this immediately
-   after the user clicks Send. The agent records a style fingerprint
-   without burning a chat turn.
+4. POST /api/outlook/learn-sent — fired by the taskpane immediately after
+   the user clicks Send. Records a style fingerprint without burning a
+   chat turn.
+
+5. POST /api/outlook/action-result — the taskpane posts the outcome of
+   each executed action back here. The result is stored in session state
+   so the agent can inspect it on the next turn via
+   ``get_recent_action_results``.
 
 Run:
     cd generated-agents/outlook-king
@@ -38,7 +45,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-# Load .env from the agent root (one level up from backend/)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logging.basicConfig(
@@ -55,11 +61,21 @@ from google.adk.events import Event, EventActions
 from google.genai import types
 
 from outlook_king.agent import root_agent
-from outlook_king.tools.outlook_context import COMPOSE_KEY, MESSAGE_KEY
+from outlook_king.tools.outlook_context import (
+    COMPOSE_KEY,
+    MESSAGE_KEY,
+    ACCOUNT_KEY,
+    RECENT_ACTIONS_KEY,
+)
+from outlook_king.tools.outlook_actions import (
+    PENDING_ACTIONS_KEY,
+    ACTION_RESULTS_KEY,
+)
 from outlook_king.tools.style_tools import learn_style_from_sent_email
 
 APP_NAME = "outlook_king"
 DEFAULT_USER_ID = "outlook-user"
+MAX_RECENT_ACTIONS = 25
 
 session_service = InMemorySessionService()
 artifact_service = InMemoryArtifactService()
@@ -105,13 +121,27 @@ async def verify_api_key(request: Request, call_next):
 # ── Models ──────────────────────────────────────────────────────────
 
 
+class AttachmentInfo(BaseModel):
+    name: str = ""
+    size: int = 0
+    content_type: str = ""
+    is_inline: bool = False
+    id: str | None = None
+
+
 class ComposePayload(BaseModel):
     body: str = ""
+    body_html: str = ""
     subject: str = ""
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
     mode: str = "newMail"  # "newMail" | "reply" | "forward"
     conversation_id: str | None = None
+    selection: str = ""
+    selection_is_html: bool = False
+    attachments: list[AttachmentInfo] = Field(default_factory=list)
+    importance: str = "normal"
 
 
 class SelectedMessagePayload(BaseModel):
@@ -119,13 +149,26 @@ class SelectedMessagePayload(BaseModel):
     subject: str = ""
     sender: str = Field("", alias="from")
     to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
     body: str = ""
     conversation_id: str | None = None
     received: str | None = None
     has_attachments: bool = False
+    attachments: list[AttachmentInfo] = Field(default_factory=list)
+    folder: str = ""
+    categories: list[str] = Field(default_factory=list)
+    flag: str = "none"  # "none" | "flagged" | "complete"
 
     class Config:
         populate_by_name = True
+
+
+class AccountPayload(BaseModel):
+    email: str = ""
+    display_name: str = ""
+    time_zone: str = ""
+    host: str = ""  # "Outlook" | "OutlookWebApp" | etc.
+    platform: str = ""
 
 
 class ContextRequest(BaseModel):
@@ -133,6 +176,7 @@ class ContextRequest(BaseModel):
     user_id: str | None = None
     compose: ComposePayload | None = None
     selected: SelectedMessagePayload | None = None
+    account: AccountPayload | None = None
 
 
 class ChatRequest(BaseModel):
@@ -141,12 +185,23 @@ class ChatRequest(BaseModel):
     prompt: str
     compose: ComposePayload | None = None
     selected: SelectedMessagePayload | None = None
+    account: AccountPayload | None = None
 
 
 class LearnSentRequest(BaseModel):
     body: str
     recipient: str = ""
     subject: str = ""
+
+
+class ActionResultRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    action_id: str
+    action_type: str = ""
+    status: str = "ok"  # "ok" | "error" | "skipped"
+    error: str = ""
+    detail: dict = Field(default_factory=dict)
 
 
 # ── Session helpers ─────────────────────────────────────────────────
@@ -165,39 +220,67 @@ async def _ensure_session(session_id: str, user_id: str) -> None:
     _known_sessions.add(cache_key)
 
 
-async def _write_outlook_state(
-    session_id: str,
-    user_id: str,
-    compose: ComposePayload | None,
-    selected: SelectedMessagePayload | None,
+async def _append_state_delta(
+    session_id: str, user_id: str, state_delta: dict, author: str = "system"
 ) -> None:
-    """Persist the current Outlook context into ADK session state.
+    """Persist a state delta via the ADK event stream.
 
-    State mutations must go through ``session_service.append_event`` with
-    ``EventActions(state_delta=…)`` — directly mutating ``session.state[k]``
-    bypasses ADK's state tracking and the agent's tools never see the value.
+    Mutating ``session.state[k]`` directly bypasses ADK's state tracking
+    and the agent's tools never see the value — always go through
+    ``append_event`` with ``EventActions(state_delta=…)``.
     """
+    if not state_delta:
+        return
     await _ensure_session(session_id, user_id)
     session = await session_service.get_session(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
     if session is None:
         raise HTTPException(500, "Failed to load session after creation")
+    event = Event(
+        invocation_id=f"sys-{uuid.uuid4().hex[:8]}",
+        author=author,
+        actions=EventActions(state_delta=state_delta),
+    )
+    await session_service.append_event(session, event)
 
+
+async def _write_outlook_state(
+    session_id: str,
+    user_id: str,
+    compose: ComposePayload | None,
+    selected: SelectedMessagePayload | None,
+    account: AccountPayload | None = None,
+) -> None:
     state_delta: dict = {}
     if compose is not None:
         state_delta[COMPOSE_KEY] = compose.model_dump()
     if selected is not None:
         state_delta[MESSAGE_KEY] = selected.model_dump(by_alias=True)
-    if not state_delta:
-        return
+    if account is not None:
+        state_delta[ACCOUNT_KEY] = account.model_dump()
+    await _append_state_delta(session_id, user_id, state_delta)
 
-    event = Event(
-        invocation_id=f"ctx-{uuid.uuid4().hex[:8]}",
-        author="system",
-        actions=EventActions(state_delta=state_delta),
+
+async def _drain_pending_actions(session_id: str, user_id: str) -> list[dict]:
+    """Pop the queued Outlook actions from session state and return them.
+
+    Called once at the end of every chat turn. Actions are then shipped
+    to the add-in for execution.
+    """
+    await _ensure_session(session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
-    await session_service.append_event(session, event)
+    if session is None:
+        return []
+    pending = list(session.state.get(PENDING_ACTIONS_KEY) or [])
+    if not pending:
+        return []
+    await _append_state_delta(
+        session_id, user_id, {PENDING_ACTIONS_KEY: []}
+    )
+    return pending
 
 
 # ── Routes ──────────────────────────────────────────────────────────
@@ -210,13 +293,16 @@ async def health():
 
 @app.post("/api/outlook/context")
 async def push_context(req: ContextRequest):
-    """Push the user's current compose + selected message into session state.
+    """Push the user's current Outlook view into session state.
 
     Called by the taskpane every time the Outlook state changes (compose
-    body edit, new message selection). Cheap idempotent write.
+    body edit, selection change, new message selection). Cheap idempotent
+    write — safe to call on every keystroke debounce.
     """
     user_id = req.user_id or DEFAULT_USER_ID
-    await _write_outlook_state(req.session_id, user_id, req.compose, req.selected)
+    await _write_outlook_state(
+        req.session_id, user_id, req.compose, req.selected, req.account
+    )
     return {"status": "ok"}
 
 
@@ -226,9 +312,9 @@ async def _run_agent_once(
     prompt: str,
     compose: ComposePayload | None,
     selected: SelectedMessagePayload | None,
-) -> str:
-    """Run the agent for a single user turn and return the final text."""
-    await _write_outlook_state(session_id, user_id, compose, selected)
+    account: AccountPayload | None,
+) -> tuple[str, list[dict]]:
+    await _write_outlook_state(session_id, user_id, compose, selected, account)
 
     runner = Runner(
         app_name=APP_NAME,
@@ -245,33 +331,36 @@ async def _run_agent_once(
             for part in event.content.parts:
                 if getattr(part, "text", None):
                     final_text = part.text
-    return final_text
+    actions = await _drain_pending_actions(session_id, user_id)
+    return final_text, actions
 
 
 @app.post("/api/outlook/chat")
 async def chat(req: ChatRequest):
-    """Non-streaming chat. Returns the agent's final response."""
+    """Non-streaming chat. Returns the agent's final response + actions."""
     user_id = req.user_id or DEFAULT_USER_ID
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
     try:
-        text = await _run_agent_once(
-            req.session_id, user_id, req.prompt, req.compose, req.selected
+        text, actions = await _run_agent_once(
+            req.session_id, user_id, req.prompt, req.compose, req.selected, req.account
         )
     except Exception as exc:
         logger.exception("Agent run failed")
         raise HTTPException(500, f"Agent error: {exc}") from exc
-    return {"status": "ok", "message": text}
+    return {"status": "ok", "message": text, "actions": actions}
 
 
 @app.post("/api/outlook/chat/stream")
 async def chat_stream(req: ChatRequest):
-    """SSE chat. Streams tool events and the final response."""
+    """SSE chat. Streams tool events, the final response, and queued actions."""
     user_id = req.user_id or DEFAULT_USER_ID
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
 
-    await _write_outlook_state(req.session_id, user_id, req.compose, req.selected)
+    await _write_outlook_state(
+        req.session_id, user_id, req.compose, req.selected, req.account
+    )
 
     async def event_gen():
         try:
@@ -294,6 +383,10 @@ async def chat_stream(req: ChatRequest):
                 if event.is_final_response() and event.content and event.content.parts:
                     text = "".join(p.text or "" for p in event.content.parts)
                     yield f"event: final\ndata: {json.dumps({'text': text})}\n\n"
+
+            actions = await _drain_pending_actions(req.session_id, user_id)
+            for act in actions:
+                yield f"event: action\ndata: {json.dumps(act)}\n\n"
             yield "event: done\ndata: {}\n\n"
         except asyncio.CancelledError:
             raise
@@ -308,8 +401,7 @@ async def chat_stream(req: ChatRequest):
 async def learn_sent(req: LearnSentRequest):
     """Record a style fingerprint after the user sends an email.
 
-    This is fire-and-forget from the taskpane's perspective — no chat turn,
-    no agent reasoning. Just a direct write to the writing-style topic.
+    Fire-and-forget from the taskpane — no chat turn, no agent reasoning.
     """
     if not req.body.strip():
         return {"status": "skip", "reason": "empty body"}
@@ -317,3 +409,44 @@ async def learn_sent(req: LearnSentRequest):
         body=req.body, recipient=req.recipient, subject=req.subject
     )
     return result
+
+
+@app.post("/api/outlook/action-result")
+async def action_result(req: ActionResultRequest):
+    """Record the outcome of an action the add-in just executed.
+
+    Stored in session state under ``outlook:action_results`` (full log,
+    bounded) and ``outlook:recent_actions`` (recent compact summary). The
+    agent can inspect either via ``get_recent_action_results`` /
+    ``get_full_outlook_state`` on the next turn.
+    """
+    user_id = req.user_id or DEFAULT_USER_ID
+    await _ensure_session(req.session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    if session is None:
+        raise HTTPException(500, "Session not found")
+
+    existing_results = list(session.state.get(ACTION_RESULTS_KEY) or [])
+    existing_results.append(
+        {
+            "action_id": req.action_id,
+            "type": req.action_type,
+            "status": req.status,
+            "error": req.error,
+            "detail": req.detail,
+        }
+    )
+    existing_results = existing_results[-MAX_RECENT_ACTIONS:]
+
+    recent = list(session.state.get(RECENT_ACTIONS_KEY) or [])
+    recent.append({"type": req.action_type, "status": req.status})
+    recent = recent[-MAX_RECENT_ACTIONS:]
+
+    await _append_state_delta(
+        req.session_id,
+        user_id,
+        {ACTION_RESULTS_KEY: existing_results, RECENT_ACTIONS_KEY: recent},
+    )
+    return {"status": "ok"}

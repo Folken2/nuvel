@@ -100,16 +100,80 @@ LLM-touching tests in `tests/test_agent.py` use ADK record/replay — see that f
 
 ## Outlook-specific tools
 
+### Context (read-only, pulls from session state)
+
 | Tool | Purpose |
 |---|---|
-| `get_current_compose` | Read the user's open compose window from session state |
-| `get_selected_message` | Read the user's currently-selected inbox message |
+| `get_current_compose` | Compose snapshot — body, subject, to/cc/bcc, **selection inside the body**, attachments, importance, mode |
+| `get_selected_message` | Read-mode snapshot — from, to/cc, body, folder, categories, flag, attachments |
+| `get_outlook_account` | Account email, display name, time zone, host (Web/Desktop/Mac) |
+| `get_full_outlook_state` | One-shot: compose + selected + account + recent action log |
+
+### Actions (mutate the live mailbox via the add-in)
+
+Each call queues an action into session state; the FastAPI bridge ships
+it to the add-in over the chat response and the add-in executes against
+Office.js. The outcome is recorded under `outlook:action_results`.
+
+| Tool | Mode | What it does |
+|---|---|---|
+| `insert_text_at_cursor` | compose | Inserts text/HTML at caret; replaces selection if any |
+| `replace_compose_body` | compose | Wipe-and-replace the entire draft |
+| `set_subject` | compose | Set the subject line |
+| `add_recipients` | compose | Add to/cc/bcc recipients |
+| `remove_recipients` | compose | Remove specific addresses from a field |
+| `set_importance` | compose | low / normal / high |
+| `attach_file_from_url` | compose | Attach by URL (inline or regular) |
+| `create_reply_draft` | read | Open a reply / reply-all compose pre-filled |
+| `create_forward_draft` | read | Open a forward compose with recipients pre-filled |
+| `apply_categories` | any | Apply Outlook categories to the current item |
+| `set_flag` | read | Flag / complete / unflag the selected message |
+| `refresh_outlook_context` | any | Ask the add-in to re-snapshot when state may be stale |
+| `get_recent_action_results` | — | Inspect outcomes of recently-executed actions |
+
+### Analysis & memory
+
+| Tool | Purpose |
+|---|---|
 | `analyze_draft` | Objective metrics on a draft (counts, hedges, passives, structure) |
 | `plan_email_search` | Natural language → structured Outlook filters |
 | `rank_search_hits` | Re-rank Composio results by recency + sender weight |
 | `recall_writing_style` | Read consolidated voice rulebook from markdown memory |
 | `learn_style_from_sent_email` | Append a structured fingerprint after a send |
 | `consolidate_writing_style` | Distill fingerprints into a rulebook |
+
+## Shared-state model
+
+State that flows add-in → backend → ADK session on every turn:
+
+```
+outlook:current_compose   body, body_html, subject, to/cc/bcc,
+                          selection (highlighted span), selection_is_html,
+                          attachments[], importance, mode, conversation_id
+outlook:selected_message  id, subject, from, to, cc, body, folder,
+                          categories[], flag, attachments[], received,
+                          has_attachments, conversation_id
+outlook:account           email, display_name, time_zone, host, platform
+outlook:pending_actions   queued by action tools; drained at end of turn
+outlook:action_results    rolling log of what the add-in actually executed
+outlook:recent_actions    compact summary (type + status) of recent actions
+```
+
+The chat request body carries a fresh snapshot every turn; the agent's
+context tools always read the latest. When the agent suspects drift
+(e.g. user said "I just changed it"), it can call `refresh_outlook_context`
+to ask the add-in to re-snapshot.
+
+## Action pipeline
+
+```
+agent tool call          →  outlook:pending_actions  (session state)
+end of turn              →  backend drains queue
+SSE event: action {...}  →  add-in receives & executes via Office.js
+add-in result            →  POST /api/outlook/action-result
+                         →  outlook:action_results  (session state)
+next turn                →  agent inspects via get_recent_action_results
+```
 
 Plus everything the nuvel scaffold ships: `save_memory`/`recall_memory`, `cronjob`, `read_soul`/`update_soul`, `author_skill`, and the Composio MCP toolset.
 

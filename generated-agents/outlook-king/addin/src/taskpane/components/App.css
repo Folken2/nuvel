@@ -1431,3 +1431,32 @@ select.settings-input {
 .attachment-badge-download:hover {
   border-color: var(--text-tertiary);
 }
+
+.executed-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.executed-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.executed-action-ok .executed-action-icon { color: #16a34a; }
+.executed-action-error .executed-action-icon { color: #dc2626; }
+.executed-action-skipped .executed-action-icon { color: var(--text-tertiary); }
+
+.executed-action-icon {
+  width: 12px;
+  text-align: center;
+  font-weight: 600;
+}
+
