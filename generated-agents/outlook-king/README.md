@@ -86,6 +86,40 @@ Sideload `manifest.xml`:
 - **Outlook desktop (Win/Mac)** → Get Add-ins → My add-ins → Add a custom add-in → From file.
 - **Microsoft 365 admin tenant** → Integrated apps → Upload custom apps.
 
+#### XML vs JSON manifest
+
+Both formats ship side-by-side in `/addin`:
+
+| File | When to use it |
+|---|---|
+| `manifest.xml` | Classic Outlook on Windows, Outlook on Mac, and anywhere you need the broadest compatibility. **Default.** |
+| `manifest.json` | New Outlook on Windows + Outlook on the web. Unlocks the unified Microsoft 365 manifest surfaces — event-based activation (`OnNewMessageCompose`, `OnMessageSend`), Smart Alerts on-send v2, integrated spam-report, and M365 admin parity with Teams apps. |
+
+The JSON manifest is currently only installable on new Outlook on Windows and Outlook on the web; classic Outlook on Windows + Outlook on Mac still need the XML manifest. That's why we keep both — same identity (`id`, URLs, ribbon buttons), two formats.
+
+Switch which one `office-addin-debugging` sideloads:
+
+```bash
+# default — XML (unchanged behavior)
+npm start
+
+# JSON manifest
+npm run start:json
+
+# XML manifest, explicit
+npm run start:xml
+```
+
+Validate either with:
+
+```bash
+npm run validate:xml
+npm run validate:json
+# or: npx office-addin-manifest validate manifest.json
+```
+
+> Note: as of May 2026, `office-addin-manifest validate` emits a false-positive against `groups[].builtInGroupId` whenever a tab uses `builtInTabId` (a known quirk in how the bundled ajv evaluates the schema's `dependencies` clause — see [OfficeDev/microsoft-teams-app-schema#190](https://github.com/OfficeDev/microsoft-teams-app-schema/issues/190) and related). Our manifest does **not** set `builtInGroupId`; the structure matches what `yo office` scaffolds for Outlook. Sideloading via `npm run start:json` works regardless.
+
 In Outlook you'll see an **outlook-king** group on the Home tab, in both read and compose modes:
 - **Open outlook-king** — taskpane chat with quick actions and a context strip showing what the agent currently sees.
 - **Coach my draft** — one-click voice-aware feedback while composing.
