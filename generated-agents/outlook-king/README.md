@@ -97,18 +97,23 @@ Both formats ship side-by-side in `/addin`:
 
 The JSON manifest is currently only installable on new Outlook on Windows and Outlook on the web; classic Outlook on Windows + Outlook on Mac still need the XML manifest. That's why we keep both — same identity (`id`, URLs, ribbon buttons), two formats.
 
-Switch which one `office-addin-debugging` sideloads:
+Switch which one `office-addin-debugging` sideloads. Two equivalent forms — explicit script, or the `OFFICE_MANIFEST` env var read by the dispatcher (`scripts/run-office-addin.js`):
 
 ```bash
 # default — XML (unchanged behavior)
 npm start
 
-# JSON manifest
+# JSON manifest — env-var form
+OFFICE_MANIFEST=json npm start
+
+# JSON manifest — explicit script
 npm run start:json
 
 # XML manifest, explicit
 npm run start:xml
 ```
+
+`stop` and `validate` accept the same `OFFICE_MANIFEST=json` env var, and the `:xml` / `:json` variants bypass it.
 
 Validate either with:
 
