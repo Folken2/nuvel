@@ -56,7 +56,15 @@ from google.adk.events import Event, EventActions
 from google.genai import types
 
 from word_king.agent import root_agent
-from word_king.tools.word_context import SELECTION_KEY, DOCUMENT_KEY
+from word_king.tools.word_context import (
+    SELECTION_KEY,
+    DOCUMENT_KEY,
+    SURROUNDING_KEY,
+    HEADINGS_KEY,
+    DOC_META_KEY,
+    RECENT_EDITS_KEY,
+    PENDING_ACTIONS_KEY,
+)
 from word_king.tools.style_tools import learn_style_from_passage
 
 APP_NAME = "word_king"
@@ -111,6 +119,12 @@ class SelectionPayload(BaseModel):
     paragraph_count: int = 0
     word_count: int = 0
     style_name: str | None = None
+    is_empty: bool = False
+    in_table: bool = False
+    in_list: bool = False
+    hyperlink: str | None = None
+    start_offset: int = 0
+    end_offset: int = 0
 
 
 class DocumentPayload(BaseModel):
@@ -118,6 +132,34 @@ class DocumentPayload(BaseModel):
     paragraph_count: int = 0
     word_count: int = 0
     style_name: str | None = None
+    title: str | None = None
+
+
+class SurroundingPayload(BaseModel):
+    paragraph_before: str = ""
+    paragraph_at: str = ""
+    paragraph_after: str = ""
+    preceding_heading: dict | None = None
+
+
+class HeadingItem(BaseModel):
+    text: str
+    level: int
+    index: int
+
+
+class DocumentMetaPayload(BaseModel):
+    title: str | None = None
+    page_count: int | None = None
+    language: str | None = None
+    track_changes: bool = False
+    comments_count: int = 0
+
+
+class EditLogEntry(BaseModel):
+    kind: str
+    summary: str = ""
+    at: str | None = None
 
 
 class ContextRequest(BaseModel):
@@ -125,6 +167,10 @@ class ContextRequest(BaseModel):
     user_id: str | None = None
     selection: SelectionPayload | None = None
     document: DocumentPayload | None = None
+    surrounding: SurroundingPayload | None = None
+    headings: list[HeadingItem] | None = None
+    document_meta: DocumentMetaPayload | None = None
+    recent_edits: list[EditLogEntry] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -133,12 +179,24 @@ class ChatRequest(BaseModel):
     prompt: str
     selection: SelectionPayload | None = None
     document: DocumentPayload | None = None
+    surrounding: SurroundingPayload | None = None
+    headings: list[HeadingItem] | None = None
+    document_meta: DocumentMetaPayload | None = None
+    recent_edits: list[EditLogEntry] | None = None
 
 
 class LearnPassageRequest(BaseModel):
     passage: str
     source: str = ""
     note: str = ""
+
+
+class EditAckRequest(BaseModel):
+    """Add-in tells the backend an action was executed (or failed)."""
+
+    session_id: str
+    user_id: str | None = None
+    edits: list[EditLogEntry] = Field(default_factory=list)
 
 
 # ── Session helpers ─────────────────────────────────────────────────
@@ -162,6 +220,10 @@ async def _write_word_state(
     user_id: str,
     selection: SelectionPayload | None,
     document: DocumentPayload | None,
+    surrounding: SurroundingPayload | None = None,
+    headings: list[HeadingItem] | None = None,
+    document_meta: DocumentMetaPayload | None = None,
+    recent_edits: list[EditLogEntry] | None = None,
 ) -> None:
     """Persist the current Word context into ADK session state.
 
@@ -181,6 +243,17 @@ async def _write_word_state(
         state_delta[SELECTION_KEY] = selection.model_dump()
     if document is not None:
         state_delta[DOCUMENT_KEY] = document.model_dump()
+    if surrounding is not None:
+        state_delta[SURROUNDING_KEY] = surrounding.model_dump()
+    if headings is not None:
+        state_delta[HEADINGS_KEY] = [h.model_dump() for h in headings]
+    if document_meta is not None:
+        state_delta[DOC_META_KEY] = document_meta.model_dump()
+    if recent_edits is not None:
+        # Merge with whatever's already in state, keeping the last 25.
+        existing = list(session.state.get(RECENT_EDITS_KEY) or [])
+        existing.extend(e.model_dump() for e in recent_edits)
+        state_delta[RECENT_EDITS_KEY] = existing[-25:]
     if not state_delta:
         return
 
@@ -190,6 +263,28 @@ async def _write_word_state(
         actions=EventActions(state_delta=state_delta),
     )
     await session_service.append_event(session, event)
+
+
+async def _drain_pending_actions(session_id: str, user_id: str) -> list[dict]:
+    """Return and clear the agent's queued Word actions for this session."""
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+    except Exception:
+        return []
+    if session is None:
+        return []
+    pending = list(session.state.get(PENDING_ACTIONS_KEY) or [])
+    if not pending:
+        return []
+    event = Event(
+        invocation_id=f"drain-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta={PENDING_ACTIONS_KEY: []}),
+    )
+    await session_service.append_event(session, event)
+    return pending
 
 
 # ── Routes ──────────────────────────────────────────────────────────
@@ -209,7 +304,16 @@ async def push_context(req: ContextRequest):
     idempotent write.
     """
     user_id = req.user_id or DEFAULT_USER_ID
-    await _write_word_state(req.session_id, user_id, req.selection, req.document)
+    await _write_word_state(
+        req.session_id,
+        user_id,
+        req.selection,
+        req.document,
+        req.surrounding,
+        req.headings,
+        req.document_meta,
+        req.recent_edits,
+    )
     return {"status": "ok"}
 
 
@@ -219,9 +323,16 @@ async def _run_agent_once(
     prompt: str,
     selection: SelectionPayload | None,
     document: DocumentPayload | None,
-) -> str:
-    """Run the agent for a single user turn and return the final text."""
-    await _write_word_state(session_id, user_id, selection, document)
+    surrounding: SurroundingPayload | None = None,
+    headings: list[HeadingItem] | None = None,
+    document_meta: DocumentMetaPayload | None = None,
+    recent_edits: list[EditLogEntry] | None = None,
+) -> tuple[str, list[dict]]:
+    """Run the agent for a single user turn; return (final_text, pending_actions)."""
+    await _write_word_state(
+        session_id, user_id, selection, document,
+        surrounding, headings, document_meta, recent_edits,
+    )
 
     runner = Runner(
         app_name=APP_NAME,
@@ -238,7 +349,8 @@ async def _run_agent_once(
             for part in event.content.parts:
                 if getattr(part, "text", None):
                     final_text = part.text
-    return final_text
+    pending = await _drain_pending_actions(session_id, user_id)
+    return final_text, pending
 
 
 @app.post("/api/word/chat")
@@ -248,13 +360,14 @@ async def chat(req: ChatRequest):
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
     try:
-        text = await _run_agent_once(
-            req.session_id, user_id, req.prompt, req.selection, req.document
+        text, pending = await _run_agent_once(
+            req.session_id, user_id, req.prompt, req.selection, req.document,
+            req.surrounding, req.headings, req.document_meta, req.recent_edits,
         )
     except Exception as exc:
         logger.exception("Agent run failed")
         raise HTTPException(500, f"Agent error: {exc}") from exc
-    return {"status": "ok", "message": text}
+    return {"status": "ok", "message": text, "actions": pending}
 
 
 @app.post("/api/word/chat/stream")
@@ -264,7 +377,10 @@ async def chat_stream(req: ChatRequest):
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
 
-    await _write_word_state(req.session_id, user_id, req.selection, req.document)
+    await _write_word_state(
+        req.session_id, user_id, req.selection, req.document,
+        req.surrounding, req.headings, req.document_meta, req.recent_edits,
+    )
 
     async def event_gen():
         try:
@@ -286,7 +402,8 @@ async def chat_stream(req: ChatRequest):
                         yield f"event: tool_end\ndata: {json.dumps({'tool': resp.name})}\n\n"
                 if event.is_final_response() and event.content and event.content.parts:
                     text = "".join(p.text or "" for p in event.content.parts)
-                    yield f"event: final\ndata: {json.dumps({'text': text})}\n\n"
+                    pending = await _drain_pending_actions(req.session_id, user_id)
+                    yield f"event: final\ndata: {json.dumps({'text': text, 'actions': pending})}\n\n"
             yield "event: done\ndata: {}\n\n"
         except asyncio.CancelledError:
             raise
@@ -315,3 +432,23 @@ async def learn_passage(req: LearnPassageRequest):
         passage=req.passage, source=req.source, note=req.note
     )
     return result
+
+
+@app.post("/api/word/edits")
+async def record_edits(req: EditAckRequest):
+    """Add-in posts back the edits it just performed.
+
+    Each entry lands in the session's ``word:recent_edits`` log so the
+    agent's ``get_recent_edits`` tool can read them next turn. Cheap
+    fire-and-forget — the add-in does not block on the response.
+    """
+    if not req.edits:
+        return {"status": "skip"}
+    user_id = req.user_id or DEFAULT_USER_ID
+    await _write_word_state(
+        req.session_id, user_id,
+        selection=None, document=None,
+        surrounding=None, headings=None, document_meta=None,
+        recent_edits=req.edits,
+    )
+    return {"status": "ok", "stored": len(req.edits)}

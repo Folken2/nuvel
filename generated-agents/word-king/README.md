@@ -97,17 +97,74 @@ LLM-touching tests in `tests/test_agent.py` use ADK record/replay — see that f
 
 ## Word-specific tools
 
+### Context (read what the user is pointing at)
+
 | Tool | Purpose |
 |---|---|
-| `get_current_selection` | Read the user's currently-selected text from session state |
-| `get_full_document` | Read the user's full document body from session state |
+| `get_current_selection` | Selected text + style + flags (in_table, in_list, hyperlink, offsets) |
+| `get_full_document` | Full body text plus document title |
+| `get_surrounding_context` | Paragraph at caret, the one before, the one after, closest preceding heading |
+| `get_document_outline` | All headings with level + paragraph index — the doc's table of contents |
+| `get_document_meta` | Title, language, page count, track-changes flag, comment count |
+| `get_recent_edits` | Log of what the agent has already done this session |
+| `request_context_refresh` | Ask the add-in to push a fresh snapshot before the next step |
+
+### Actions (do things in the document)
+
+Action tools enqueue structured payloads. The add-in drains the queue when the
+agent's turn ends, executes each via Office.js, and posts back an edit log the
+agent reads via `get_recent_edits` next turn.
+
+| Tool | Effect |
+|---|---|
+| `insert_text(text, location)` | Insert plain text at selection / start / end |
+| `replace_selection(text)` | Replace the user's selection (the rewrite path) |
+| `apply_formatting(bold?, italic?, underline?, style?, target?)` | Bold/italic/underline + paragraph style (Heading1..6, Title, Quote, etc.) |
+| `insert_heading(text, level)` | New H1–H6 above the caret |
+| `insert_table(rows, has_header)` | Native Word table with optional bold header row |
+| `insert_comment(text, on)` | Attach a comment to selection or paragraph |
+| `find_and_replace(find, replace, match_case?, whole_word?)` | Body-wide search and replace |
+| `navigate_to_heading(heading_text)` | Scroll to a heading by substring match |
+| `delete_selection()` | Delete the selected range |
+
+### Drafting & voice
+
+| Tool | Purpose |
+|---|---|
 | `propose_section_outline` | Heuristic outline (headings + scope + target words) for a new section |
-| `rewrite_passage_hints` | Objective metrics on a passage (counts, longest sentence, hedges, passives, quotes, citations) plus classified-ask + length window for grounded rewrites |
-| `recall_writing_style` | Read consolidated voice rulebook from markdown memory |
-| `learn_style_from_passage` | Append a structured fingerprint from a kept passage |
-| `consolidate_writing_style` | Distill fingerprints into a rulebook |
+| `rewrite_passage_hints` | Objective metrics + classified-ask + length window for grounded rewrites |
+| `recall_writing_style` / `learn_style_from_passage` / `consolidate_writing_style` | Style memory loop |
 
 Plus everything the nuvel scaffold ships: `save_memory`/`recall_memory`, `cronjob`, `read_soul`/`update_soul`, `author_skill`, and the Composio MCP toolset.
+
+## Context & action pipeline
+
+```
+┌──────────────────────────────┐
+│ Word taskpane (Office.js)    │
+│  snapshotCurrentContext()    │  every 3s + on each turn:
+│  → selection / surrounding   │   POST /api/word/context
+│  → full doc / outline / meta │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Backend (FastAPI)            │
+│  /api/word/context  ─ write  │  state_delta into ADK session
+│  /api/word/chat     ─ run    │  agent → emits text + queued actions
+│  /api/word/edits    ─ ack    │  add-in writes back what it executed
+└──────────────┬───────────────┘
+               │ final event: {text, actions[]}
+               ▼
+┌──────────────────────────────┐
+│ Taskpane action executor     │
+│  wordActions.executeAction…  │  Word.run() dispatches every action
+│  → posts edit log back       │
+└──────────────────────────────┘
+```
+
+Round-trip: the agent **reads** rich context, **performs** structured actions,
+**learns** which edits stuck via the edit log on the next turn.
 
 ## Skills the agent reads at runtime
 
@@ -169,7 +226,7 @@ generated-agents/word-king/
 
 ## What's not in v1
 
-- **OOXML-aware rewrites.** Today the add-in exchanges plain text via `Word.run` + `getSelection().text` / `insertText`. Inline formatting (bold, hyperlinks, comments, tracked changes) on the selection round-trips as plain text and is lost. To preserve them, swap `selection.text` for OOXML reads via `getOoxml()` and have the agent emit OOXML fragments — guarded by a "preserve formatting" toggle.
+- **OOXML-aware rewrites of selection content.** `replace_selection` still round-trips as plain text — inline formatting inside the replaced range (bold runs, hyperlinks, footnote markers) is flattened. `apply_formatting` then lets the agent reapply bold/italic/style after the replace, but mid-paragraph runs aren't preserved end-to-end yet.
 - **Real-time selection-changed events.** Word doesn't expose a host-stable selectionChanged hook the way Outlook does for compose-body edits, so the taskpane polls every 3s. A future version can use `Word.run`'s document event subscriptions where supported.
 - **Edit-delta learning.** The learning loop fires on insert/accept; it doesn't yet diff the user's post-insert edits to feed back the strongest signal. Wire a follow-up snapshot ~30s after insert and POST the delta to `/api/word/learn-passage`.
 - **Production hosting.** The manifest URLs point at `https://localhost:3000`. Swap to your Vercel / Azure Static Web Apps origin for production builds.

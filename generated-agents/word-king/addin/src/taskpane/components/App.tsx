@@ -7,6 +7,7 @@ import {
   insertAtSelection,
   replaceSelection,
 } from "../helpers/wordContext";
+import { executeActionQueue, WordAction, ExecutedEdit } from "../helpers/wordActions";
 import {
   BACKEND_URL,
   apiHeaders,
@@ -48,6 +49,8 @@ interface Message {
   draft?: string | null;
   /** Set when the user clicks Insert/Replace — enables Undo. */
   applied?: AppliedDraft;
+  /** Actions the agent performed automatically this turn. */
+  executedEdits?: ExecutedEdit[];
   /** Re-runs this prompt when the user clicks Retry. */
   sourcePrompt?: string;
   traceId?: string;
@@ -350,7 +353,23 @@ const App: React.FC = () => {
     let cancelled = false;
     const refresh = async () => {
       const snap = await snapshotCurrentContext();
-      if (!cancelled) setCtx(snap);
+      if (cancelled || !snap) return;
+      setCtx(snap);
+      // Best-effort push so the agent's context tools see fresh state
+      // even on turns where the user hasn't typed anything yet.
+      fetch(`${BACKEND_URL}/api/word/context`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+          selection: snap.selection,
+          document: snap.document,
+          surrounding: snap.surrounding,
+          headings: snap.headings,
+          document_meta: snap.document_meta,
+        }),
+      }).catch(() => undefined);
     };
     void refresh();
     const t = setInterval(refresh, 3000);
@@ -505,6 +524,9 @@ const App: React.FC = () => {
       if (snap) {
         body.selection = snap.selection;
         body.document = snap.document;
+        body.surrounding = snap.surrounding;
+        body.headings = snap.headings;
+        body.document_meta = snap.document_meta;
       }
 
       const response = await fetchWithRetry(`${BACKEND_URL}/api/word/chat/stream`, {
@@ -530,6 +552,7 @@ const App: React.FC = () => {
 
       let lastEventTime = Date.now();
       const STALL_TIMEOUT_MS = 360_000;
+      let actionsFromFinal: WordAction[] = [];
 
       while (true) {
         const readPromise = reader.read();
@@ -579,9 +602,63 @@ const App: React.FC = () => {
             setLiveEvents([...collectedEvents]);
           } else if (evt === "final") {
             finalText = payload.text || "";
+            if (Array.isArray(payload.actions)) {
+              actionsFromFinal = payload.actions as WordAction[];
+            }
           } else if (evt === "error") {
             throw new Error(payload.message || "Backend error during streaming.");
           }
+        }
+      }
+
+      let executedEdits: ExecutedEdit[] = [];
+      let refreshRequested = false;
+      if (actionsFromFinal.length > 0) {
+        try {
+          const runnable = actionsFromFinal.filter((a) => {
+            if (a.kind === "refresh_context") {
+              refreshRequested = true;
+              return false;
+            }
+            return true;
+          });
+          executedEdits = await executeActionQueue(runnable);
+          if (executedEdits.length > 0) {
+            fetch(`${BACKEND_URL}/api/word/edits`, {
+              method: "POST",
+              headers: apiHeaders(),
+              body: JSON.stringify({
+                session_id: sessionIdRef.current,
+                user_id: userIdRef.current,
+                edits: executedEdits.map((e) => ({
+                  kind: e.kind,
+                  summary: e.summary + (e.ok ? "" : ` [failed: ${e.error}]`),
+                  at: e.at,
+                })),
+              }),
+            }).catch(() => undefined);
+          }
+        } catch (e) {
+          logger.warn("action execution failed", { error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      if (refreshRequested) {
+        const snap2 = await snapshotCurrentContext();
+        if (snap2) {
+          setCtx(snap2);
+          fetch(`${BACKEND_URL}/api/word/context`, {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              user_id: userIdRef.current,
+              selection: snap2.selection,
+              document: snap2.document,
+              surrounding: snap2.surrounding,
+              headings: snap2.headings,
+              document_meta: snap2.document_meta,
+            }),
+          }).catch(() => undefined);
         }
       }
 
@@ -593,6 +670,7 @@ const App: React.FC = () => {
         draft: extractDraft(finalText),
         sourcePrompt: prompt,
         durationMs,
+        executedEdits: executedEdits.length > 0 ? executedEdits : undefined,
       };
 
       setMessages((prev) => [...prev, agentMessage]);
@@ -759,6 +837,17 @@ const App: React.FC = () => {
               <div className="message-content">
                 {msg.role === "agent" ? <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown> : <p>{msg.content}</p>}
               </div>
+              {msg.role === "agent" && msg.executedEdits && msg.executedEdits.length > 0 && (
+                <div className="executed-edits">
+                  <div className="executed-edits-label">Did in your document</div>
+                  {msg.executedEdits.map((e, j) => (
+                    <div key={j} className={`executed-edit executed-edit-${e.ok ? "ok" : "err"}`}>
+                      <span className="executed-edit-icon">{e.ok ? "✓" : "✗"}</span>
+                      <span className="executed-edit-summary">{e.summary}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {msg.role === "agent" && msg.suggestions && msg.suggestions.length > 0 && !loading && i === messages.length - 1 && (
                 <div className="message-suggestions">
                   {msg.suggestions.map((s, j) => (
