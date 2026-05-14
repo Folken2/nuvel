@@ -74,6 +74,14 @@ module.exports = async (env, options) => {
               return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
             },
           },
+          {
+            from: "manifest*.json",
+            to: "[name][ext]",
+            transform(content) {
+              if (dev) return content;
+              return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
+            },
+          },
         ],
       }),
       new webpack.DefinePlugin({

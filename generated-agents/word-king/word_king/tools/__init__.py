@@ -23,6 +23,7 @@ from .awakening_tools import awakening_tool_list
 from .composio_mcp import build_composio_mcp_toolset
 
 from .word_context import word_context_tool_list
+from .word_actions import word_action_tool_list
 from .style_tools import style_tool_list
 from .draft_tools import draft_tool_list
 
@@ -37,6 +38,7 @@ def get_tools() -> list:
     tools.extend(awakening_tool_list)
 
     tools.extend(word_context_tool_list)
+    tools.extend(word_action_tool_list)
     tools.extend(style_tool_list)
     tools.extend(draft_tool_list)
 

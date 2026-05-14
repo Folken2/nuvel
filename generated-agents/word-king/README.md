@@ -77,11 +77,54 @@ npm install
 npm run dev-server
 ```
 
-Sideload `manifest.xml`:
+Sideload `manifest.xml` (default) or `manifest.json` (unified Microsoft 365 manifest):
 
-- **Word on the web** → Insert → My Add-ins → Upload My Add-in → choose `manifest.xml`.
+- **Word on the web** → Insert → My Add-ins → Upload My Add-in → choose `manifest.xml` or `manifest.json`.
 - **Word desktop (Win/Mac)** → Insert → My Add-ins → Manage My Add-ins → Upload My Add-in → from file.
 - **Microsoft 365 admin tenant** → Integrated apps → Upload custom apps.
+
+#### Choosing a manifest format
+
+Both manifests describe the same add-in identity, task pane URL, and ribbon commands. Pick one per sideload session:
+
+```bash
+# Default — uses the XML add-in only manifest.
+npm start
+
+# Opt in to the unified JSON manifest (Microsoft 365 / Teams style).
+OFFICE_MANIFEST=json npm start
+# or, equivalently:
+npm run start:json
+```
+
+`stop` / `validate` work the same way (`npm run stop:json`, `npm run validate:json`). Validate locally with:
+
+```bash
+npx office-addin-manifest validate manifest.json
+npx office-addin-manifest validate manifest.xml
+```
+
+Known limitations:
+
+- The unified JSON manifest requires a Microsoft 365 subscription and a recent Office build (Word on Windows 2501+ / Mac 16.103+ / Office on the web). On older Office builds, sideload `manifest.xml`.
+- Event-based activation, integrated keyboard shortcuts, and newer Microsoft 365 platform features are only available via `manifest.json`.
+- The XML manifest stays the safe, broadly-compatible default — `npm start` keeps using it unless you set `OFFICE_MANIFEST=json`.
+
+#### JSON-manifest-only features
+
+These activate only when sideloading `manifest.json`. The XML build keeps its existing behavior.
+
+- **Keyboard shortcuts** (`extensions.keyboardShortcuts`, requires SharedRuntime 1.1)
+  - `Ctrl+Alt+W` (Mac: `Cmd+Shift+W`) — show the word-king task pane.
+  - `Ctrl+Alt+R` (Mac: `Cmd+Shift+R`) — run **Rewrite selection** on the current selection.
+- **Early document-open snapshot** — the add-in posts a lightweight title + heading-outline + word-count snapshot to `POST /api/word/document-opened` on first load. The agent reads it via the `get_opened_document_snapshot` tool so it can answer "what doc did I just open?" without waiting on a chat turn.
+- **Push-driven context refresh** — the taskpane subscribes to `Word.Document.onSelectionChanged` / `onParagraphAdded` / `onParagraphChanged` and re-pushes context only when something changes, with a 15s safety-net poll. (Works in both manifests; the manifest-driven event is the long-term home once Microsoft ships it for Word.)
+
+Intentionally not declared:
+
+- **`autoRunEvents` for Word** — the unified manifest equivalent of Word's `OnDocumentOpened` is documented as *"Not yet supported"* by Microsoft. Adding it would fail manifest validation. The add-in is wired to fire `onDocumentOpenedHandler` / `onNewDocumentCreatedHandler` from the taskpane today; flipping it to manifest-declared is a one-line change once the schema lands.
+- **Context-aware ribbon** — for Word, the only valid value of `extensions.ribbons[].contexts` is `"default"`. `readMode`/selection-context groups exist for Outlook only.
+- **Smart Alerts (`OnMessageSend`-style)** — Word has no analogous send-time event. Not applicable.
 
 In Word you'll see a **word-king** group on the Home tab:
 - **Open word-king** — taskpane chat with quick actions and a context strip showing what the agent currently sees (current selection size, document size).
@@ -97,17 +140,74 @@ LLM-touching tests in `tests/test_agent.py` use ADK record/replay — see that f
 
 ## Word-specific tools
 
+### Context (read what the user is pointing at)
+
 | Tool | Purpose |
 |---|---|
-| `get_current_selection` | Read the user's currently-selected text from session state |
-| `get_full_document` | Read the user's full document body from session state |
+| `get_current_selection` | Selected text + style + flags (in_table, in_list, hyperlink, offsets) |
+| `get_full_document` | Full body text plus document title |
+| `get_surrounding_context` | Paragraph at caret, the one before, the one after, closest preceding heading |
+| `get_document_outline` | All headings with level + paragraph index — the doc's table of contents |
+| `get_document_meta` | Title, language, page count, track-changes flag, comment count |
+| `get_recent_edits` | Log of what the agent has already done this session |
+| `request_context_refresh` | Ask the add-in to push a fresh snapshot before the next step |
+
+### Actions (do things in the document)
+
+Action tools enqueue structured payloads. The add-in drains the queue when the
+agent's turn ends, executes each via Office.js, and posts back an edit log the
+agent reads via `get_recent_edits` next turn.
+
+| Tool | Effect |
+|---|---|
+| `insert_text(text, location)` | Insert plain text at selection / start / end |
+| `replace_selection(text)` | Replace the user's selection (the rewrite path) |
+| `apply_formatting(bold?, italic?, underline?, style?, target?)` | Bold/italic/underline + paragraph style (Heading1..6, Title, Quote, etc.) |
+| `insert_heading(text, level)` | New H1–H6 above the caret |
+| `insert_table(rows, has_header)` | Native Word table with optional bold header row |
+| `insert_comment(text, on)` | Attach a comment to selection or paragraph |
+| `find_and_replace(find, replace, match_case?, whole_word?)` | Body-wide search and replace |
+| `navigate_to_heading(heading_text)` | Scroll to a heading by substring match |
+| `delete_selection()` | Delete the selected range |
+
+### Drafting & voice
+
+| Tool | Purpose |
+|---|---|
 | `propose_section_outline` | Heuristic outline (headings + scope + target words) for a new section |
-| `rewrite_passage_hints` | Objective metrics on a passage (counts, longest sentence, hedges, passives, quotes, citations) plus classified-ask + length window for grounded rewrites |
-| `recall_writing_style` | Read consolidated voice rulebook from markdown memory |
-| `learn_style_from_passage` | Append a structured fingerprint from a kept passage |
-| `consolidate_writing_style` | Distill fingerprints into a rulebook |
+| `rewrite_passage_hints` | Objective metrics + classified-ask + length window for grounded rewrites |
+| `recall_writing_style` / `learn_style_from_passage` / `consolidate_writing_style` | Style memory loop |
 
 Plus everything the nuvel scaffold ships: `save_memory`/`recall_memory`, `cronjob`, `read_soul`/`update_soul`, `author_skill`, and the Composio MCP toolset.
+
+## Context & action pipeline
+
+```
+┌──────────────────────────────┐
+│ Word taskpane (Office.js)    │
+│  snapshotCurrentContext()    │  every 3s + on each turn:
+│  → selection / surrounding   │   POST /api/word/context
+│  → full doc / outline / meta │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Backend (FastAPI)            │
+│  /api/word/context  ─ write  │  state_delta into ADK session
+│  /api/word/chat     ─ run    │  agent → emits text + queued actions
+│  /api/word/edits    ─ ack    │  add-in writes back what it executed
+└──────────────┬───────────────┘
+               │ final event: {text, actions[]}
+               ▼
+┌──────────────────────────────┐
+│ Taskpane action executor     │
+│  wordActions.executeAction…  │  Word.run() dispatches every action
+│  → posts edit log back       │
+└──────────────────────────────┘
+```
+
+Round-trip: the agent **reads** rich context, **performs** structured actions,
+**learns** which edits stuck via the edit log on the next turn.
 
 ## Skills the agent reads at runtime
 
@@ -144,6 +244,7 @@ generated-agents/word-king/
 │   └── README.md
 ├── addin/                            # NEW — Word add-in (Office.js + React)
 │   ├── manifest.xml
+│   ├── manifest.json
 │   ├── package.json
 │   ├── webpack.config.js
 │   └── src/
@@ -169,7 +270,7 @@ generated-agents/word-king/
 
 ## What's not in v1
 
-- **OOXML-aware rewrites.** Today the add-in exchanges plain text via `Word.run` + `getSelection().text` / `insertText`. Inline formatting (bold, hyperlinks, comments, tracked changes) on the selection round-trips as plain text and is lost. To preserve them, swap `selection.text` for OOXML reads via `getOoxml()` and have the agent emit OOXML fragments — guarded by a "preserve formatting" toggle.
+- **OOXML-aware rewrites of selection content.** `replace_selection` still round-trips as plain text — inline formatting inside the replaced range (bold runs, hyperlinks, footnote markers) is flattened. `apply_formatting` then lets the agent reapply bold/italic/style after the replace, but mid-paragraph runs aren't preserved end-to-end yet.
 - **Real-time selection-changed events.** Word doesn't expose a host-stable selectionChanged hook the way Outlook does for compose-body edits, so the taskpane polls every 3s. A future version can use `Word.run`'s document event subscriptions where supported.
 - **Edit-delta learning.** The learning loop fires on insert/accept; it doesn't yet diff the user's post-insert edits to feed back the strongest signal. Wire a follow-up snapshot ~30s after insert and POST the delta to `/api/word/learn-passage`.
 - **Production hosting.** The manifest URLs point at `https://localhost:3000`. Swap to your Vercel / Azure Static Web Apps origin for production builds.

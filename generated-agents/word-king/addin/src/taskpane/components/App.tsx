@@ -3,10 +3,12 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   snapshotCurrentContext,
+  subscribeToDocumentEvents,
   WordContext,
   insertAtSelection,
   replaceSelection,
 } from "../helpers/wordContext";
+import { executeActionQueue, WordAction, ExecutedEdit } from "../helpers/wordActions";
 import {
   BACKEND_URL,
   apiHeaders,
@@ -48,6 +50,8 @@ interface Message {
   draft?: string | null;
   /** Set when the user clicks Insert/Replace — enables Undo. */
   applied?: AppliedDraft;
+  /** Actions the agent performed automatically this turn. */
+  executedEdits?: ExecutedEdit[];
   /** Re-runs this prompt when the user clicks Retry. */
   sourcePrompt?: string;
   traceId?: string;
@@ -345,16 +349,87 @@ const App: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
-  /* ── Word context polling ── */
+  /* ── Word context: event-driven refresh, with polling as a safety net ── */
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let lastPushAt = 0;
+    const MIN_INTERVAL_MS = 400;
+
     const refresh = async () => {
-      const snap = await snapshotCurrentContext();
-      if (!cancelled) setCtx(snap);
+      const now = Date.now();
+      if (inFlight || now - lastPushAt < MIN_INTERVAL_MS) return;
+      inFlight = true;
+      try {
+        const snap = await snapshotCurrentContext();
+        if (cancelled || !snap) return;
+        setCtx(snap);
+        lastPushAt = Date.now();
+        fetch(`${BACKEND_URL}/api/word/context`, {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            user_id: userIdRef.current,
+            selection: snap.selection,
+            document: snap.document,
+            surrounding: snap.surrounding,
+            headings: snap.headings,
+            document_meta: snap.document_meta,
+          }),
+        }).catch(() => undefined);
+      } finally {
+        inFlight = false;
+      }
     };
-    void refresh();
-    const t = setInterval(refresh, 3000);
-    return () => { cancelled = true; clearInterval(t); };
+
+    // Initial snapshot + one-shot document-opened ping so the agent has
+    // an early summary of what the user just opened.
+    void (async () => {
+      await refresh();
+      try {
+        const snap = await snapshotCurrentContext();
+        if (!cancelled && snap) {
+          fetch(`${BACKEND_URL}/api/word/document-opened`, {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              user_id: userIdRef.current,
+              is_new: (snap.document.word_count || 0) === 0,
+              snapshot: {
+                title: snap.document.title,
+                word_count: snap.document.word_count,
+                paragraph_count: snap.document.paragraph_count,
+                headings: snap.headings,
+              },
+            }),
+          }).catch(() => undefined);
+        }
+      } catch { /* ignore */ }
+    })();
+
+    // Event-driven refresh — only fires when the user actually moves
+    // the caret or edits paragraphs. Works in both XML and JSON
+    // manifests; older hosts fall back to the polling timer below.
+    let disposeEvents: (() => Promise<void>) | null = null;
+    subscribeToDocumentEvents(() => { void refresh(); }).then((handle) => {
+      if (cancelled) {
+        void handle.dispose();
+        return;
+      }
+      disposeEvents = handle.dispose;
+    });
+
+    // Safety-net poll. Long interval since events handle the common
+    // case; this catches hosts that don't surface paragraph events.
+    const t = setInterval(refresh, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      if (disposeEvents) void disposeEvents();
+    };
   }, []);
 
   const toggleTheme = () => setTheme((t) => (t === "light" ? "dark" : "light"));
@@ -505,6 +580,9 @@ const App: React.FC = () => {
       if (snap) {
         body.selection = snap.selection;
         body.document = snap.document;
+        body.surrounding = snap.surrounding;
+        body.headings = snap.headings;
+        body.document_meta = snap.document_meta;
       }
 
       const response = await fetchWithRetry(`${BACKEND_URL}/api/word/chat/stream`, {
@@ -530,6 +608,7 @@ const App: React.FC = () => {
 
       let lastEventTime = Date.now();
       const STALL_TIMEOUT_MS = 360_000;
+      let actionsFromFinal: WordAction[] = [];
 
       while (true) {
         const readPromise = reader.read();
@@ -579,9 +658,63 @@ const App: React.FC = () => {
             setLiveEvents([...collectedEvents]);
           } else if (evt === "final") {
             finalText = payload.text || "";
+            if (Array.isArray(payload.actions)) {
+              actionsFromFinal = payload.actions as WordAction[];
+            }
           } else if (evt === "error") {
             throw new Error(payload.message || "Backend error during streaming.");
           }
+        }
+      }
+
+      let executedEdits: ExecutedEdit[] = [];
+      let refreshRequested = false;
+      if (actionsFromFinal.length > 0) {
+        try {
+          const runnable = actionsFromFinal.filter((a) => {
+            if (a.kind === "refresh_context") {
+              refreshRequested = true;
+              return false;
+            }
+            return true;
+          });
+          executedEdits = await executeActionQueue(runnable);
+          if (executedEdits.length > 0) {
+            fetch(`${BACKEND_URL}/api/word/edits`, {
+              method: "POST",
+              headers: apiHeaders(),
+              body: JSON.stringify({
+                session_id: sessionIdRef.current,
+                user_id: userIdRef.current,
+                edits: executedEdits.map((e) => ({
+                  kind: e.kind,
+                  summary: e.summary + (e.ok ? "" : ` [failed: ${e.error}]`),
+                  at: e.at,
+                })),
+              }),
+            }).catch(() => undefined);
+          }
+        } catch (e) {
+          logger.warn("action execution failed", { error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      if (refreshRequested) {
+        const snap2 = await snapshotCurrentContext();
+        if (snap2) {
+          setCtx(snap2);
+          fetch(`${BACKEND_URL}/api/word/context`, {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              user_id: userIdRef.current,
+              selection: snap2.selection,
+              document: snap2.document,
+              surrounding: snap2.surrounding,
+              headings: snap2.headings,
+              document_meta: snap2.document_meta,
+            }),
+          }).catch(() => undefined);
         }
       }
 
@@ -593,6 +726,7 @@ const App: React.FC = () => {
         draft: extractDraft(finalText),
         sourcePrompt: prompt,
         durationMs,
+        executedEdits: executedEdits.length > 0 ? executedEdits : undefined,
       };
 
       setMessages((prev) => [...prev, agentMessage]);
@@ -759,6 +893,17 @@ const App: React.FC = () => {
               <div className="message-content">
                 {msg.role === "agent" ? <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown> : <p>{msg.content}</p>}
               </div>
+              {msg.role === "agent" && msg.executedEdits && msg.executedEdits.length > 0 && (
+                <div className="executed-edits">
+                  <div className="executed-edits-label">Did in your document</div>
+                  {msg.executedEdits.map((e, j) => (
+                    <div key={j} className={`executed-edit executed-edit-${e.ok ? "ok" : "err"}`}>
+                      <span className="executed-edit-icon">{e.ok ? "✓" : "✗"}</span>
+                      <span className="executed-edit-summary">{e.summary}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {msg.role === "agent" && msg.suggestions && msg.suggestions.length > 0 && !loading && i === messages.length - 1 && (
                 <div className="message-suggestions">
                   {msg.suggestions.map((s, j) => (
