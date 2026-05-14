@@ -83,11 +83,32 @@ npm install
 npm run dev-server
 ```
 
-Sideload `manifest.xml`:
+Sideload `manifest.xml` (default) or `manifest.json` (unified Microsoft 365 manifest):
 
 - **PowerPoint on the web** → Insert → Add-ins → Upload My Add-in → Browse to `manifest.xml`.
 - **PowerPoint desktop (Win/Mac)** → Insert → Get Add-ins → My Add-ins → Upload My Add-in.
 - **Microsoft 365 admin tenant** → Integrated apps → Upload custom apps.
+
+The add-in ships **both manifest formats** pointing at the same task pane / commands / ribbon group, so you can sideload either one. The XML manifest is still the default (broadest Office build coverage); the JSON manifest is the path forward for newer Microsoft 365 / Teams-integrated tooling and event-based activation.
+
+Switch formats from the `addin/` directory in any of these equivalent ways:
+
+```bash
+# default — uses manifest.xml
+npm start
+
+# opt in to the unified JSON manifest
+OFFICE_MANIFEST=json npm start
+# or
+npm run start:json
+```
+
+The same `OFFICE_MANIFEST` env var works for `npm stop` and `npm run validate`. Direct scripts `start:xml` / `start:json` / `validate:xml` / `validate:json` bypass the env var entirely. Validate either manifest standalone with `npx office-addin-manifest validate addin/manifest.{xml,json}`.
+
+Known limitations:
+- The **JSON manifest** is required for the newer unified-manifest event-based activation surfaces, but is only fully supported on recent Microsoft 365 builds. Use the XML manifest if you're sideloading into older Office desktop builds, or onto PowerPoint on the web tenants that still require the XML schema.
+- The two manifests share the same add-in `id` — sideload only one at a time per Office profile to avoid duplicate registrations.
+- The current published `office-addin-manifest` validator lags the actual devPreview schema and will flag `actions`, `builtInGroupId`, and `overriddenByRibbonApi` as unknown properties on a *valid* unified manifest (the same errors fire against Microsoft's own canonical PowerPoint sample). The manifest still sideloads and runs in Office; ignore those three validator complaints until the validator catches up.
 
 In PowerPoint you'll see a **ppt-king** group on the Home tab with three buttons:
 - **Open ppt-king** — taskpane chat with mode-aware quick actions and a context strip showing what the agent currently sees.
@@ -188,7 +209,8 @@ generated-agents/ppt-king/
 │   ├── main.py
 │   └── README.md
 ├── addin/                            # NEW — PowerPoint add-in (Office.js + React)
-│   ├── manifest.xml                  # TaskPaneApp, Host=Presentation
+│   ├── manifest.xml                  # TaskPaneApp, Host=Presentation (default)
+│   ├── manifest.json                 # Unified M365 manifest (alt; set OFFICE_MANIFEST=json)
 │   ├── package.json
 │   ├── webpack.config.js
 │   └── src/

@@ -1,0 +1,191 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/vDevPreview/MicrosoftTeams.schema.json",
+  "manifestVersion": "devPreview",
+  "version": "1.0.0",
+  "id": "9b54a781-2c8d-4f1f-87a5-7a4f9d61c4d2",
+  "localizationInfo": {
+    "defaultLanguageTag": "en-us"
+  },
+  "developer": {
+    "name": "ppt-king",
+    "websiteUrl": "https://localhost:3000/",
+    "privacyUrl": "https://localhost:3000/",
+    "termsOfUseUrl": "https://localhost:3000/"
+  },
+  "name": {
+    "short": "ppt-king",
+    "full": "ppt-king"
+  },
+  "description": {
+    "short": "King of PowerPoint — outline, tighten, restructure decks.",
+    "full": "King of PowerPoint — outline decks, tighten slides, suggest structure, learn your slide style."
+  },
+  "icons": {
+    "outline": "assets/icon-32.png",
+    "color": "assets/icon-80.png"
+  },
+  "accentColor": "#230201",
+  "validDomains": [
+    "https://localhost:3000"
+  ],
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "Document.ReadWrite.User",
+          "type": "Delegated"
+        }
+      ]
+    }
+  },
+  "extensions": [
+    {
+      "requirements": {
+        "scopes": [
+          "presentation"
+        ]
+      },
+      "runtimes": [
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "AddinCommands", "minVersion": "1.1" }
+            ],
+            "formFactors": ["desktop"]
+          },
+          "id": "TaskPaneRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/taskpane.html"
+          },
+          "lifetime": "short",
+          "actions": [
+            { "id": "OpenTaskPane", "type": "openPage" }
+          ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "AddinCommands", "minVersion": "1.1" }
+            ],
+            "formFactors": ["desktop"]
+          },
+          "id": "CommandsRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            { "id": "tightenCurrentSlide", "type": "executeFunction" },
+            { "id": "suggestReorder", "type": "executeFunction" }
+          ]
+        }
+      ],
+      "ribbons": [
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "AddinCommands", "minVersion": "1.1" }
+            ],
+            "scopes": ["presentation"],
+            "formFactors": ["desktop"]
+          },
+          "contexts": ["default"],
+          "tabs": [
+            {
+              "builtInTabId": "TabHome",
+              "groups": [
+                {
+                  "id": "pptKingGroup",
+                  "label": "ppt-king",
+                  "icons": [
+                    { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                    { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                    { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                  ],
+                  "controls": [
+                    {
+                      "id": "OpenTaskpaneButton",
+                      "type": "button",
+                      "label": "Open ppt-king",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Open ppt-king",
+                        "description": "Outline a deck, tighten the active slide, or restructure with ppt-king."
+                      },
+                      "actionId": "OpenTaskPane",
+                      "enabled": true
+                    },
+                    {
+                      "id": "TightenSlideButton",
+                      "type": "button",
+                      "label": "Tighten this slide",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Tighten this slide",
+                        "description": "Apply the slide-tightening rubric to the active slide."
+                      },
+                      "actionId": "tightenCurrentSlide",
+                      "enabled": true
+                    },
+                    {
+                      "id": "SuggestReorderButton",
+                      "type": "button",
+                      "label": "Suggest reorder",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Suggest reorder",
+                        "description": "Get reorder suggestions only when they earn their cost."
+                      },
+                      "actionId": "suggestReorder",
+                      "enabled": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "alternates": [
+        {
+          "alternateIcons": {
+            "icon": {
+              "size": 32,
+              "url": "https://localhost:3000/assets/icon-32.png"
+            },
+            "highResolutionIcon": {
+              "size": 80,
+              "url": "https://localhost:3000/assets/icon-80.png"
+            }
+          }
+        }
+      ],
+      "getStartedMessages": [
+        {
+          "requirements": {
+            "scopes": ["presentation"],
+            "formFactors": ["desktop"]
+          },
+          "title": "ppt-king is ready.",
+          "description": "Open the Home tab and click 'Open ppt-king' to start outlining, tightening, or restructuring your deck.",
+          "learnMoreUrl": "https://go.microsoft.com/fwlink/?LinkId=276812"
+        }
+      ]
+    }
+  ]
+}
