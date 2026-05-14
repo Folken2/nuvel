@@ -7,9 +7,14 @@ These tools surface that state to the agent so it can act on "this email"
 or "my draft" without re-asking the user.
 
 State keys (per session):
-    outlook:current_compose   {body, subject, to, cc, mode, conversation_id}
-    outlook:selected_message  {id, subject, from, to, body, conversation_id,
-                               received, has_attachments}
+    outlook:current_compose   compose snapshot incl. body, subject, to/cc/bcc,
+                              mode (newMail|reply|forward), selection, cursor,
+                              attachments, importance, conversation_id
+    outlook:selected_message  read-mode snapshot incl. id, subject, from, to,
+                              cc, body, conversation_id, received, folder,
+                              categories, flag, has_attachments, attachments
+    outlook:account           user account info (email, displayName, timeZone)
+    outlook:recent_actions    rolling log of actions executed in this session
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ from google.adk.tools import FunctionTool, ToolContext
 
 COMPOSE_KEY = "outlook:current_compose"
 MESSAGE_KEY = "outlook:selected_message"
+ACCOUNT_KEY = "outlook:account"
+RECENT_ACTIONS_KEY = "outlook:recent_actions"
 
 
 def get_current_compose(tool_context: ToolContext) -> dict:
@@ -25,14 +32,19 @@ def get_current_compose(tool_context: ToolContext) -> dict:
 
     Call this BEFORE drafting or coaching whenever the user references "my
     draft", "fix this", "make it shorter", or any deictic reference to what
-    they are writing right now. The taskpane pushes a fresh snapshot into
-    session state every time the compose body changes.
+    they are writing right now. The taskpane pushes a fresh snapshot every
+    time the compose body changes.
+
+    The payload now includes the user's current selection inside the body
+    (``selection`` is empty string when nothing is selected) plus attachment
+    metadata and importance. Use ``selection`` to know exactly which span
+    the user wants you to operate on when they say "fix this".
 
     Returns:
-        ``{"status": "ok", "body": str, "subject": str, "to": list[str],
-        "cc": list[str], "mode": "newMail" | "reply" | "forward",
-        "conversation_id": str | None}`` when a compose is active, otherwise
-        ``{"status": "no_compose", "message": str}``.
+        On success: ``{"status": "ok", "body", "subject", "to", "cc", "bcc",
+        "mode", "selection", "selection_is_html", "attachments",
+        "importance", "conversation_id"}``.
+        Otherwise ``{"status": "no_compose", "message": str}``.
     """
     payload = tool_context.state.get(COMPOSE_KEY)
     if not payload:
@@ -46,13 +58,13 @@ def get_current_compose(tool_context: ToolContext) -> dict:
 def get_selected_message(tool_context: ToolContext) -> dict:
     """Return the message the user has selected in their inbox.
 
-    Use this when the user references "this email", "the message I'm
-    reading", or asks for a reply/summary of what they are looking at.
-    For cross-folder or historical search, use the Composio ``OUTLOOK_*``
-    tools instead — they hit the full mailbox.
+    Use when the user references "this email", "the message I'm reading",
+    or asks for a reply/summary of what they are looking at. For cross-
+    folder or historical search, use the Composio ``OUTLOOK_*`` tools.
 
-    Returns:
-        Message payload or ``{"status": "no_selection", "message": str}``.
+    Payload now includes folder name, categories, flag state, and a list
+    of attachment descriptors (name, size, type). Use those before
+    suggesting moves, flags, or attachment-based replies.
     """
     payload = tool_context.state.get(MESSAGE_KEY)
     if not payload:
@@ -63,7 +75,38 @@ def get_selected_message(tool_context: ToolContext) -> dict:
     return {"status": "ok", **payload}
 
 
+def get_outlook_account(tool_context: ToolContext) -> dict:
+    """Return the user's Outlook account info (email, display name, timezone).
+
+    Useful for personalizing drafts (sign-off, first-person voice) and for
+    knowing which inbox we're operating in when the user has multiple.
+    """
+    payload = tool_context.state.get(ACCOUNT_KEY)
+    if not payload:
+        return {"status": "unknown", "message": "Account info not yet pushed by the add-in."}
+    return {"status": "ok", **payload}
+
+
+def get_full_outlook_state(tool_context: ToolContext) -> dict:
+    """Return everything the agent knows about the user's current Outlook view.
+
+    One-shot snapshot of compose + selected message + account + recent
+    actions. Prefer the targeted tools when you only need one piece; this
+    is the right call when you're planning a multi-step operation and
+    want the full picture in one read.
+    """
+    return {
+        "status": "ok",
+        "compose": tool_context.state.get(COMPOSE_KEY),
+        "selected": tool_context.state.get(MESSAGE_KEY),
+        "account": tool_context.state.get(ACCOUNT_KEY),
+        "recent_actions": list(tool_context.state.get(RECENT_ACTIONS_KEY) or [])[-10:],
+    }
+
+
 outlook_context_tool_list = [
     FunctionTool(get_current_compose),
     FunctionTool(get_selected_message),
+    FunctionTool(get_outlook_account),
+    FunctionTool(get_full_outlook_state),
 ]
