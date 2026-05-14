@@ -62,7 +62,42 @@
           "actions": [
             {
               "id": "rewriteCurrentSelection",
-              "type": "executeFunction"
+              "type": "executeFunction",
+              "displayName": "Rewrite the current selection in your voice"
+            },
+            {
+              "id": "showTaskpane",
+              "type": "executeFunction",
+              "displayName": "Show the word-king task pane"
+            }
+          ]
+        }
+      ],
+      "keyboardShortcuts": [
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "SharedRuntime", "minVersion": "1.1" }
+            ]
+          },
+          "shortcuts": [
+            {
+              "key": {
+                "default": "Ctrl+Alt+W",
+                "mac": "Command+Shift+W",
+                "web": "Ctrl+Alt+W",
+                "windows": "Ctrl+Alt+W"
+              },
+              "actionId": "showTaskpane"
+            },
+            {
+              "key": {
+                "default": "Ctrl+Alt+R",
+                "mac": "Command+Shift+R",
+                "web": "Ctrl+Alt+R",
+                "windows": "Ctrl+Alt+R"
+              },
+              "actionId": "rewriteCurrentSelection"
             }
           ]
         }

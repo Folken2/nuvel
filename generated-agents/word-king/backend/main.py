@@ -64,6 +64,7 @@ from word_king.tools.word_context import (
     DOC_META_KEY,
     RECENT_EDITS_KEY,
     PENDING_ACTIONS_KEY,
+    OPENED_DOCUMENT_KEY,
 )
 from word_king.tools.style_tools import learn_style_from_passage
 
@@ -199,6 +200,28 @@ class EditAckRequest(BaseModel):
     edits: list[EditLogEntry] = Field(default_factory=list)
 
 
+class OpenedDocumentSnapshot(BaseModel):
+    title: str | None = None
+    word_count: int = 0
+    paragraph_count: int = 0
+    headings: list[HeadingItem] = Field(default_factory=list)
+
+
+class DocumentOpenedRequest(BaseModel):
+    """Lightweight document-open snapshot pushed by the add-in.
+
+    The add-in fires this from the taskpane's first load (and, once the
+    unified-manifest schema supports it for Word, from an
+    autoRunEvents-triggered handler). ``is_new`` separates "user opened
+    an existing doc" from "user just started a blank doc".
+    """
+
+    session_id: str
+    user_id: str | None = None
+    is_new: bool = False
+    snapshot: OpenedDocumentSnapshot
+
+
 # ── Session helpers ─────────────────────────────────────────────────
 
 
@@ -315,6 +338,44 @@ async def push_context(req: ContextRequest):
         req.recent_edits,
     )
     return {"status": "ok"}
+
+
+@app.post("/api/word/document-opened")
+async def document_opened(req: DocumentOpenedRequest):
+    """Stash an early document-open snapshot in session state.
+
+    Fires from the add-in as soon as Word boots — before the taskpane
+    is open. The agent reads this via ``get_opened_document_snapshot``
+    so it can answer "what doc did I just open?" or proactively suggest
+    a template for a blank document, without waiting on the first
+    chat-turn context push.
+
+    TODO(agent): emit a proactive suggestion here for ``is_new=True``
+    documents (e.g. "want me to draft a starter outline?") via the
+    cron / push channel once that surface is wired into the taskpane.
+    """
+    user_id = req.user_id or DEFAULT_USER_ID
+    from datetime import datetime, timezone
+
+    await _ensure_session(req.session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    if session is None:
+        raise HTTPException(500, "Failed to load session after creation")
+
+    payload = {
+        "is_new": req.is_new,
+        "snapshot": req.snapshot.model_dump(),
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+    event = Event(
+        invocation_id=f"opened-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta={OPENED_DOCUMENT_KEY: payload}),
+    )
+    await session_service.append_event(session, event)
+    return {"status": "ok", "is_new": req.is_new}
 
 
 async def _run_agent_once(

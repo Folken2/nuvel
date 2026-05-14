@@ -110,6 +110,22 @@ Known limitations:
 - Event-based activation, integrated keyboard shortcuts, and newer Microsoft 365 platform features are only available via `manifest.json`.
 - The XML manifest stays the safe, broadly-compatible default — `npm start` keeps using it unless you set `OFFICE_MANIFEST=json`.
 
+#### JSON-manifest-only features
+
+These activate only when sideloading `manifest.json`. The XML build keeps its existing behavior.
+
+- **Keyboard shortcuts** (`extensions.keyboardShortcuts`, requires SharedRuntime 1.1)
+  - `Ctrl+Alt+W` (Mac: `Cmd+Shift+W`) — show the word-king task pane.
+  - `Ctrl+Alt+R` (Mac: `Cmd+Shift+R`) — run **Rewrite selection** on the current selection.
+- **Early document-open snapshot** — the add-in posts a lightweight title + heading-outline + word-count snapshot to `POST /api/word/document-opened` on first load. The agent reads it via the `get_opened_document_snapshot` tool so it can answer "what doc did I just open?" without waiting on a chat turn.
+- **Push-driven context refresh** — the taskpane subscribes to `Word.Document.onSelectionChanged` / `onParagraphAdded` / `onParagraphChanged` and re-pushes context only when something changes, with a 15s safety-net poll. (Works in both manifests; the manifest-driven event is the long-term home once Microsoft ships it for Word.)
+
+Intentionally not declared:
+
+- **`autoRunEvents` for Word** — the unified manifest equivalent of Word's `OnDocumentOpened` is documented as *"Not yet supported"* by Microsoft. Adding it would fail manifest validation. The add-in is wired to fire `onDocumentOpenedHandler` / `onNewDocumentCreatedHandler` from the taskpane today; flipping it to manifest-declared is a one-line change once the schema lands.
+- **Context-aware ribbon** — for Word, the only valid value of `extensions.ribbons[].contexts` is `"default"`. `readMode`/selection-context groups exist for Outlook only.
+- **Smart Alerts (`OnMessageSend`-style)** — Word has no analogous send-time event. Not applicable.
+
 In Word you'll see a **word-king** group on the Home tab:
 - **Open word-king** — taskpane chat with quick actions and a context strip showing what the agent currently sees (current selection size, document size).
 - **Rewrite selection** — one-click voice-aware rewrite of whatever's currently highlighted.

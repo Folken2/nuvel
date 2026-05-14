@@ -239,3 +239,58 @@ export function replaceWholeDocument(text: string): Promise<void> {
     await ctx.sync();
   });
 }
+
+export interface DocumentEventHandle {
+  /** Tear down the Word event registrations. Always safe to call. */
+  dispose: () => Promise<void>;
+}
+
+/**
+ * Subscribe to Word document events so the taskpane can refresh shared
+ * state push-driven instead of polling. Fires ``onChange`` whenever the
+ * selection changes or paragraphs are added/changed.
+ *
+ * Tolerates older hosts: if event registration throws (or the host
+ * lacks the requirement set), returns a no-op handle so the caller can
+ * fall back to polling.
+ */
+export async function subscribeToDocumentEvents(
+  onChange: () => void
+): Promise<DocumentEventHandle> {
+  const noop: DocumentEventHandle = { dispose: async () => {} };
+  if (typeof Word === "undefined" || !Word.run) return noop;
+  try {
+    const handlers: Array<{ remove: () => void }> = [];
+    await Word.run(async (ctx) => {
+      const doc: any = ctx.document;
+
+      const selH = doc.onSelectionChanged?.add?.(async () => {
+        try { onChange(); } catch { /* ignore */ }
+      });
+      if (selH) handlers.push({ remove: () => { try { selH.remove(); } catch {} } });
+
+      const paraAddedH = doc.onParagraphAdded?.add?.(async () => {
+        try { onChange(); } catch { /* ignore */ }
+      });
+      if (paraAddedH) handlers.push({ remove: () => { try { paraAddedH.remove(); } catch {} } });
+
+      const paraChangedH = doc.onParagraphChanged?.add?.(async () => {
+        try { onChange(); } catch { /* ignore */ }
+      });
+      if (paraChangedH) handlers.push({ remove: () => { try { paraChangedH.remove(); } catch {} } });
+
+      await ctx.sync();
+    });
+    return {
+      dispose: async () => {
+        await Word.run(async (ctx) => {
+          handlers.forEach((h) => h.remove());
+          await ctx.sync();
+        }).catch(() => undefined);
+      },
+    };
+  } catch (e) {
+    console.warn("subscribeToDocumentEvents: host lacks event support, falling back to polling", e);
+    return noop;
+  }
+}

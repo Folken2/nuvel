@@ -39,6 +39,7 @@ RECENT_EDITS_KEY = "word:recent_edits"
 
 # Re-exported here so backend/main.py and tests have one import home.
 PENDING_ACTIONS_KEY = "word:pending_actions"
+OPENED_DOCUMENT_KEY = "word:opened_document"
 
 
 def get_current_selection(tool_context: ToolContext) -> dict:
@@ -193,6 +194,30 @@ def request_context_refresh(reason: str = "", tool_context: ToolContext = None) 
     return {"status": "queued", "kind": "refresh_context"}
 
 
+def get_opened_document_snapshot(tool_context: ToolContext) -> dict:
+    """Return the early snapshot pushed when the user opened the document.
+
+    The add-in posts a lightweight snapshot (title, word count, heading
+    outline, ``is_new`` flag) to ``/api/word/document-opened`` as soon
+    as it boots — even before the taskpane is open. This lets the agent
+    answer "what doc did I just open?" or proactively suggest a
+    template for blank documents without waiting on a chat-turn
+    context push.
+
+    Returns:
+        ``{"status": "ok", "is_new": bool, "snapshot": dict,
+        "received_at": str}`` or ``{"status": "no_snapshot", "message":
+        str}`` if the add-in hasn't reported the open yet.
+    """
+    payload = tool_context.state.get(OPENED_DOCUMENT_KEY)
+    if not payload:
+        return {
+            "status": "no_snapshot",
+            "message": "No document-opened snapshot. The add-in hasn't reported a document open in this session.",
+        }
+    return {"status": "ok", **payload}
+
+
 word_context_tool_list = [
     FunctionTool(get_current_selection),
     FunctionTool(get_full_document),
@@ -200,5 +225,6 @@ word_context_tool_list = [
     FunctionTool(get_document_outline),
     FunctionTool(get_document_meta),
     FunctionTool(get_recent_edits),
+    FunctionTool(get_opened_document_snapshot),
     FunctionTool(request_context_refresh),
 ]

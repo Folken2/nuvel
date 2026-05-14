@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   snapshotCurrentContext,
+  subscribeToDocumentEvents,
   WordContext,
   insertAtSelection,
   replaceSelection,
@@ -348,32 +349,87 @@ const App: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
-  /* ── Word context polling ── */
+  /* ── Word context: event-driven refresh, with polling as a safety net ── */
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let lastPushAt = 0;
+    const MIN_INTERVAL_MS = 400;
+
     const refresh = async () => {
-      const snap = await snapshotCurrentContext();
-      if (cancelled || !snap) return;
-      setCtx(snap);
-      // Best-effort push so the agent's context tools see fresh state
-      // even on turns where the user hasn't typed anything yet.
-      fetch(`${BACKEND_URL}/api/word/context`, {
-        method: "POST",
-        headers: apiHeaders(),
-        body: JSON.stringify({
-          session_id: sessionIdRef.current,
-          user_id: userIdRef.current,
-          selection: snap.selection,
-          document: snap.document,
-          surrounding: snap.surrounding,
-          headings: snap.headings,
-          document_meta: snap.document_meta,
-        }),
-      }).catch(() => undefined);
+      const now = Date.now();
+      if (inFlight || now - lastPushAt < MIN_INTERVAL_MS) return;
+      inFlight = true;
+      try {
+        const snap = await snapshotCurrentContext();
+        if (cancelled || !snap) return;
+        setCtx(snap);
+        lastPushAt = Date.now();
+        fetch(`${BACKEND_URL}/api/word/context`, {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            user_id: userIdRef.current,
+            selection: snap.selection,
+            document: snap.document,
+            surrounding: snap.surrounding,
+            headings: snap.headings,
+            document_meta: snap.document_meta,
+          }),
+        }).catch(() => undefined);
+      } finally {
+        inFlight = false;
+      }
     };
-    void refresh();
-    const t = setInterval(refresh, 3000);
-    return () => { cancelled = true; clearInterval(t); };
+
+    // Initial snapshot + one-shot document-opened ping so the agent has
+    // an early summary of what the user just opened.
+    void (async () => {
+      await refresh();
+      try {
+        const snap = await snapshotCurrentContext();
+        if (!cancelled && snap) {
+          fetch(`${BACKEND_URL}/api/word/document-opened`, {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              user_id: userIdRef.current,
+              is_new: (snap.document.word_count || 0) === 0,
+              snapshot: {
+                title: snap.document.title,
+                word_count: snap.document.word_count,
+                paragraph_count: snap.document.paragraph_count,
+                headings: snap.headings,
+              },
+            }),
+          }).catch(() => undefined);
+        }
+      } catch { /* ignore */ }
+    })();
+
+    // Event-driven refresh — only fires when the user actually moves
+    // the caret or edits paragraphs. Works in both XML and JSON
+    // manifests; older hosts fall back to the polling timer below.
+    let disposeEvents: (() => Promise<void>) | null = null;
+    subscribeToDocumentEvents(() => { void refresh(); }).then((handle) => {
+      if (cancelled) {
+        void handle.dispose();
+        return;
+      }
+      disposeEvents = handle.dispose;
+    });
+
+    // Safety-net poll. Long interval since events handle the common
+    // case; this catches hosts that don't surface paragraph events.
+    const t = setInterval(refresh, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      if (disposeEvents) void disposeEvents();
+    };
   }, []);
 
   const toggleTheme = () => setTheme((t) => (t === "light" ? "dark" : "light"));
