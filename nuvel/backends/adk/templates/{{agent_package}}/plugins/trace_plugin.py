@@ -22,6 +22,16 @@ Configuration:
   TRACE_ENABLED: set to "false" to disable all tracing (default: true)
   TRACE_DIR: directory for JSONL files (default: ./traces)
   TRACE_DB: set to "true" to also write to PostgreSQL (default: false)
+
+  Per-field truncation caps (characters). Tool args default high so the
+  full agent input is captured for schema auditing; everything else is
+  sized for "enough to debug, not a transcript":
+    TRACE_MAX_ARGS_CHARS         (default 50000)
+    TRACE_MAX_RESULT_CHARS       (default 10000)
+    TRACE_MAX_RESPONSE_CHARS     (default 10000)
+    TRACE_MAX_THINKING_CHARS     (default 10000)
+    TRACE_MAX_SYSTEM_INSTR_CHARS (default 50000)
+    TRACE_MAX_ERROR_CHARS        (default 2000)
 """
 
 from __future__ import annotations
@@ -58,6 +68,28 @@ logger = logging.getLogger(__name__)
 _TRACE_DIR = Path(os.getenv("TRACE_DIR", "./traces"))
 _TRACE_ENABLED = os.getenv("TRACE_ENABLED", "true").lower() not in ("false", "0", "no")
 _TRACE_DB = os.getenv("TRACE_DB", "false").lower() in ("true", "1", "yes")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r — using default %d", name, raw, default)
+        return default
+
+
+# Per-field truncation caps. Tool args are kept generous so schema adherence
+# (did the model pass the right query/parameters?) is auditable from the
+# trace alone; everything else is sized for "enough to debug, not a transcript."
+_MAX_ARGS_CHARS = _env_int("TRACE_MAX_ARGS_CHARS", 50_000)
+_MAX_RESULT_CHARS = _env_int("TRACE_MAX_RESULT_CHARS", 10_000)
+_MAX_RESPONSE_CHARS = _env_int("TRACE_MAX_RESPONSE_CHARS", 10_000)
+_MAX_THINKING_CHARS = _env_int("TRACE_MAX_THINKING_CHARS", 10_000)
+_MAX_SYSTEM_INSTR_CHARS = _env_int("TRACE_MAX_SYSTEM_INSTR_CHARS", 50_000)
+_MAX_ERROR_CHARS = _env_int("TRACE_MAX_ERROR_CHARS", 2_000)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -98,10 +130,10 @@ def _extract_system_instruction(llm_request: LlmRequest) -> Optional[str]:
         return None
     si = llm_request.config.system_instruction
     if isinstance(si, str):
-        return si[:50_000]
+        return si[:_MAX_SYSTEM_INSTR_CHARS]
     if hasattr(si, "parts") and si.parts:
         text = "\n".join(p.text or "" for p in si.parts)
-        return text[:50_000] if text else None
+        return text[:_MAX_SYSTEM_INSTR_CHARS] if text else None
     return None
 
 
@@ -626,7 +658,7 @@ class TracePlugin(BasePlugin):
             "message_count": len(messages),
             "messages": messages,
             "tools_available": tools_available,
-            "system_instruction": _safe_serialize(system_instruction, max_len=50_000),
+            "system_instruction": _safe_serialize(system_instruction, max_len=_MAX_SYSTEM_INSTR_CHARS),
             "system_instruction_chars": len(system_instruction) if system_instruction else 0,
         })
         return None
@@ -672,8 +704,8 @@ class TracePlugin(BasePlugin):
             "finish_reason": str(llm_response.finish_reason) if llm_response.finish_reason else None,
             "usage": usage,
             "cost_usd": cost_usd,
-            "thinking": _safe_serialize(thinking, max_len=10_000),
-            "response_text": _safe_serialize(text, max_len=10_000),
+            "thinking": _safe_serialize(thinking, max_len=_MAX_THINKING_CHARS),
+            "response_text": _safe_serialize(text, max_len=_MAX_RESPONSE_CHARS),
             "function_calls": function_calls,
         })
 
@@ -706,7 +738,7 @@ class TracePlugin(BasePlugin):
             "call_index": self._llm_call_index,
             "model": llm_request.model,
             "error_type": type(error).__name__,
-            "error_message": str(error)[:2000],
+            "error_message": str(error)[:_MAX_ERROR_CHARS],
         })
         return None
 
@@ -722,7 +754,7 @@ class TracePlugin(BasePlugin):
         tool_context.state[f"_trace_start_{tool.name}"] = time.monotonic()
         self._record("tool_start", {
             "tool": tool.name,
-            "args": _safe_serialize(tool_args, max_len=2000),
+            "args": _safe_serialize(tool_args, max_len=_MAX_ARGS_CHARS),
         })
         return None
 
@@ -744,7 +776,7 @@ class TracePlugin(BasePlugin):
             "tool": tool.name,
             "status": "error" if is_error else "success",
             "duration_ms": duration_ms,
-            "result": _safe_serialize(result, max_len=5000),
+            "result": _safe_serialize(result, max_len=_MAX_RESULT_CHARS),
         })
         self._conversation_writer.add_tool_call(
             tool=tool.name,
@@ -766,8 +798,8 @@ class TracePlugin(BasePlugin):
         self._record("tool_exception", {
             "tool": tool.name,
             "error_type": type(error).__name__,
-            "error_message": str(error)[:2000],
-            "args": _safe_serialize(tool_args, max_len=2000),
+            "error_message": str(error)[:_MAX_ERROR_CHARS],
+            "args": _safe_serialize(tool_args, max_len=_MAX_ARGS_CHARS),
         })
         return None
 
@@ -820,5 +852,19 @@ class TracePlugin(BasePlugin):
                     "agent": event.author,
                     "event_id": event.id,
                     "function_call_ids": list(event.actions.requested_auth_configs.keys()),
+                })
+
+            # CostGuardPlugin writes `state.cost_guard` on every LLM call.
+            # Only the blocked variant is an actual intervention worth
+            # surfacing as a first-class event; successful tracking shows
+            # up under llm_response.cost_usd anyway.
+            cost_guard = (event.actions.state_delta or {}).get("cost_guard")
+            if isinstance(cost_guard, dict) and cost_guard.get("blocked"):
+                self._record("cost_guard_intervention", {
+                    "agent": event.author,
+                    "event_id": event.id,
+                    "model": cost_guard.get("model"),
+                    "session_cost_usd": cost_guard.get("session_cost_usd"),
+                    "budget_usd": cost_guard.get("budget_usd"),
                 })
         return None
