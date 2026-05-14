@@ -9,6 +9,8 @@ Subcommands:
         Search skills by name or description.
     nuvel run [--dev]
         Launch the meta-agent (ADK-based) for autonomous scaffolding.
+    nuvel traces list|show|stats
+        Inspect JSONL trace logs across all local agents.
 """
 
 from __future__ import annotations
@@ -230,6 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to inspect (defaults to current working directory).",
     )
     p_doctor.set_defaults(func=_cmd_doctor)
+
+    from nuvel import traces_cli
+    traces_cli.register(sub)
 
     return parser
 
