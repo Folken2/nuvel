@@ -367,19 +367,77 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
+    let openedPosted = false;
     const refresh = async () => {
       const snap = await snapshotCurrentContext();
-      if (!cancelled) setCtx(snap);
+      if (cancelled) return;
+      setCtx(snap);
+      // First successful snapshot after mount: post a lightweight early
+      // open-snapshot so the agent has deck awareness before the first
+      // chat turn. This is the taskpane-side stand-in for a PowerPoint
+      // OnDocumentOpened event — the unified JSON manifest doesn't expose
+      // that event for PowerPoint today.
+      if (!openedPosted && snap.deck_outline && snap.deck_outline.slide_count > 0) {
+        openedPosted = true;
+        const titles = snap.deck_outline.slides.map((s) => s.title || "");
+        const inferredTitle =
+          titles.find((t) => t && t.length > 0) || "Untitled deck";
+        const isNew =
+          snap.deck_outline.slide_count === 1 &&
+          titles.every((t) => !t || t.trim().length === 0);
+        try {
+          await fetch(`${BACKEND_URL}/api/ppt/presentation-opened`, {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              user_id: userIdRef.current,
+              title: inferredTitle,
+              slide_count: snap.deck_outline.slide_count,
+              slide_titles: titles,
+              is_new: isNew,
+            }),
+          });
+        } catch (e) {
+          logger.warn("presentation-opened post failed", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
     };
     void refresh();
+
+    // Push-driven refresh: PowerPoint fires DocumentSelectionChanged on
+    // slide selection and shape selection. We keep a longer polling
+    // interval as a safety net for hosts/builds that don't deliver the
+    // event reliably (e.g. older PowerPoint on Mac).
+    let handlerRef: any = null;
+    const handler = () => { void refresh(); };
     try {
       Office.context.document.addHandlerAsync(
         Office.EventType.DocumentSelectionChanged,
-        () => void refresh()
+        handler,
+        (asyncResult: any) => {
+          if (asyncResult && asyncResult.status === "succeeded") {
+            handlerRef = handler;
+          }
+        }
       );
     } catch { /* not every host supports the event */ }
-    const t = setInterval(refresh, 5000);
-    return () => { cancelled = true; clearInterval(t); };
+
+    const t = setInterval(refresh, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      if (handlerRef) {
+        try {
+          Office.context.document.removeHandlerAsync(
+            Office.EventType.DocumentSelectionChanged,
+            { handler: handlerRef }
+          );
+        } catch { /* */ }
+      }
+    };
   }, []);
 
   const updatePreference = (key: keyof UserPreferences, value: string) => {

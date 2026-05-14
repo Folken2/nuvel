@@ -58,6 +58,7 @@ from ppt_king.agent import root_agent
 from ppt_king.tools.ppt_context import (
     CURRENT_SLIDE_KEY,
     DECK_OUTLINE_KEY,
+    OPENED_PRESENTATION_KEY,
     PENDING_ACTIONS_KEY,
     RECENT_EDITS_KEY,
 )
@@ -166,6 +167,15 @@ class ChatRequest(BaseModel):
     prompt: str
     current_slide: CurrentSlidePayload | None = None
     deck_outline: DeckOutlinePayload | None = None
+
+
+class PresentationOpenedRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    title: str = ""
+    slide_count: int = 0
+    slide_titles: list[str] = Field(default_factory=list)
+    is_new: bool = False
 
 
 class LearnSlideRequest(BaseModel):
@@ -376,6 +386,52 @@ async def learn_slide(req: LearnSlideRequest):
         layout_name=req.layout_name,
     )
     return result
+
+
+@app.post("/api/ppt/presentation-opened")
+async def presentation_opened(req: PresentationOpenedRequest):
+    """Record an early-context snapshot of the presentation the user just opened.
+
+    Called by the taskpane the first time it mounts in a new session,
+    *before* any chat turn — so the agent already knows the deck title,
+    slide count, and slide titles when the user types their first prompt.
+    Stored under ``ppt:opened_presentation``; the agent reads it via
+    ``get_opened_presentation_snapshot``.
+
+    Note: This is the closest analogue to a PowerPoint ``OnDocumentOpened``
+    event we can wire today — the unified JSON manifest lists
+    ``OnDocumentOpened`` as "Not yet supported" for PowerPoint
+    (see README "JSON manifest features"). So the taskpane does the work
+    on mount rather than the host firing a background handler.
+
+    TODO(agent): hook this into a session-bootstrap callback so the agent
+    can emit a one-line "I see you opened X — want a quick outline review?"
+    proactively, rather than waiting for the first user prompt.
+    """
+    if not req.title.strip() and req.slide_count <= 0 and not req.slide_titles:
+        raise HTTPException(400, "Empty presentation snapshot.")
+    user_id = req.user_id or DEFAULT_USER_ID
+    await _ensure_session(req.session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    if session is None:
+        raise HTTPException(500, "Failed to load session")
+    import datetime as _dt
+    payload = {
+        "title": req.title,
+        "slide_count": req.slide_count,
+        "slide_titles": list(req.slide_titles),
+        "is_new": bool(req.is_new),
+        "opened_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    event = Event(
+        invocation_id=f"open-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta={OPENED_PRESENTATION_KEY: payload}),
+    )
+    await session_service.append_event(session, event)
+    return {"status": "ok", "snapshot": payload}
 
 
 @app.post("/api/ppt/record-edit")

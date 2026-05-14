@@ -110,6 +110,20 @@ Known limitations:
 - The two manifests share the same add-in `id` — sideload only one at a time per Office profile to avoid duplicate registrations.
 - The current published `office-addin-manifest` validator lags the actual devPreview schema and will flag `actions`, `builtInGroupId`, and `overriddenByRibbonApi` as unknown properties on a *valid* unified manifest (the same errors fire against Microsoft's own canonical PowerPoint sample). The manifest still sideloads and runs in Office; ignore those three validator complaints until the validator catches up.
 
+### JSON manifest features
+
+The XML and JSON manifests are kept at parity for ribbon, taskpane, and ribbon commands. We investigated each PowerPoint-specific surface the unified JSON manifest exposes that the XML manifest cannot — most turn out **not to be supported for PowerPoint in the current schema**. We do not fake these.
+
+| Feature | Status for PowerPoint | Notes |
+|---|---|---|
+| `extensions.autoRunEvents` (`OnDocumentOpened` / `newPresentationCreated`) | **Not supported.** The Microsoft Learn event-based activation matrix lists the unified-manifest event name for `OnDocumentOpened` on PowerPoint as *"Not yet supported"*. No JSON-manifest equivalent exists today. | Skipped. As a stand-in, the taskpane posts `POST /api/ppt/presentation-opened` once on first mount so the agent gets an early outline before the first chat turn. |
+| `extensions.keyboardShortcuts` | **Not supported.** The custom keyboard shortcuts page lists only Excel and Word as supported hosts. | Skipped. Would need a host check anyway since the unified-manifest shortcut binding is rejected for `presentation` scope. |
+| Context-aware ribbon contexts (slide-selection / shape-selection / spam-style) | **Not supported.** The `extensions.ribbons.contexts` enum allows only `default` for PowerPoint (`mailRead`, `mailCompose`, `meetingDetails*`, `spamReportingOverride` are Outlook-only). | Existing `"contexts": ["default"]` is already the canonical PowerPoint shape. |
+| Smart Alerts (`OnMessageSend` equivalent) | **Not applicable.** Outlook-only. | Skipped. PowerPoint has no equivalent send/save gate. |
+| Push-driven taskpane context refresh | **Supported via Office.js**, not via manifest. We register `Office.EventType.DocumentSelectionChanged` for slide and shape selection changes, and keep a slow (20 s) polling fallback for hosts that drop the event. | Active. |
+
+So the only features actually wired today that the XML manifest can't drive on its own are the **two backend hooks** for early-open context — and they fire from the taskpane, gated by the JSON-manifest-only `lifetime: "short"` runtime declaration the XML profile does not use to bootstrap a long-lived chat session. Net effect: under the XML manifest, behavior is unchanged; under the JSON manifest, the agent gets a pre-first-turn outline and faster selection-change updates.
+
 In PowerPoint you'll see a **ppt-king** group on the Home tab with three buttons:
 - **Open ppt-king** — taskpane chat with mode-aware quick actions and a context strip showing what the agent currently sees.
 - **Tighten this slide** — one-click rubric run on the active slide.
@@ -132,6 +146,7 @@ LLM-touching tests in `tests/test_agent.py` use ADK record/replay — see that f
 | `get_deck_outline` | Read the whole deck outline (titles + bullet counts) |
 | `get_recent_edits` | Read the rolling log of edits the agent has applied this session |
 | `request_context_refresh` | Ask the taskpane to push a fresh PPT snapshot |
+| `get_opened_presentation_snapshot` | Read the early outline the taskpane posted on mount (deck title, slide count, slide titles) — fills the gap left by PowerPoint's missing unified-manifest `OnDocumentOpened` event |
 | `queue_apply_slide` | Replace title/bullets/notes on a slide |
 | `queue_insert_slide` | Insert a new slide after a given index |
 | `queue_duplicate_slide` | Clone a slide in place |

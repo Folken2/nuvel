@@ -31,6 +31,7 @@ CURRENT_SLIDE_KEY = "ppt:current_slide"
 DECK_OUTLINE_KEY = "ppt:deck_outline"
 RECENT_EDITS_KEY = "ppt:recent_edits"
 PENDING_ACTIONS_KEY = "ppt:pending_actions"
+OPENED_PRESENTATION_KEY = "ppt:opened_presentation"
 
 
 def _get(tool_context: ToolContext, key: str) -> Any:
@@ -162,10 +163,42 @@ def request_context_refresh(tool_context: ToolContext) -> dict:
     return {"status": "queued"}
 
 
+def get_opened_presentation_snapshot(tool_context: ToolContext) -> dict:
+    """Return the early-open snapshot of the presentation the user just opened.
+
+    The taskpane fires ``POST /api/ppt/presentation-opened`` the first time
+    it mounts in a new session — before any chat turn. The snapshot is a
+    lightweight outline (title, slide count, slide titles) plus a flag for
+    brand-new decks (``is_new``).
+
+    Call this when the user asks "what deck did I just open?", "what's
+    this presentation about?", or any opening-context question where
+    ``get_deck_outline`` returns ``no_deck`` because the taskpane hasn't
+    pushed a full context payload yet.
+
+    Returns:
+        ``{"status": "ok", "title": str, "slide_count": int,
+        "slide_titles": list[str], "is_new": bool, "opened_at": str}``
+        when a snapshot exists, otherwise
+        ``{"status": "no_snapshot", "message": str}``.
+    """
+    payload = _get(tool_context, OPENED_PRESENTATION_KEY)
+    if not payload:
+        return {
+            "status": "no_snapshot",
+            "message": (
+                "No opening snapshot yet. The taskpane pushes one when "
+                "it first mounts; ask the user to open the ppt-king pane."
+            ),
+        }
+    return {"status": "ok", **payload}
+
+
 ppt_context_tool_list = [
     FunctionTool(get_current_slide),
     FunctionTool(get_selected_shape),
     FunctionTool(get_deck_outline),
     FunctionTool(get_recent_edits),
     FunctionTool(request_context_refresh),
+    FunctionTool(get_opened_presentation_snapshot),
 ]
