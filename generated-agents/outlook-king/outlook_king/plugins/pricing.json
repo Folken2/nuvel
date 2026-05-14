@@ -1,44 +1,40 @@
 {
   "_comment": "Model pricing in USD per token. Update this file to add new models.",
   "_format": "{ 'model_id_or_pattern': { 'input': cost_per_input_token, 'output': cost_per_output_token } }",
-  "moonshotai/kimi-k2.5": {
-    "input": 0.0000005,
-    "output": 0.000002
-  },
-  "moonshotai/kimi-k2.5-0127": {
-    "input": 0.0000005,
-    "output": 0.000002
+  "anthropic/claude-opus-4": {
+    "input": 1.5e-05,
+    "output": 7.5e-05
   },
   "anthropic/claude-sonnet-4": {
-    "input": 0.000003,
-    "output": 0.000015
-  },
-  "anthropic/claude-opus-4": {
-    "input": 0.000015,
-    "output": 0.000075
-  },
-  "anthropic/claude-haiku-4": {
-    "input": 0.0000008,
-    "output": 0.000004
-  },
-  "openai/gpt-4o": {
-    "input": 0.0000025,
-    "output": 0.00001
-  },
-  "openai/gpt-4o-mini": {
-    "input": 0.00000015,
-    "output": 0.0000006
-  },
-  "google/gemini-2.5-pro": {
-    "input": 0.00000125,
-    "output": 0.00001
-  },
-  "google/gemini-2.5-flash": {
-    "input": 0.00000015,
-    "output": 0.0000006
+    "input": 3e-06,
+    "output": 1.5e-05
   },
   "deepseek/deepseek-r1": {
-    "input": 0.00000055,
-    "output": 0.0000022
+    "input": 7e-07,
+    "output": 2.5e-06
+  },
+  "google/gemini-2.5-flash": {
+    "input": 3e-07,
+    "output": 2.5e-06
+  },
+  "google/gemini-2.5-pro": {
+    "input": 1.25e-06,
+    "output": 1e-05
+  },
+  "google/gemini-3.1-pro-preview": {
+    "input": 2e-06,
+    "output": 1.2e-05
+  },
+  "moonshotai/kimi-k2.5": {
+    "input": 4e-07,
+    "output": 1.9e-06
+  },
+  "openai/gpt-4o": {
+    "input": 2.5e-06,
+    "output": 1e-05
+  },
+  "openai/gpt-4o-mini": {
+    "input": 1.5e-07,
+    "output": 6e-07
   }
 }
