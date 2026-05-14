@@ -1,0 +1,8 @@
+google-adk==1.26.0
+litellm>=1.83.0,<2.0.0  # >=1.83.0 excludes compromised 1.82.7/1.82.8 (PYSEC-2026-2)
+python-dotenv>=1.0.0,<2.0.0
+fastapi>=0.135.0,<1.0.0
+uvicorn>=0.40.0,<1.0.0
+croniter>=2.0.0,<7.0.0
+composio>=1.0.0rc10
+

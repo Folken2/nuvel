@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Test Client</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { font-size: 1.2em; margin-bottom: 16px; color: #a0a0ff; }
+        .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .controls input { background: #16213e; border: 1px solid #333; color: #e0e0e0; padding: 6px 10px; border-radius: 4px; font-family: monospace; }
+        .controls input:focus { border-color: #a0a0ff; outline: none; }
+        button { background: #0f3460; border: 1px solid #444; color: #e0e0e0; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-family: monospace; }
+        button:hover { background: #1a4a80; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.active { background: #e94560; border-color: #e94560; }
+        .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+        .status.disconnected { background: #666; }
+        .status.connected { background: #4caf50; }
+        .status.error { background: #e94560; }
+        #chat { background: #16213e; border: 1px solid #333; border-radius: 4px; padding: 12px; height: 400px; overflow-y: auto; margin-top: 12px; font-size: 0.9em; line-height: 1.6; }
+        .msg { margin-bottom: 4px; }
+        .msg.user { color: #82b1ff; }
+        .msg.agent { color: #a5d6a7; }
+        .msg.system { color: #888; font-style: italic; }
+        .text-input { display: flex; gap: 8px; margin-top: 8px; }
+        .text-input input { flex: 1; }
+    </style>
+</head>
+<body>
+    <h1>Voice Agent Test Client</h1>
+
+    <div class="controls">
+        <span class="status disconnected" id="statusDot"></span>
+        <input id="host" value="ws://localhost:8000" placeholder="WebSocket host" style="width:200px">
+        <input id="userId" value="test-user" placeholder="User ID" style="width:120px">
+        <input id="sessionId" value="session-1" placeholder="Session ID" style="width:120px">
+        <input id="token" type="password" placeholder="API Key (optional)" style="width:160px">
+    </div>
+    <div class="controls">
+        <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+        <button id="micBtn" onclick="toggleMic()" disabled>Mic Off</button>
+    </div>
+
+    <div class="text-input">
+        <input id="textInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendText()" disabled>
+        <button id="sendBtn" onclick="sendText()" disabled>Send</button>
+    </div>
+
+    <div id="chat"></div>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let micStream = null;
+        let processor = null;
+        let micActive = false;
+        let playbackCtx = null;
+
+        const chat = document.getElementById('chat');
+        const statusDot = document.getElementById('statusDot');
+        const connectBtn = document.getElementById('connectBtn');
+        const micBtn = document.getElementById('micBtn');
+        const textInput = document.getElementById('textInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function log(text, cls = 'system') {
+            const div = document.createElement('div');
+            div.className = 'msg ' + cls;
+            div.textContent = text;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function setStatus(state) {
+            statusDot.className = 'status ' + state;
+        }
+
+        function toggleConnection() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+            const host = document.getElementById('host').value;
+            const userId = document.getElementById('userId').value;
+            const sessionId = document.getElementById('sessionId').value;
+            const token = document.getElementById('token').value;
+
+            const url = host + '/ws/' + userId + '/' + sessionId + (token ? '?token=' + encodeURIComponent(token) : '');
+            log('Connecting to ' + url + '...');
+
+            ws = new WebSocket(url);
+            ws.onopen = function() {
+                setStatus('connected');
+                connectBtn.textContent = 'Disconnect';
+                micBtn.disabled = false;
+                textInput.disabled = false;
+                sendBtn.disabled = false;
+                log('Connected.');
+            };
+            ws.onclose = function(e) {
+                setStatus('disconnected');
+                connectBtn.textContent = 'Connect';
+                micBtn.disabled = true;
+                textInput.disabled = true;
+                sendBtn.disabled = true;
+                stopMic();
+                log('Disconnected (code=' + e.code + ').');
+            };
+            ws.onerror = function() {
+                setStatus('error');
+                log('WebSocket error.');
+            };
+            ws.onmessage = function(e) {
+                try {
+                    var event = JSON.parse(e.data);
+                    handleEvent(event);
+                } catch (err) {
+                    log('Raw: ' + e.data);
+                }
+            };
+        }
+
+        function handleEvent(event) {
+            if (event.content && event.content.parts) {
+                for (var i = 0; i < event.content.parts.length; i++) {
+                    var part = event.content.parts[i];
+                    if (part.text) {
+                        var role = event.content.role === 'user' ? 'user' : 'agent';
+                        log(role + ': ' + part.text, role);
+                    }
+                    if (part.inline_data && part.inline_data.mime_type && part.inline_data.mime_type.indexOf('audio/') === 0) {
+                        playAudio(part.inline_data.data);
+                    }
+                }
+            }
+            if (event.server_content && event.server_content.model_turn && event.server_content.model_turn.parts) {
+                var parts = event.server_content.model_turn.parts;
+                for (var j = 0; j < parts.length; j++) {
+                    var p = parts[j];
+                    if (p.inline_data && p.inline_data.mime_type && p.inline_data.mime_type.indexOf('audio/') === 0) {
+                        playAudio(p.inline_data.data);
+                    }
+                    if (p.text) {
+                        log('agent: ' + p.text, 'agent');
+                    }
+                }
+            }
+        }
+
+        function playAudio(base64Data) {
+            if (!playbackCtx) playbackCtx = new AudioContext({ sampleRate: 24000 });
+            var raw = atob(base64Data);
+            var bytes = new Uint8Array(raw.length);
+            for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+            var samples = new Float32Array(bytes.length / 2);
+            var view = new DataView(bytes.buffer);
+            for (var i = 0; i < samples.length; i++) {
+                samples[i] = view.getInt16(i * 2, true) / 32768;
+            }
+            var buffer = playbackCtx.createBuffer(1, samples.length, 24000);
+            buffer.getChannelData(0).set(samples);
+            var source = playbackCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(playbackCtx.destination);
+            source.start();
+        }
+
+        function sendText() {
+            var text = textInput.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'text', text: text }));
+            log('you: ' + text, 'user');
+            textInput.value = '';
+        }
+
+        function toggleMic() {
+            if (micActive) {
+                stopMic();
+            } else {
+                startMic();
+            }
+        }
+
+        function startMic() {
+            navigator.mediaDevices.getUserMedia({
+                audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true }
+            }).then(function(stream) {
+                micStream = stream;
+                audioContext = new AudioContext({ sampleRate: 16000 });
+                var source = audioContext.createMediaStreamSource(stream);
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+                processor.onaudioprocess = function(e) {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                    var float32 = e.inputBuffer.getChannelData(0);
+                    var pcm16 = new Int16Array(float32.length);
+                    for (var i = 0; i < float32.length; i++) {
+                        pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32768)));
+                    }
+                    var binary = new Uint8Array(pcm16.buffer);
+                    var base64 = '';
+                    for (var i = 0; i < binary.length; i++) {
+                        base64 += String.fromCharCode(binary[i]);
+                    }
+                    base64 = btoa(base64);
+                    ws.send(JSON.stringify({
+                        type: 'audio',
+                        mime_type: 'audio/pcm;rate=16000',
+                        data: base64
+                    }));
+                };
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+                micActive = true;
+                micBtn.textContent = 'Mic On';
+                micBtn.classList.add('active');
+                log('Microphone started.');
+            }).catch(function(err) {
+                log('Mic error: ' + err.message);
+            });
+        }
+
+        function stopMic() {
+            if (processor) { processor.disconnect(); processor = null; }
+            if (audioContext) { audioContext.close(); audioContext = null; }
+            if (micStream) { micStream.getTracks().forEach(function(t) { t.stop(); }); micStream = null; }
+            micActive = false;
+            micBtn.textContent = 'Mic Off';
+            micBtn.classList.remove('active');
+        }
+    </script>
+</body>
+</html>
