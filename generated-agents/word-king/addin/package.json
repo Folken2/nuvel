@@ -14,9 +14,15 @@
     "dev-server": "webpack serve --mode development",
     "lint": "office-addin-lint check",
     "lint:fix": "office-addin-lint fix",
-    "start": "office-addin-debugging start manifest.xml",
-    "stop": "office-addin-debugging stop manifest.xml",
-    "validate": "office-addin-manifest validate manifest.xml",
+    "start": "office-addin-debugging start manifest.${OFFICE_MANIFEST:-xml}",
+    "start:xml": "office-addin-debugging start manifest.xml",
+    "start:json": "office-addin-debugging start manifest.json",
+    "stop": "office-addin-debugging stop manifest.${OFFICE_MANIFEST:-xml}",
+    "stop:xml": "office-addin-debugging stop manifest.xml",
+    "stop:json": "office-addin-debugging stop manifest.json",
+    "validate": "office-addin-manifest validate manifest.${OFFICE_MANIFEST:-xml}",
+    "validate:xml": "office-addin-manifest validate manifest.xml",
+    "validate:json": "office-addin-manifest validate manifest.json",
     "watch": "webpack --mode development --watch"
   },
   "dependencies": {

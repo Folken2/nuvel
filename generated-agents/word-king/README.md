@@ -77,11 +77,38 @@ npm install
 npm run dev-server
 ```
 
-Sideload `manifest.xml`:
+Sideload `manifest.xml` (default) or `manifest.json` (unified Microsoft 365 manifest):
 
-- **Word on the web** → Insert → My Add-ins → Upload My Add-in → choose `manifest.xml`.
+- **Word on the web** → Insert → My Add-ins → Upload My Add-in → choose `manifest.xml` or `manifest.json`.
 - **Word desktop (Win/Mac)** → Insert → My Add-ins → Manage My Add-ins → Upload My Add-in → from file.
 - **Microsoft 365 admin tenant** → Integrated apps → Upload custom apps.
+
+#### Choosing a manifest format
+
+Both manifests describe the same add-in identity, task pane URL, and ribbon commands. Pick one per sideload session:
+
+```bash
+# Default — uses the XML add-in only manifest.
+npm start
+
+# Opt in to the unified JSON manifest (Microsoft 365 / Teams style).
+OFFICE_MANIFEST=json npm start
+# or, equivalently:
+npm run start:json
+```
+
+`stop` / `validate` work the same way (`npm run stop:json`, `npm run validate:json`). Validate locally with:
+
+```bash
+npx office-addin-manifest validate manifest.json
+npx office-addin-manifest validate manifest.xml
+```
+
+Known limitations:
+
+- The unified JSON manifest requires a Microsoft 365 subscription and a recent Office build (Word on Windows 2501+ / Mac 16.103+ / Office on the web). On older Office builds, sideload `manifest.xml`.
+- Event-based activation, integrated keyboard shortcuts, and newer Microsoft 365 platform features are only available via `manifest.json`.
+- The XML manifest stays the safe, broadly-compatible default — `npm start` keeps using it unless you set `OFFICE_MANIFEST=json`.
 
 In Word you'll see a **word-king** group on the Home tab:
 - **Open word-king** — taskpane chat with quick actions and a context strip showing what the agent currently sees (current selection size, document size).
@@ -201,6 +228,7 @@ generated-agents/word-king/
 │   └── README.md
 ├── addin/                            # NEW — Word add-in (Office.js + React)
 │   ├── manifest.xml
+│   ├── manifest.json
 │   ├── package.json
 │   ├── webpack.config.js
 │   └── src/

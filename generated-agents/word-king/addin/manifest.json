@@ -1,0 +1,127 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/vDevPreview/MicrosoftTeams.schema.json",
+  "manifestVersion": "devPreview",
+  "id": "2065e6fb-026e-4d82-9347-0cb5623de3be",
+  "version": "1.0.0",
+  "name": {
+    "short": "word-king",
+    "full": "word-king"
+  },
+  "description": {
+    "short": "Drafts and rewrites document content in your voice.",
+    "full": "King of Word — drafts and rewrites document content in your voice."
+  },
+  "developer": {
+    "name": "word-king",
+    "websiteUrl": "https://localhost:3000/",
+    "privacyUrl": "https://localhost:3000/",
+    "termsOfUseUrl": "https://localhost:3000/"
+  },
+  "localizationInfo": {
+    "defaultLanguageTag": "en-us"
+  },
+  "icons": {
+    "outline": "assets/icon-32.png",
+    "color": "assets/icon-80.png"
+  },
+  "accentColor": "#230201",
+  "validDomains": [
+    "https://localhost:3000"
+  ],
+  "extensions": [
+    {
+      "requirements": {
+        "scopes": [
+          "document"
+        ]
+      },
+      "runtimes": [
+        {
+          "id": "TaskPaneRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/taskpane.html"
+          },
+          "lifetime": "long",
+          "actions": [
+            {
+              "id": "ShowTaskpane",
+              "type": "openPage",
+              "view": "dashboard"
+            }
+          ]
+        },
+        {
+          "id": "CommandsRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            {
+              "id": "rewriteCurrentSelection",
+              "type": "executeFunction"
+            }
+          ]
+        }
+      ],
+      "ribbons": [
+        {
+          "contexts": [
+            "default"
+          ],
+          "tabs": [
+            {
+              "builtInTabId": "TabHome",
+              "groups": [
+                {
+                  "id": "wordKingGroup",
+                  "label": "word-king",
+                  "icons": [
+                    { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                    { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                    { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                  ],
+                  "controls": [
+                    {
+                      "id": "wordKingOpenPaneButton",
+                      "type": "button",
+                      "label": "Open word-king",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Open word-king",
+                        "description": "Draft and rewrite document content in your voice with word-king."
+                      },
+                      "actionId": "ShowTaskpane"
+                    },
+                    {
+                      "id": "wordKingRewriteButton",
+                      "type": "button",
+                      "label": "Rewrite selection",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Rewrite selection",
+                        "description": "Rewrite the currently-selected text in your voice, keeping length and meaning."
+                      },
+                      "actionId": "rewriteCurrentSelection"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
