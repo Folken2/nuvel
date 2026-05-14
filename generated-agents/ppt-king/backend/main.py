@@ -55,7 +55,13 @@ from google.adk.events import Event, EventActions
 from google.genai import types
 
 from ppt_king.agent import root_agent
-from ppt_king.tools.ppt_context import CURRENT_SLIDE_KEY, DECK_OUTLINE_KEY
+from ppt_king.tools.ppt_context import (
+    CURRENT_SLIDE_KEY,
+    DECK_OUTLINE_KEY,
+    OPENED_PRESENTATION_KEY,
+    PENDING_ACTIONS_KEY,
+    RECENT_EDITS_KEY,
+)
 from ppt_king.tools.style_tools import learn_style_from_kept_slide
 
 APP_NAME = "ppt_king"
@@ -105,16 +111,31 @@ async def verify_api_key(request: Request, call_next):
 # ── Models ──────────────────────────────────────────────────────────
 
 
+class SelectedShapePayload(BaseModel):
+    name: str = ""
+    type: str = ""
+    text: str = ""
+    left: float = 0.0
+    top: float = 0.0
+    width: float = 0.0
+    height: float = 0.0
+    is_placeholder: bool = False
+
+
 class CurrentSlidePayload(BaseModel):
     index: int = 0
+    slide_id: str = ""
     title: str = ""
     bullets: list[str] = Field(default_factory=list)
     notes: str = ""
     layout_name: str = ""
+    shape_count: int = 0
+    selected_shapes: list[SelectedShapePayload] = Field(default_factory=list)
 
 
 class DeckSlideSummary(BaseModel):
     index: int
+    slide_id: str = ""
     title: str = ""
     bullet_count: int = 0
     has_notes: bool = False
@@ -123,6 +144,14 @@ class DeckSlideSummary(BaseModel):
 class DeckOutlinePayload(BaseModel):
     slide_count: int = 0
     slides: list[DeckSlideSummary] = Field(default_factory=list)
+
+
+class RecordEditRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    action: str
+    slide_index: int = -1
+    summary: str = ""
 
 
 class ContextRequest(BaseModel):
@@ -138,6 +167,15 @@ class ChatRequest(BaseModel):
     prompt: str
     current_slide: CurrentSlidePayload | None = None
     deck_outline: DeckOutlinePayload | None = None
+
+
+class PresentationOpenedRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None
+    title: str = ""
+    slide_count: int = 0
+    slide_titles: list[str] = Field(default_factory=list)
+    is_new: bool = False
 
 
 class LearnSlideRequest(BaseModel):
@@ -219,14 +257,38 @@ async def push_context(req: ContextRequest):
     return {"status": "ok"}
 
 
+async def _drain_pending_actions(session_id: str, user_id: str) -> list[dict]:
+    """Pop the agent's queued actions from session state and return them."""
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
+    )
+    if session is None:
+        return []
+    actions = list(session.state.get(PENDING_ACTIONS_KEY) or [])
+    if not actions:
+        return []
+    event = Event(
+        invocation_id=f"drain-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta={PENDING_ACTIONS_KEY: []}),
+    )
+    await session_service.append_event(session, event)
+    return actions
+
+
 async def _run_agent_once(
     session_id: str,
     user_id: str,
     prompt: str,
     current_slide: CurrentSlidePayload | None,
     deck_outline: DeckOutlinePayload | None,
-) -> str:
-    """Run the agent for a single user turn and return the final text."""
+) -> tuple[str, list[dict]]:
+    """Run the agent for a single user turn.
+
+    Returns ``(final_text, pending_actions)``. ``pending_actions`` is the
+    queue of actions the agent's tools enqueued during the turn — the
+    taskpane is expected to execute them via Office.js.
+    """
     await _write_ppt_state(session_id, user_id, current_slide, deck_outline)
 
     runner = Runner(
@@ -244,7 +306,8 @@ async def _run_agent_once(
             for part in event.content.parts:
                 if getattr(part, "text", None):
                     final_text = part.text
-    return final_text
+    actions = await _drain_pending_actions(session_id, user_id)
+    return final_text, actions
 
 
 @app.post("/api/ppt/chat")
@@ -254,13 +317,13 @@ async def chat(req: ChatRequest):
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
     try:
-        text = await _run_agent_once(
+        text, actions = await _run_agent_once(
             req.session_id, user_id, req.prompt, req.current_slide, req.deck_outline
         )
     except Exception as exc:
         logger.exception("Agent run failed")
         raise HTTPException(500, f"Agent error: {exc}") from exc
-    return {"status": "ok", "message": text}
+    return {"status": "ok", "message": text, "actions": actions}
 
 
 @app.post("/api/ppt/chat/stream")
@@ -293,6 +356,9 @@ async def chat_stream(req: ChatRequest):
                 if event.is_final_response() and event.content and event.content.parts:
                     text = "".join(p.text or "" for p in event.content.parts)
                     yield f"event: final\ndata: {json.dumps({'text': text})}\n\n"
+            actions = await _drain_pending_actions(req.session_id, user_id)
+            if actions:
+                yield f"event: actions\ndata: {json.dumps({'actions': actions})}\n\n"
             yield "event: done\ndata: {}\n\n"
         except asyncio.CancelledError:
             raise
@@ -320,3 +386,83 @@ async def learn_slide(req: LearnSlideRequest):
         layout_name=req.layout_name,
     )
     return result
+
+
+@app.post("/api/ppt/presentation-opened")
+async def presentation_opened(req: PresentationOpenedRequest):
+    """Record an early-context snapshot of the presentation the user just opened.
+
+    Called by the taskpane the first time it mounts in a new session,
+    *before* any chat turn — so the agent already knows the deck title,
+    slide count, and slide titles when the user types their first prompt.
+    Stored under ``ppt:opened_presentation``; the agent reads it via
+    ``get_opened_presentation_snapshot``.
+
+    Note: This is the closest analogue to a PowerPoint ``OnDocumentOpened``
+    event we can wire today — the unified JSON manifest lists
+    ``OnDocumentOpened`` as "Not yet supported" for PowerPoint
+    (see README "JSON manifest features"). So the taskpane does the work
+    on mount rather than the host firing a background handler.
+
+    TODO(agent): hook this into a session-bootstrap callback so the agent
+    can emit a one-line "I see you opened X — want a quick outline review?"
+    proactively, rather than waiting for the first user prompt.
+    """
+    if not req.title.strip() and req.slide_count <= 0 and not req.slide_titles:
+        raise HTTPException(400, "Empty presentation snapshot.")
+    user_id = req.user_id or DEFAULT_USER_ID
+    await _ensure_session(req.session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    if session is None:
+        raise HTTPException(500, "Failed to load session")
+    import datetime as _dt
+    payload = {
+        "title": req.title,
+        "slide_count": req.slide_count,
+        "slide_titles": list(req.slide_titles),
+        "is_new": bool(req.is_new),
+        "opened_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    event = Event(
+        invocation_id=f"open-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta={OPENED_PRESENTATION_KEY: payload}),
+    )
+    await session_service.append_event(session, event)
+    return {"status": "ok", "snapshot": payload}
+
+
+@app.post("/api/ppt/record-edit")
+async def record_edit(req: RecordEditRequest):
+    """Append an entry to the session's rolling recent-edits log.
+
+    Called by the taskpane after it successfully runs an agent-queued
+    action against PowerPoint. The log lives in session state under
+    ``ppt:recent_edits`` and is capped at 10 most recent entries — the
+    agent reads it via ``get_recent_edits``.
+    """
+    user_id = req.user_id or DEFAULT_USER_ID
+    await _ensure_session(req.session_id, user_id)
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    if session is None:
+        raise HTTPException(500, "Failed to load session")
+    edits = list(session.state.get(RECENT_EDITS_KEY) or [])
+    import datetime as _dt
+    edits.append({
+        "action": req.action,
+        "slide_index": req.slide_index,
+        "summary": req.summary,
+        "timestamp": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    })
+    edits = edits[-10:]
+    event = Event(
+        invocation_id=f"edit-{uuid.uuid4().hex[:8]}",
+        author="system",
+        actions=EventActions(state_delta={RECENT_EDITS_KEY: edits}),
+    )
+    await session_service.append_event(session, event)
+    return {"status": "ok", "count": len(edits)}

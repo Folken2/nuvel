@@ -6,6 +6,9 @@ import {
   PptContext,
   setSlideContent,
   insertNewSlide,
+  executeActionQueue,
+  PptAction,
+  ActionResult,
 } from "../helpers/pptContext";
 import {
   BACKEND_URL,
@@ -52,6 +55,8 @@ interface Message {
   traceId?: string;
   durationMs?: number;
   undone?: boolean;
+  /** Results of agent-queued PowerPoint actions executed this turn. */
+  actionResults?: ActionResult[];
 }
 
 const SUGGESTIONS_BY_MODE: Record<"slide" | "deck" | "none", string[]> = {
@@ -362,19 +367,77 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
+    let openedPosted = false;
     const refresh = async () => {
       const snap = await snapshotCurrentContext();
-      if (!cancelled) setCtx(snap);
+      if (cancelled) return;
+      setCtx(snap);
+      // First successful snapshot after mount: post a lightweight early
+      // open-snapshot so the agent has deck awareness before the first
+      // chat turn. This is the taskpane-side stand-in for a PowerPoint
+      // OnDocumentOpened event — the unified JSON manifest doesn't expose
+      // that event for PowerPoint today.
+      if (!openedPosted && snap.deck_outline && snap.deck_outline.slide_count > 0) {
+        openedPosted = true;
+        const titles = snap.deck_outline.slides.map((s) => s.title || "");
+        const inferredTitle =
+          titles.find((t) => t && t.length > 0) || "Untitled deck";
+        const isNew =
+          snap.deck_outline.slide_count === 1 &&
+          titles.every((t) => !t || t.trim().length === 0);
+        try {
+          await fetch(`${BACKEND_URL}/api/ppt/presentation-opened`, {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({
+              session_id: sessionIdRef.current,
+              user_id: userIdRef.current,
+              title: inferredTitle,
+              slide_count: snap.deck_outline.slide_count,
+              slide_titles: titles,
+              is_new: isNew,
+            }),
+          });
+        } catch (e) {
+          logger.warn("presentation-opened post failed", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
     };
     void refresh();
+
+    // Push-driven refresh: PowerPoint fires DocumentSelectionChanged on
+    // slide selection and shape selection. We keep a longer polling
+    // interval as a safety net for hosts/builds that don't deliver the
+    // event reliably (e.g. older PowerPoint on Mac).
+    let handlerRef: any = null;
+    const handler = () => { void refresh(); };
     try {
       Office.context.document.addHandlerAsync(
         Office.EventType.DocumentSelectionChanged,
-        () => void refresh()
+        handler,
+        (asyncResult: any) => {
+          if (asyncResult && asyncResult.status === "succeeded") {
+            handlerRef = handler;
+          }
+        }
       );
     } catch { /* not every host supports the event */ }
-    const t = setInterval(refresh, 5000);
-    return () => { cancelled = true; clearInterval(t); };
+
+    const t = setInterval(refresh, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      if (handlerRef) {
+        try {
+          Office.context.document.removeHandlerAsync(
+            Office.EventType.DocumentSelectionChanged,
+            { handler: handlerRef }
+          );
+        } catch { /* */ }
+      }
+    };
   }, []);
 
   const updatePreference = (key: keyof UserPreferences, value: string) => {
@@ -453,6 +516,17 @@ const App: React.FC = () => {
         )
       );
       void learnSlide(msg.slide, ctx.current_slide.layout_name);
+      void fetch(`${BACKEND_URL}/api/ppt/record-edit`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+          action: "apply_slide",
+          slide_index: slideIndex,
+          summary: `Applied "${msg.slide.title.slice(0, 40)}" to slide ${slideIndex + 1}`,
+        }),
+      }).catch(() => {});
       const snap = await snapshotCurrentContext();
       setCtx(snap);
     } catch (e) {
@@ -530,6 +604,7 @@ const App: React.FC = () => {
       const decoder = new TextDecoder();
       let buffer = "";
       let finalText = "";
+      let pendingActions: PptAction[] = [];
       const collectedEvents: ToolEvent[] = [];
       const toolStartedAt: Record<string, number> = {};
 
@@ -580,10 +655,46 @@ const App: React.FC = () => {
             setLiveEvents([...collectedEvents]);
           } else if (evt === "final") {
             finalText = payload.text || "";
+          } else if (evt === "actions") {
+            if (Array.isArray(payload.actions)) pendingActions = payload.actions;
           } else if (evt === "error") {
             throw new Error(payload.message || "Backend error during streaming.");
           }
         }
+      }
+
+      let actionResults: ActionResult[] | undefined;
+      if (pendingActions.length > 0) {
+        try {
+          actionResults = await executeActionQueue(pendingActions, { continueOnError: true });
+        } catch (e) {
+          logger.warn("executeActionQueue threw", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+        // Forward successful edits to the backend's recent-edits log.
+        if (actionResults) {
+          for (const r of actionResults) {
+            if (r.status !== "ok") continue;
+            try {
+              await fetch(`${BACKEND_URL}/api/ppt/record-edit`, {
+                method: "POST",
+                headers: apiHeaders(),
+                body: JSON.stringify({
+                  session_id: sessionIdRef.current,
+                  user_id: userIdRef.current,
+                  action: r.type,
+                  slide_index: r.slide_index ?? -1,
+                  summary: r.summary || "",
+                }),
+              });
+            } catch { /* best-effort */ }
+          }
+        }
+        try {
+          const snap = await snapshotCurrentContext();
+          setCtx(snap);
+        } catch { /* */ }
       }
 
       const durationMs = Date.now() - requestStartRef.current;
@@ -594,6 +705,7 @@ const App: React.FC = () => {
         slide: extractSlide(finalText),
         sourcePrompt: prompt,
         durationMs,
+        actionResults,
       };
 
       setMessages((prev) => [...prev, agentMessage]);
@@ -776,6 +888,18 @@ const App: React.FC = () => {
                     const sec = totalSec % 60;
                     return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
                   })()}
+                </div>
+              )}
+              {msg.role === "agent" && msg.actionResults && msg.actionResults.length > 0 && (
+                <div className="action-results">
+                  <span className="tool-events-label">Applied to PowerPoint</span>
+                  {msg.actionResults.map((r, k) => (
+                    <div key={k} className={`tool-event tool-event-${r.status === "ok" ? "ok" : r.status === "skip" ? "ok" : "error"}`}>
+                      <span className="tool-event-icon">{r.status === "ok" ? "✓" : r.status === "skip" ? "○" : "✗"}</span>
+                      <span className="tool-event-name">{r.summary || r.type}</span>
+                      {r.message && <span className="tool-event-time">{r.message}</span>}
+                    </div>
+                  ))}
                 </div>
               )}
               {msg.role === "agent" && (msg.slide || msg.applied || msg.sourcePrompt) ? (

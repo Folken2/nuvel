@@ -22,6 +22,7 @@ from .awakening_tools import awakening_tool_list
 from .composio_mcp import build_composio_mcp_toolset
 
 from .ppt_context import ppt_context_tool_list
+from .action_tools import action_tool_list
 from .style_tools import style_tool_list
 from .outline_tools import outline_tool_list
 from .structure_tools import structure_tool_list
@@ -37,6 +38,7 @@ def get_tools() -> list:
     tools.extend(awakening_tool_list)
 
     tools.extend(ppt_context_tool_list)
+    tools.extend(action_tool_list)
     tools.extend(style_tool_list)
     tools.extend(outline_tool_list)
     tools.extend(structure_tool_list)

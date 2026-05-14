@@ -3,21 +3,39 @@ PowerPoint context tools.
 
 The Office.js taskpane pushes the user's current PowerPoint state into
 ADK session state via ``POST /api/ppt/context`` (see backend/main.py).
-These tools surface that state to the agent so it can act on "this slide"
-or "the deck I have open" without re-asking the user.
+These tools surface that state to the agent so it can act on "this slide",
+"this shape", or "the deck I have open" without re-asking the user.
 
 State keys (per session):
-    ppt:current_slide   {index, title, bullets, notes, layout_name}
-    ppt:deck_outline    {slide_count, slides: [{index, title, bullet_count,
-                         has_notes}]}
+    ppt:current_slide      {index, slide_id, title, bullets, notes,
+                            layout_name, selected_shapes: [...],
+                            shape_count}
+    ppt:deck_outline       {slide_count, slides: [{index, slide_id, title,
+                            bullet_count, has_notes}]}
+    ppt:recent_edits       list of recent agent-applied edits (rolling 10)
+    ppt:pending_actions    queue of actions the agent wants the addin to
+                           execute on the current turn
+
+The agent calls ``get_current_slide`` / ``get_selected_shape`` /
+``get_deck_outline`` to *read* state and ``request_context_refresh`` to
+ask the addin to push a new snapshot mid-turn.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from google.adk.tools import FunctionTool, ToolContext
 
 CURRENT_SLIDE_KEY = "ppt:current_slide"
 DECK_OUTLINE_KEY = "ppt:deck_outline"
+RECENT_EDITS_KEY = "ppt:recent_edits"
+PENDING_ACTIONS_KEY = "ppt:pending_actions"
+OPENED_PRESENTATION_KEY = "ppt:opened_presentation"
+
+
+def _get(tool_context: ToolContext, key: str) -> Any:
+    return tool_context.state.get(key)
 
 
 def get_current_slide(tool_context: ToolContext) -> dict:
@@ -25,15 +43,22 @@ def get_current_slide(tool_context: ToolContext) -> dict:
 
     Call this BEFORE tightening, rewriting, or adding speaker notes to
     "this slide", "the slide I'm on", or any deictic reference to the
-    active slide. The taskpane pushes a fresh snapshot into session state
-    whenever the selection changes.
+    active slide. Includes the slide title, bullets, notes, layout name,
+    and a summary of the currently-selected shapes (with text, position,
+    and size) so you can act on a specific shape if the user is pointing
+    at one.
 
     Returns:
-        ``{"status": "ok", "index": int, "title": str, "bullets": list[str],
-        "notes": str, "layout_name": str}`` when a slide is selected,
-        otherwise ``{"status": "no_slide", "message": str}``.
+        ``{"status": "ok", "index": int, "slide_id": str, "title": str,
+        "bullets": list[str], "notes": str, "layout_name": str,
+        "shape_count": int, "selected_shapes": [
+            {"name": str, "type": str, "text": str,
+             "left": float, "top": float, "width": float, "height": float,
+             "is_placeholder": bool}, ...
+        ]}`` when a slide is selected, otherwise
+        ``{"status": "no_slide", "message": str}``.
     """
-    payload = tool_context.state.get(CURRENT_SLIDE_KEY)
+    payload = _get(tool_context, CURRENT_SLIDE_KEY)
     if not payload:
         return {
             "status": "no_slide",
@@ -45,22 +70,52 @@ def get_current_slide(tool_context: ToolContext) -> dict:
     return {"status": "ok", **payload}
 
 
+def get_selected_shape(tool_context: ToolContext) -> dict:
+    """Return the shape(s) the user has currently selected on the slide.
+
+    Use this when the user says "this textbox", "this title", "the shape
+    I just clicked", "fix the text in this box", etc. Returns the first
+    selected shape as the primary payload plus the full list when the
+    user has multi-selected.
+
+    Returns:
+        ``{"status": "ok", "primary": {"name": str, "type": str, "text":
+        str, "left": float, "top": float, "width": float, "height":
+        float, "is_placeholder": bool}, "all": [...], "count": int}``
+        when at least one shape is selected on the current slide,
+        otherwise ``{"status": "no_shape", "message": str}``.
+    """
+    slide = _get(tool_context, CURRENT_SLIDE_KEY) or {}
+    shapes = slide.get("selected_shapes") or []
+    if not shapes:
+        return {
+            "status": "no_shape",
+            "message": (
+                "No shape is selected. Ask the user to click the shape "
+                "they want to edit."
+            ),
+        }
+    return {
+        "status": "ok",
+        "primary": shapes[0],
+        "all": shapes,
+        "count": len(shapes),
+    }
+
+
 def get_deck_outline(tool_context: ToolContext) -> dict:
     """Return the outline of the whole deck the user has open.
 
     Use this for structure / reordering work, "what's missing?", or any
-    question that needs the whole arc rather than a single slide. The
-    outline is a list of every slide's title plus a bullet count and a
-    has-notes flag — enough to reason over flow without dragging full
-    bullet text into the prompt.
+    question that needs the whole arc rather than a single slide.
 
     Returns:
-        ``{"status": "ok", "slide_count": int, "slides":
-        [{"index": int, "title": str, "bullet_count": int,
+        ``{"status": "ok", "slide_count": int, "slides": [{"index": int,
+        "slide_id": str, "title": str, "bullet_count": int,
         "has_notes": bool}, ...]}`` when a deck is open, otherwise
         ``{"status": "no_deck", "message": str}``.
     """
-    payload = tool_context.state.get(DECK_OUTLINE_KEY)
+    payload = _get(tool_context, DECK_OUTLINE_KEY)
     if not payload:
         return {
             "status": "no_deck",
@@ -72,7 +127,78 @@ def get_deck_outline(tool_context: ToolContext) -> dict:
     return {"status": "ok", **payload}
 
 
+def get_recent_edits(tool_context: ToolContext) -> dict:
+    """Return the recent edits the agent applied to the deck this session.
+
+    Useful for "undo my last change", "what did you just do?", or
+    avoiding repeating the same edit. The list is bounded to the most
+    recent 10 actions.
+
+    Returns:
+        ``{"status": "ok", "edits": [
+            {"action": str, "slide_index": int, "summary": str,
+             "timestamp": str}, ...]}``.
+    """
+    edits = _get(tool_context, RECENT_EDITS_KEY) or []
+    return {"status": "ok", "edits": list(edits)}
+
+
+def request_context_refresh(tool_context: ToolContext) -> dict:
+    """Ask the taskpane to push a fresh PowerPoint snapshot.
+
+    Call this when the agent has just queued actions that mutated the
+    deck and needs to read the new state before deciding the next move
+    (e.g. after inserting slides, before reordering). The addin watches
+    for the ``request_refresh`` flag and re-snapshots on the next tick.
+    The refreshed snapshot lands in session state before the next user
+    turn — within the same turn the values you have are still the
+    pre-mutation values.
+
+    Returns:
+        ``{"status": "queued"}``.
+    """
+    queue = list(_get(tool_context, PENDING_ACTIONS_KEY) or [])
+    queue.append({"type": "request_refresh"})
+    tool_context.state[PENDING_ACTIONS_KEY] = queue
+    return {"status": "queued"}
+
+
+def get_opened_presentation_snapshot(tool_context: ToolContext) -> dict:
+    """Return the early-open snapshot of the presentation the user just opened.
+
+    The taskpane fires ``POST /api/ppt/presentation-opened`` the first time
+    it mounts in a new session — before any chat turn. The snapshot is a
+    lightweight outline (title, slide count, slide titles) plus a flag for
+    brand-new decks (``is_new``).
+
+    Call this when the user asks "what deck did I just open?", "what's
+    this presentation about?", or any opening-context question where
+    ``get_deck_outline`` returns ``no_deck`` because the taskpane hasn't
+    pushed a full context payload yet.
+
+    Returns:
+        ``{"status": "ok", "title": str, "slide_count": int,
+        "slide_titles": list[str], "is_new": bool, "opened_at": str}``
+        when a snapshot exists, otherwise
+        ``{"status": "no_snapshot", "message": str}``.
+    """
+    payload = _get(tool_context, OPENED_PRESENTATION_KEY)
+    if not payload:
+        return {
+            "status": "no_snapshot",
+            "message": (
+                "No opening snapshot yet. The taskpane pushes one when "
+                "it first mounts; ask the user to open the ppt-king pane."
+            ),
+        }
+    return {"status": "ok", **payload}
+
+
 ppt_context_tool_list = [
     FunctionTool(get_current_slide),
+    FunctionTool(get_selected_shape),
     FunctionTool(get_deck_outline),
+    FunctionTool(get_recent_edits),
+    FunctionTool(request_context_refresh),
+    FunctionTool(get_opened_presentation_snapshot),
 ]
