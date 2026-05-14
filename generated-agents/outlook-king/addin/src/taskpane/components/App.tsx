@@ -3,11 +3,13 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   snapshotCurrentContext,
+  snapshotAccount,
   OutlookContext,
   ComposeContext,
   ReadContext,
   insertIntoCompose,
   replaceCompose,
+  executeOutlookAction,
 } from "../helpers/outlookContext";
 import {
   BACKEND_URL,
@@ -39,6 +41,13 @@ interface AppliedDraft {
   draft: string;
 }
 
+interface ExecutedAction {
+  type: string;
+  status: "ok" | "error" | "skipped";
+  description?: string;
+  error?: string;
+}
+
 interface Message {
   role: "user" | "agent";
   content: string;
@@ -51,6 +60,7 @@ interface Message {
   traceId?: string;
   durationMs?: number;
   undone?: boolean;
+  executedActions?: ExecutedAction[];
 }
 
 const SUGGESTIONS_BY_MODE: Record<"compose" | "read" | "none", string[]> = {
@@ -402,6 +412,74 @@ const App: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, liveEvents]);
 
+  /* ── Action execution (agent → Outlook) ── */
+
+  const executeAndReportAction = async (action: any): Promise<ExecutedAction> => {
+    if (action?.type === "refresh_context") {
+      try {
+        const snap = await snapshotCurrentContext();
+        setCtx(snap);
+        const account = snapshotAccount();
+        const body: any = {
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+          account,
+        };
+        if (snap?.mode === "compose") body.compose = snap;
+        else if (snap?.mode === "read") body.selected = snap;
+        await fetch(`${BACKEND_URL}/api/outlook/context`, {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify(body),
+        });
+        await fetch(`${BACKEND_URL}/api/outlook/action-result`, {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            user_id: userIdRef.current,
+            action_id: action.id,
+            action_type: action.type,
+            status: "ok",
+          }),
+        });
+        return { type: action.type, status: "ok", description: action.description };
+      } catch (e) {
+        return {
+          type: action.type,
+          status: "error",
+          description: action.description,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }
+
+    const result = await executeOutlookAction(action);
+    try {
+      await fetch(`${BACKEND_URL}/api/outlook/action-result`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+          action_id: action.id,
+          action_type: action.type,
+          status: result.status,
+          error: result.error || "",
+          detail: result.detail || {},
+        }),
+      });
+    } catch (e) {
+      logger.warn("action-result post failed", { error: e instanceof Error ? e.message : String(e) });
+    }
+    return {
+      type: action.type,
+      status: result.status,
+      description: action.description,
+      error: result.error,
+    };
+  };
+
   /* ── Draft insert / replace / undo ── */
 
   const learnSent = async (draft: string) => {
@@ -501,19 +579,40 @@ const App: React.FC = () => {
         user_id: userIdRef.current,
         prompt,
         language: preferences.language || "English",
+        account: snapshotAccount(),
       };
       if (snap?.mode === "compose") {
         const c = snap as ComposeContext;
         body.compose = {
-          body: c.body, subject: c.subject, to: c.to, cc: c.cc,
-          mode: c.composeMode, conversation_id: c.conversation_id,
+          body: c.body,
+          body_html: c.body_html,
+          subject: c.subject,
+          to: c.to,
+          cc: c.cc,
+          bcc: c.bcc,
+          mode: c.composeMode,
+          conversation_id: c.conversation_id,
+          selection: c.selection,
+          selection_is_html: c.selection_is_html,
+          attachments: c.attachments,
+          importance: c.importance,
         };
       } else if (snap?.mode === "read") {
         const r = snap as ReadContext;
         body.selected = {
-          id: r.id, subject: r.subject, from: r.from, to: r.to, body: r.body,
-          conversation_id: r.conversation_id, received: r.received,
+          id: r.id,
+          subject: r.subject,
+          from: r.from,
+          to: r.to,
+          cc: r.cc,
+          body: r.body,
+          conversation_id: r.conversation_id,
+          received: r.received,
           has_attachments: r.has_attachments,
+          attachments: r.attachments,
+          folder: r.folder,
+          categories: r.categories,
+          flag: r.flag,
         };
       }
 
@@ -534,6 +633,7 @@ const App: React.FC = () => {
       let finalText = "";
       const collectedEvents: ToolEvent[] = [];
       const toolStartedAt: Record<string, number> = {};
+      const queuedActions: any[] = [];
 
       const STALL_TIMEOUT_MS = 360_000;
 
@@ -582,9 +682,28 @@ const App: React.FC = () => {
             setLiveEvents([...collectedEvents]);
           } else if (evt === "final") {
             finalText = payload.text || "";
+          } else if (evt === "action") {
+            queuedActions.push(payload);
           } else if (evt === "error") {
             throw new Error(payload.message || "Backend error during streaming.");
           }
+        }
+      }
+
+      const executedActions: ExecutedAction[] = [];
+      for (const act of queuedActions) {
+        const result = await executeAndReportAction(act);
+        executedActions.push(result);
+      }
+
+      // After actions land, refresh the local context snapshot so subsequent
+      // turns see the freshest state without waiting for a debounce tick.
+      if (executedActions.length > 0) {
+        try {
+          const snap2 = await snapshotCurrentContext();
+          setCtx(snap2);
+        } catch {
+          /* best-effort */
         }
       }
 
@@ -596,6 +715,7 @@ const App: React.FC = () => {
         draft: extractDraft(finalText),
         sourcePrompt: prompt,
         durationMs,
+        executedActions: executedActions.length > 0 ? executedActions : undefined,
       };
 
       setMessages((prev) => [...prev, agentMessage]);
@@ -785,6 +905,24 @@ const App: React.FC = () => {
                     const sec = totalSec % 60;
                     return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
                   })()}
+                </div>
+              )}
+              {msg.role === "agent" && msg.executedActions && msg.executedActions.length > 0 && (
+                <div className="executed-actions">
+                  {msg.executedActions.map((a, j) => (
+                    <div
+                      key={j}
+                      className={`executed-action executed-action-${a.status}`}
+                      title={a.error || ""}
+                    >
+                      <span className="executed-action-icon">
+                        {a.status === "ok" ? "✓" : a.status === "error" ? "✗" : "○"}
+                      </span>
+                      <span className="executed-action-label">
+                        {a.description || a.type}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
               {msg.role === "agent" && (msg.draft || msg.applied || msg.sourcePrompt) ? (

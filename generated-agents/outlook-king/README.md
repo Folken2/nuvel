@@ -86,6 +86,75 @@ Sideload `manifest.xml`:
 - **Outlook desktop (Win/Mac)** → Get Add-ins → My add-ins → Add a custom add-in → From file.
 - **Microsoft 365 admin tenant** → Integrated apps → Upload custom apps.
 
+#### XML vs JSON manifest
+
+Both formats ship side-by-side in `/addin`:
+
+| File | When to use it |
+|---|---|
+| `manifest.xml` | Classic Outlook on Windows, Outlook on Mac, and anywhere you need the broadest compatibility. **Default.** |
+| `manifest.json` | New Outlook on Windows + Outlook on the web. Unlocks the unified Microsoft 365 manifest surfaces — event-based activation (`OnNewMessageCompose`, `OnMessageSend`), Smart Alerts on-send v2, integrated spam-report, and M365 admin parity with Teams apps. |
+
+The JSON manifest is currently only installable on new Outlook on Windows and Outlook on the web; classic Outlook on Windows + Outlook on Mac still need the XML manifest. That's why we keep both — same identity (`id`, URLs, ribbon buttons), two formats.
+
+Switch which one `office-addin-debugging` sideloads. Two equivalent forms — explicit script, or the `OFFICE_MANIFEST` env var read by the dispatcher (`scripts/run-office-addin.js`):
+
+```bash
+# default — XML (unchanged behavior)
+npm start
+
+# JSON manifest — env-var form
+OFFICE_MANIFEST=json npm start
+
+# JSON manifest — explicit script
+npm run start:json
+
+# XML manifest, explicit
+npm run start:xml
+```
+
+`stop` and `validate` accept the same `OFFICE_MANIFEST=json` env var, and the `:xml` / `:json` variants bypass it.
+
+Validate either with:
+
+```bash
+npm run validate:xml
+npm run validate:json
+# or: npx office-addin-manifest validate manifest.json
+```
+
+#### JSON manifest features
+
+The following Outlook surfaces are declared **only** in `manifest.json` —
+they don't activate when the add-in is sideloaded via `manifest.xml`. The
+XML build keeps its existing behavior unchanged.
+
+| Surface | Fired on | Handler (commands.ts) | Backend route |
+|---|---|---|---|
+| `OnNewMessageCompose` (`newMessageComposeCreated`, Mailbox 1.10+) | New compose window opens (incl. reply/forward) | `onNewMessageComposeHandler` | `POST /api/outlook/compose-opened` |
+| `OnMessageCompose` (`messageComposeOpened`, Mailbox 1.12+) | Any compose window (incl. editing a draft) | `onMessageComposeOpenedHandler` | `POST /api/outlook/compose-opened` |
+| `OnMessageSend` (`messageSending`, Mailbox 1.12+, Smart Alerts `softBlock`) | User clicks Send on a message | `onMessageSendHandler` | `POST /api/outlook/pre-send-check` |
+| Integrated spam reporting (`spamReportingOverride` + `spamPreProcessingDialog`, Mailbox 1.14+) | User clicks the native Report button | `onSpamReportHandler` | `POST /api/outlook/report-spam` |
+
+Notes:
+
+- The compose-opened events ship a draft snapshot to the backend *before*
+  the task pane is even opened. The agent reads it via the new
+  `get_compose_draft_snapshot` tool (state key `outlook:compose_draft`).
+- Smart Alerts uses `sendMode: softBlock` — if the backend is unreachable
+  or the check passes, `event.completed({allowEvent: true})` always fires.
+  The current concrete check is a missing-attachment heuristic; tone /
+  missing-recipient / agent-side review are stubs in `backend/main.py`.
+- The spam-reporting surface logs to session state under
+  `outlook:spam_reports`; agent-side triage is intentionally stubbed.
+- In addition, `App.tsx` subscribes to `Office.EventType.ItemChanged` so
+  the task pane refreshes context on item switch in **both** manifest
+  builds (the handler API works under the XML manifest too). Only the
+  manifest-declared `autoRunEvents` / spam-reporting surfaces above are
+  JSON-only.
+
+> Note: as of May 2026, `office-addin-manifest validate` emits a false-positive against `groups[].builtInGroupId` whenever a tab uses `builtInTabId` (a known quirk in how the bundled ajv evaluates the schema's `dependencies` clause — see [OfficeDev/microsoft-teams-app-schema#190](https://github.com/OfficeDev/microsoft-teams-app-schema/issues/190) and related). Our manifest does **not** set `builtInGroupId`; the structure matches what `yo office` scaffolds for Outlook. Sideloading via `npm run start:json` works regardless.
+
 In Outlook you'll see an **outlook-king** group on the Home tab, in both read and compose modes:
 - **Open outlook-king** — taskpane chat with quick actions and a context strip showing what the agent currently sees.
 - **Coach my draft** — one-click voice-aware feedback while composing.
@@ -100,16 +169,80 @@ LLM-touching tests in `tests/test_agent.py` use ADK record/replay — see that f
 
 ## Outlook-specific tools
 
+### Context (read-only, pulls from session state)
+
 | Tool | Purpose |
 |---|---|
-| `get_current_compose` | Read the user's open compose window from session state |
-| `get_selected_message` | Read the user's currently-selected inbox message |
+| `get_current_compose` | Compose snapshot — body, subject, to/cc/bcc, **selection inside the body**, attachments, importance, mode |
+| `get_selected_message` | Read-mode snapshot — from, to/cc, body, folder, categories, flag, attachments |
+| `get_outlook_account` | Account email, display name, time zone, host (Web/Desktop/Mac) |
+| `get_full_outlook_state` | One-shot: compose + selected + account + recent action log |
+
+### Actions (mutate the live mailbox via the add-in)
+
+Each call queues an action into session state; the FastAPI bridge ships
+it to the add-in over the chat response and the add-in executes against
+Office.js. The outcome is recorded under `outlook:action_results`.
+
+| Tool | Mode | What it does |
+|---|---|---|
+| `insert_text_at_cursor` | compose | Inserts text/HTML at caret; replaces selection if any |
+| `replace_compose_body` | compose | Wipe-and-replace the entire draft |
+| `set_subject` | compose | Set the subject line |
+| `add_recipients` | compose | Add to/cc/bcc recipients |
+| `remove_recipients` | compose | Remove specific addresses from a field |
+| `set_importance` | compose | low / normal / high |
+| `attach_file_from_url` | compose | Attach by URL (inline or regular) |
+| `create_reply_draft` | read | Open a reply / reply-all compose pre-filled |
+| `create_forward_draft` | read | Open a forward compose with recipients pre-filled |
+| `apply_categories` | any | Apply Outlook categories to the current item |
+| `set_flag` | read | Flag / complete / unflag the selected message |
+| `refresh_outlook_context` | any | Ask the add-in to re-snapshot when state may be stale |
+| `get_recent_action_results` | — | Inspect outcomes of recently-executed actions |
+
+### Analysis & memory
+
+| Tool | Purpose |
+|---|---|
 | `analyze_draft` | Objective metrics on a draft (counts, hedges, passives, structure) |
 | `plan_email_search` | Natural language → structured Outlook filters |
 | `rank_search_hits` | Re-rank Composio results by recency + sender weight |
 | `recall_writing_style` | Read consolidated voice rulebook from markdown memory |
 | `learn_style_from_sent_email` | Append a structured fingerprint after a send |
 | `consolidate_writing_style` | Distill fingerprints into a rulebook |
+
+## Shared-state model
+
+State that flows add-in → backend → ADK session on every turn:
+
+```
+outlook:current_compose   body, body_html, subject, to/cc/bcc,
+                          selection (highlighted span), selection_is_html,
+                          attachments[], importance, mode, conversation_id
+outlook:selected_message  id, subject, from, to, cc, body, folder,
+                          categories[], flag, attachments[], received,
+                          has_attachments, conversation_id
+outlook:account           email, display_name, time_zone, host, platform
+outlook:pending_actions   queued by action tools; drained at end of turn
+outlook:action_results    rolling log of what the add-in actually executed
+outlook:recent_actions    compact summary (type + status) of recent actions
+```
+
+The chat request body carries a fresh snapshot every turn; the agent's
+context tools always read the latest. When the agent suspects drift
+(e.g. user said "I just changed it"), it can call `refresh_outlook_context`
+to ask the add-in to re-snapshot.
+
+## Action pipeline
+
+```
+agent tool call          →  outlook:pending_actions  (session state)
+end of turn              →  backend drains queue
+SSE event: action {...}  →  add-in receives & executes via Office.js
+add-in result            →  POST /api/outlook/action-result
+                         →  outlook:action_results  (session state)
+next turn                →  agent inspects via get_recent_action_results
+```
 
 Plus everything the nuvel scaffold ships: `save_memory`/`recall_memory`, `cronjob`, `read_soul`/`update_soul`, `author_skill`, and the Composio MCP toolset.
 

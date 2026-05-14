@@ -21,6 +21,7 @@ from .awakening_tools import awakening_tool_list
 from .composio_mcp import build_composio_mcp_toolset
 
 from .outlook_context import outlook_context_tool_list
+from .outlook_actions import outlook_action_tool_list
 from .style_tools import style_tool_list
 from .coach_tools import coach_tool_list
 from .search_hints import search_hint_tool_list
@@ -36,6 +37,7 @@ def get_tools() -> list:
     tools.extend(awakening_tool_list)
 
     tools.extend(outlook_context_tool_list)
+    tools.extend(outlook_action_tool_list)
     tools.extend(style_tool_list)
     tools.extend(coach_tool_list)
     tools.extend(search_hint_tool_list)

@@ -1,0 +1,297 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.21/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.21",
+  "id": "3e6f01d2-91b7-4a3d-9a02-9f1f0a0f1234",
+  "version": "1.0.0",
+  "name": {
+    "short": "outlook-king",
+    "full": "outlook-king"
+  },
+  "description": {
+    "short": "King of Outlook — search, draft, coach.",
+    "full": "King of Outlook — search, drafts, coaching, and a writing-style memory that learns you."
+  },
+  "developer": {
+    "name": "outlook-king",
+    "websiteUrl": "https://localhost:3000/",
+    "privacyUrl": "https://localhost:3000/",
+    "termsOfUseUrl": "https://localhost:3000/"
+  },
+  "localizationInfo": {
+    "defaultLanguageTag": "en-US"
+  },
+  "icons": {
+    "outline": "assets/icon-32.png",
+    "color": "assets/icon-80.png"
+  },
+  "accentColor": "#230201",
+  "validDomains": [
+    "localhost:3000"
+  ],
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "Mailbox.ReadWrite.User",
+          "type": "Delegated"
+        }
+      ]
+    }
+  },
+  "extensions": [
+    {
+      "requirements": {
+        "scopes": [
+          "mail"
+        ],
+        "capabilities": [
+          {
+            "name": "Mailbox",
+            "minVersion": "1.5"
+          }
+        ]
+      },
+      "runtimes": [
+        {
+          "id": "TaskPaneRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/taskpane.html"
+          },
+          "lifetime": "short",
+          "actions": [
+            {
+              "id": "TaskPaneRuntimeShow",
+              "type": "openPage",
+              "displayName": "Open outlook-king",
+              "pinnable": true
+            }
+          ]
+        },
+        {
+          "id": "CommandsRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            {
+              "id": "coachCurrentDraft",
+              "type": "executeFunction"
+            }
+          ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.10" }
+            ]
+          },
+          "id": "AutoRunRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            { "id": "onNewMessageComposeHandler", "type": "executeFunction" },
+            { "id": "onMessageComposeOpenedHandler", "type": "executeFunction" },
+            { "id": "onMessageSendHandler", "type": "executeFunction" }
+          ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.14" }
+            ]
+          },
+          "id": "SpamReportingRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://localhost:3000/commands.html",
+            "script": "https://localhost:3000/commands.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            { "id": "onSpamReportHandler", "type": "executeFunction" }
+          ]
+        }
+      ],
+      "autoRunEvents": [
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.10" }
+            ],
+            "scopes": ["mail"]
+          },
+          "events": [
+            {
+              "type": "newMessageComposeCreated",
+              "actionId": "onNewMessageComposeHandler"
+            }
+          ]
+        },
+        {
+          "requirements": {
+            "capabilities": [
+              { "name": "Mailbox", "minVersion": "1.12" }
+            ],
+            "scopes": ["mail"]
+          },
+          "events": [
+            {
+              "type": "messageComposeOpened",
+              "actionId": "onMessageComposeOpenedHandler"
+            },
+            {
+              "type": "messageSending",
+              "actionId": "onMessageSendHandler",
+              "options": {
+                "sendMode": "softBlock"
+              }
+            }
+          ]
+        }
+      ],
+      "ribbons": [
+        {
+          "contexts": [
+            "mailRead"
+          ],
+          "tabs": [
+            {
+              "builtInTabId": "TabDefault",
+              "groups": [
+                {
+                  "id": "msgReadGroup",
+                  "label": "outlook-king",
+                  "controls": [
+                    {
+                      "id": "msgReadOpenPaneButton",
+                      "type": "button",
+                      "label": "Open outlook-king",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Open outlook-king",
+                        "description": "Search, draft, and coach your email with outlook-king."
+                      },
+                      "actionId": "TaskPaneRuntimeShow"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "mailCompose"
+          ],
+          "tabs": [
+            {
+              "builtInTabId": "TabDefault",
+              "groups": [
+                {
+                  "id": "msgComposeGroup",
+                  "label": "outlook-king",
+                  "controls": [
+                    {
+                      "id": "msgComposeOpenPaneButton",
+                      "type": "button",
+                      "label": "Open outlook-king",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Open outlook-king",
+                        "description": "Search, draft, and coach your email with outlook-king."
+                      },
+                      "actionId": "TaskPaneRuntimeShow"
+                    },
+                    {
+                      "id": "msgComposeCoachButton",
+                      "type": "button",
+                      "label": "Coach my draft",
+                      "icons": [
+                        { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                        { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                        { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Coach my draft",
+                        "description": "Get instant voice-aware feedback on the draft you're writing."
+                      },
+                      "actionId": "coachCurrentDraft"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        ,
+        {
+          "contexts": ["spamReportingOverride"],
+          "tabs": [],
+          "fixedControls": [
+            {
+              "id": "spamReportingButton",
+              "type": "button",
+              "label": "Report to outlook-king",
+              "enabled": false,
+              "icons": [
+                { "size": 16, "url": "https://localhost:3000/assets/icon-16.png" },
+                { "size": 32, "url": "https://localhost:3000/assets/icon-32.png" },
+                { "size": 80, "url": "https://localhost:3000/assets/icon-80.png" }
+              ],
+              "supertip": {
+                "title": "Report to outlook-king",
+                "description": "Send this message to outlook-king for spam/phishing triage."
+              },
+              "actionId": "onSpamReportHandler"
+            }
+          ],
+          "spamPreProcessingDialog": {
+            "title": "Report to outlook-king",
+            "description": "Help the agent learn what's noise. We'll log the message for triage.",
+            "spamNeverShowAgainOption": false,
+            "spamReportingOptions": {
+              "title": "Why are you reporting this email?",
+              "options": [
+                "Spam / unsolicited",
+                "Phishing attempt",
+                "Not sure it's legitimate"
+              ],
+              "type": "checkbox"
+            },
+            "spamFreeTextSectionTitle": "Anything else worth noting?"
+          }
+        }
+      ],
+      "alternates": [
+        {
+          "alternateIcons": {
+            "icon": {
+              "size": 32,
+              "url": "https://localhost:3000/assets/icon-32.png"
+            },
+            "highResolutionIcon": {
+              "size": 80,
+              "url": "https://localhost:3000/assets/icon-80.png"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
