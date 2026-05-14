@@ -6,6 +6,9 @@ import {
   PptContext,
   setSlideContent,
   insertNewSlide,
+  executeActionQueue,
+  PptAction,
+  ActionResult,
 } from "../helpers/pptContext";
 import {
   BACKEND_URL,
@@ -52,6 +55,8 @@ interface Message {
   traceId?: string;
   durationMs?: number;
   undone?: boolean;
+  /** Results of agent-queued PowerPoint actions executed this turn. */
+  actionResults?: ActionResult[];
 }
 
 const SUGGESTIONS_BY_MODE: Record<"slide" | "deck" | "none", string[]> = {
@@ -453,6 +458,17 @@ const App: React.FC = () => {
         )
       );
       void learnSlide(msg.slide, ctx.current_slide.layout_name);
+      void fetch(`${BACKEND_URL}/api/ppt/record-edit`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+          action: "apply_slide",
+          slide_index: slideIndex,
+          summary: `Applied "${msg.slide.title.slice(0, 40)}" to slide ${slideIndex + 1}`,
+        }),
+      }).catch(() => {});
       const snap = await snapshotCurrentContext();
       setCtx(snap);
     } catch (e) {
@@ -530,6 +546,7 @@ const App: React.FC = () => {
       const decoder = new TextDecoder();
       let buffer = "";
       let finalText = "";
+      let pendingActions: PptAction[] = [];
       const collectedEvents: ToolEvent[] = [];
       const toolStartedAt: Record<string, number> = {};
 
@@ -580,10 +597,46 @@ const App: React.FC = () => {
             setLiveEvents([...collectedEvents]);
           } else if (evt === "final") {
             finalText = payload.text || "";
+          } else if (evt === "actions") {
+            if (Array.isArray(payload.actions)) pendingActions = payload.actions;
           } else if (evt === "error") {
             throw new Error(payload.message || "Backend error during streaming.");
           }
         }
+      }
+
+      let actionResults: ActionResult[] | undefined;
+      if (pendingActions.length > 0) {
+        try {
+          actionResults = await executeActionQueue(pendingActions, { continueOnError: true });
+        } catch (e) {
+          logger.warn("executeActionQueue threw", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+        // Forward successful edits to the backend's recent-edits log.
+        if (actionResults) {
+          for (const r of actionResults) {
+            if (r.status !== "ok") continue;
+            try {
+              await fetch(`${BACKEND_URL}/api/ppt/record-edit`, {
+                method: "POST",
+                headers: apiHeaders(),
+                body: JSON.stringify({
+                  session_id: sessionIdRef.current,
+                  user_id: userIdRef.current,
+                  action: r.type,
+                  slide_index: r.slide_index ?? -1,
+                  summary: r.summary || "",
+                }),
+              });
+            } catch { /* best-effort */ }
+          }
+        }
+        try {
+          const snap = await snapshotCurrentContext();
+          setCtx(snap);
+        } catch { /* */ }
       }
 
       const durationMs = Date.now() - requestStartRef.current;
@@ -594,6 +647,7 @@ const App: React.FC = () => {
         slide: extractSlide(finalText),
         sourcePrompt: prompt,
         durationMs,
+        actionResults,
       };
 
       setMessages((prev) => [...prev, agentMessage]);
@@ -776,6 +830,18 @@ const App: React.FC = () => {
                     const sec = totalSec % 60;
                     return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
                   })()}
+                </div>
+              )}
+              {msg.role === "agent" && msg.actionResults && msg.actionResults.length > 0 && (
+                <div className="action-results">
+                  <span className="tool-events-label">Applied to PowerPoint</span>
+                  {msg.actionResults.map((r, k) => (
+                    <div key={k} className={`tool-event tool-event-${r.status === "ok" ? "ok" : r.status === "skip" ? "ok" : "error"}`}>
+                      <span className="tool-event-icon">{r.status === "ok" ? "✓" : r.status === "skip" ? "○" : "✗"}</span>
+                      <span className="tool-event-name">{r.summary || r.type}</span>
+                      {r.message && <span className="tool-event-time">{r.message}</span>}
+                    </div>
+                  ))}
                 </div>
               )}
               {msg.role === "agent" && (msg.slide || msg.applied || msg.sourcePrompt) ? (
