@@ -230,11 +230,11 @@ def _find_agent_plugins_dir(cwd: Path) -> Optional[Path]:
     return None
 
 
-# Defaults must mirror config/llm.py — if those defaults change in the
-# template, update here.
+from nuvel._defaults import DEFAULT_FAST_MODEL, DEFAULT_REASONING_MODEL
+
 _MODEL_DEFAULTS = {
-    "FAST_MODEL": "openrouter/moonshotai/kimi-k2.5",
-    "REASONING_MODEL": "openrouter/google/gemini-3.1-pro-preview",
+    "FAST_MODEL": DEFAULT_FAST_MODEL,
+    "REASONING_MODEL": DEFAULT_REASONING_MODEL,
 }
 
 

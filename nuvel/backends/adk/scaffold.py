@@ -30,6 +30,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from nuvel._defaults import DEFAULT_FAST_MODEL, DEFAULT_REASONING_MODEL
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 OVERLAYS_DIR = Path(__file__).parent / "templates_overlays"
 
@@ -405,6 +407,9 @@ def _build_replacements(
         "{{composio_env_block}}": _COMPOSIO_ENV_BLOCK if with_composio else "",
         # requirements.txt
         "{{composio_requirement}}": _COMPOSIO_REQUIREMENT if with_composio else "",
+        # Model defaults (single source: nuvel/_defaults.py)
+        "{{default_fast_model}}": DEFAULT_FAST_MODEL,
+        "{{default_reasoning_model}}": DEFAULT_REASONING_MODEL,
         # Gateway placeholders (populated by per-channel tasks 3–5)
         "{{gateway_imports}}": gateway_imports,
         "{{gateway_mounts}}": gateway_mounts,

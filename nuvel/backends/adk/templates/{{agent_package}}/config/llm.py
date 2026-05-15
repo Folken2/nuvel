@@ -27,12 +27,12 @@ _OPENROUTER_HEADERS = {
 }
 
 FAST_MODEL = LiteLlm(
-    model=os.getenv("FAST_MODEL", "openrouter/moonshotai/kimi-k2.5"),
+    model=os.getenv("FAST_MODEL", "{{default_fast_model}}"),
     extra_headers=_OPENROUTER_HEADERS,
 )
 
 REASONING_MODEL = LiteLlm(
-    model=os.getenv("REASONING_MODEL", "openrouter/google/gemini-3.1-pro-preview"),
+    model=os.getenv("REASONING_MODEL", "{{default_reasoning_model}}"),
     extra_headers=_OPENROUTER_HEADERS,
 )
 
