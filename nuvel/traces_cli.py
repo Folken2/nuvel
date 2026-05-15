@@ -486,6 +486,159 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── Errors aggregation ───────────────────────────────────────────────
+
+
+# Event names that signal a failure. They have different semantics:
+#   llm_error       — LiteLLM gave up after its internal retries
+#   tool_exception  — Python raised inside the tool body
+#   tool_end (status=error) — tool returned a structured error result
+_ERROR_EVENTS = {"llm_error", "tool_exception"}
+
+
+def _is_tool_error(rec: dict) -> bool:
+    return rec.get("event") == "tool_end" and rec.get("status") == "error"
+
+
+def _iter_records(sources: list[str] | None, args: argparse.Namespace) -> Iterator[tuple[Path, dict]]:
+    """Walk every record across all matching trace files.
+
+    Honors --agent / --since the same way `list`/`stats` do, but at the
+    record level: a record is included if its file's agent matches and
+    its timestamp passes --since.
+    """
+    since = _parse_since(getattr(args, "since", "") or "")
+    agent_q = (getattr(args, "agent", None) or "").lower()
+    for f in _iter_trace_files(_discover_trace_dirs(sources)):
+        agent_label = _agent_label_for(f)
+        if agent_q and agent_q not in agent_label.lower():
+            continue
+        for rec in _read_jsonl(f):
+            if since:
+                ts = rec.get("timestamp") or rec.get("ts") or ""
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if dt < since:
+                        continue
+                except (ValueError, AttributeError):
+                    pass
+            yield f, rec
+
+
+def _cmd_errors(args: argparse.Namespace) -> int:
+    """Summarize errors across trace files.
+
+    Three rollups: by tool (with error rate against total invocations),
+    by model (llm_error only), and by error_type. With --recent N, prints
+    the last N error events instead of the summary.
+    """
+    tool_errors: dict[str, int] = {}
+    tool_totals: dict[str, int] = {}
+    model_errors: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    recent: list[tuple[Path, dict]] = []
+    total_errors = 0
+
+    for f, rec in _iter_records(args.source, args):
+        ev = rec.get("event")
+        is_tool_err = _is_tool_error(rec)
+        if ev in _ERROR_EVENTS or is_tool_err:
+            total_errors += 1
+            recent.append((f, rec))
+            etype = rec.get("error_type") or ("tool_error_result" if is_tool_err else ev)
+            type_counts[etype] = type_counts.get(etype, 0) + 1
+        if ev == "tool_end":
+            tool = rec.get("tool") or "?"
+            tool_totals[tool] = tool_totals.get(tool, 0) + 1
+            if is_tool_err:
+                tool_errors[tool] = tool_errors.get(tool, 0) + 1
+        elif ev == "tool_exception":
+            tool = rec.get("tool") or "?"
+            tool_errors[tool] = tool_errors.get(tool, 0) + 1
+        elif ev == "llm_error":
+            model = rec.get("model") or "?"
+            model_errors[model] = model_errors.get(model, 0) + 1
+
+    if args.recent:
+        return _print_recent_errors(recent, args.recent)
+
+    if total_errors == 0:
+        print("No errors found.")
+        return 0
+
+    print(f"Total error events: {total_errors}\n")
+
+    if tool_errors:
+        print("By tool:")
+        header = ("TOOL", "ERRORS", "CALLS", "RATE")
+        rows = []
+        for tool, errs in tool_errors.items():
+            total = tool_totals.get(tool, errs)  # exceptions may bypass tool_end
+            rate = (errs / total * 100) if total else 0.0
+            rows.append((tool, str(errs), str(total), f"{rate:.1f}%"))
+        rows.sort(key=lambda r: int(r[1]), reverse=True)
+        _print_table(header, rows)
+        print()
+
+    if model_errors:
+        print("By model (llm_error):")
+        header = ("MODEL", "ERRORS")
+        rows = sorted(
+            ((m, str(n)) for m, n in model_errors.items()),
+            key=lambda r: int(r[1]), reverse=True,
+        )
+        _print_table(header, rows)
+        print()
+
+    if type_counts:
+        print("By error_type:")
+        header = ("TYPE", "COUNT")
+        rows = sorted(
+            ((t, str(n)) for t, n in type_counts.items()),
+            key=lambda r: int(r[1]), reverse=True,
+        )
+        _print_table(header, rows)
+    return 0
+
+
+def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    if not rows:
+        return
+    widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(header)]
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(fmt.format(*header))
+    print(fmt.format(*("-" * w for w in widths)))
+    for row in rows:
+        print(fmt.format(*row))
+
+
+def _print_recent_errors(records: list[tuple[Path, dict]], n: int) -> int:
+    if not records:
+        print("No errors found.")
+        return 0
+    # Sort newest first by timestamp.
+    records.sort(key=lambda fr: fr[1].get("timestamp", ""), reverse=True)
+    for f, rec in records[:n]:
+        ev = rec.get("event")
+        ts = (rec.get("timestamp") or "")[:19].replace("T", " ")
+        agent = _agent_label_for(f)
+        tid = (rec.get("trace_id") or rec.get("session_id") or "?")[:12]
+        if ev == "llm_error":
+            head = f"llm_error  model={rec.get('model')}  type={rec.get('error_type')}"
+            body = rec.get("error_message") or ""
+        elif ev == "tool_exception":
+            head = f"tool_exception  tool={rec.get('tool')}  type={rec.get('error_type')}"
+            body = rec.get("error_message") or ""
+        else:  # tool_end status=error
+            head = f"tool_error  tool={rec.get('tool')}  dur={rec.get('duration_ms')}ms"
+            result = rec.get("result") or {}
+            body = (result.get("error") or result.get("message") or "") if isinstance(result, dict) else ""
+        print(f"{ts}  {agent}  {tid}  {head}")
+        if body:
+            print(f"    {_short(str(body), 200)}")
+    return 0
+
+
 # ── Parser wiring ────────────────────────────────────────────────────
 
 
@@ -527,3 +680,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     _add_source_flag(p_stats)
     _add_filters(p_stats)
     p_stats.set_defaults(func=_cmd_stats)
+
+    p_errors = sub.add_parser(
+        "errors",
+        help="Summarize error events (llm_error, tool_exception, tool error results).",
+    )
+    _add_source_flag(p_errors)
+    _add_filters(p_errors)
+    p_errors.add_argument(
+        "--recent", "-r", type=int, default=0,
+        help="Instead of the summary, print the last N error events with messages.",
+    )
+    p_errors.set_defaults(func=_cmd_errors)
