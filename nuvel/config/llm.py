@@ -11,6 +11,8 @@ load_dotenv()
 import litellm
 from google.adk.models.lite_llm import LiteLlm
 
+from nuvel._defaults import DEFAULT_FAST_MODEL, DEFAULT_REASONING_MODEL
+
 logger = logging.getLogger(__name__)
 
 # Retry configuration for transient errors
@@ -27,11 +29,11 @@ _OPENROUTER_HEADERS = {
 }
 
 FAST_MODEL = LiteLlm(
-    model=os.getenv("FAST_MODEL", "openrouter/moonshotai/kimi-k2.5"),
+    model=os.getenv("FAST_MODEL", DEFAULT_FAST_MODEL),
     extra_headers=_OPENROUTER_HEADERS,
 )
 
 REASONING_MODEL = LiteLlm(
-    model=os.getenv("REASONING_MODEL", "openrouter/google/gemini-3.1-pro-preview"),
+    model=os.getenv("REASONING_MODEL", DEFAULT_REASONING_MODEL),
     extra_headers=_OPENROUTER_HEADERS,
 )
