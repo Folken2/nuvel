@@ -234,7 +234,7 @@ def _find_agent_plugins_dir(cwd: Path) -> Optional[Path]:
 # template, update here.
 _MODEL_DEFAULTS = {
     "FAST_MODEL": "openrouter/moonshotai/kimi-k2.5",
-    "REASONING_MODEL": "openrouter/google/gemini-3-pro-preview",
+    "REASONING_MODEL": "openrouter/google/gemini-3.1-pro-preview",
 }
 
 

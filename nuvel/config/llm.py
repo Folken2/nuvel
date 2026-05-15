@@ -32,6 +32,6 @@ FAST_MODEL = LiteLlm(
 )
 
 REASONING_MODEL = LiteLlm(
-    model=os.getenv("REASONING_MODEL", "openrouter/google/gemini-3-pro-preview"),
+    model=os.getenv("REASONING_MODEL", "openrouter/google/gemini-3.1-pro-preview"),
     extra_headers=_OPENROUTER_HEADERS,
 )
