@@ -158,6 +158,9 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel new <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
+| `nuvel doctor [--path <dir>]` | Diagnose the install and the agent in cwd (env, deps, pricing) |
+| `nuvel traces list \| show \| stats \| errors` | Inspect JSONL trace logs across all local agents |
+| `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |
 

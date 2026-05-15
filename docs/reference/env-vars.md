@@ -24,8 +24,44 @@ Every env var a scaffolded agent reads, grouped by feature. The full set surface
 |---|---|---|
 | `OPENROUTER_API_KEY` | yes | OpenRouter API key. Get one at [openrouter.ai/keys](https://openrouter.ai/keys). |
 | `FAST_MODEL` | no | Override the default fast model (e.g. `openrouter/moonshotai/kimi-k2.5`). |
-| `REASONING_MODEL` | no | Override the default reasoning model (e.g. `openrouter/google/gemini-3-pro-preview`). |
+| `REASONING_MODEL` | no | Override the default reasoning model (e.g. `openrouter/google/gemini-3.1-pro-preview`). |
 | `OPENROUTER_REFERER` | no | Custom OpenRouter attribution header. Defaults to a per-agent value. |
+| `LLM_NUM_RETRIES` | no | Retries per LLM call on transient errors (429 / 503 / timeout). Default `3`. Set globally via `litellm.num_retries`. |
+| `LLM_REQUEST_TIMEOUT` | no | Per-LLM-call timeout in seconds. Default `120`. Set globally via `litellm.request_timeout`. |
+
+## Observability / traces
+
+Every ADK agent writes one JSONL line per lifecycle event under `TRACE_DIR`. Inspect via [`nuvel traces`](cli.md#nuvel-traces).
+
+| Var | Default | Description |
+|---|---|---|
+| `TRACE_ENABLED` | `true` | Set to `false` to disable all tracing. |
+| `TRACE_DIR` | `./traces` | Directory for JSONL trace files. |
+| `TRACE_DB` | `false` | `true` = also write traces to PostgreSQL (`agent_traces` table). Requires `SESSION_SERVICE_URI`. |
+
+### Per-field truncation caps
+
+All in characters. Tool args default high so the full agent input (`query`, `parameters`, …) is captured for schema auditing — everything else is sized for "enough to debug, not a transcript".
+
+| Var | Default | Applies to |
+|---|---|---|
+| `TRACE_MAX_ARGS_CHARS` | `50000` | `tool_start.args` (verbatim agent inputs) |
+| `TRACE_MAX_RESULT_CHARS` | `10000` | `tool_end.result` |
+| `TRACE_MAX_RESPONSE_CHARS` | `10000` | `llm_response.response_text` |
+| `TRACE_MAX_THINKING_CHARS` | `10000` | `llm_response.thinking` |
+| `TRACE_MAX_SYSTEM_INSTR_CHARS` | `50000` | `llm_request.system_instruction` |
+| `TRACE_MAX_ERROR_CHARS` | `2000` | `llm_error.error_message`, `tool_exception.error_message` |
+
+## Cost guard
+
+Tracks per-call USD cost using `<pkg>/plugins/pricing.json`, propagates `state.cost_guard` for SSE consumers, and (optionally) blocks runs that would exceed a session budget. Block events surface as `cost_guard_intervention` in traces.
+
+| Var | Default | Description |
+|---|---|---|
+| `COST_GUARD_BUDGET` | `0` | Max USD per session. `0` = unlimited. |
+| `COST_GUARD_PRICING` | auto | Override the path to `pricing.json`. Default uses the bundled file alongside the plugin. |
+
+Keep `pricing.json` fresh with [`nuvel pricing sync`](cli.md#nuvel-pricing-sync).
 
 ## Auth
 

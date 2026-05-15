@@ -86,6 +86,82 @@ Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines. Exits non
 - **Install** — Python version, core deps importable (`yaml`, `fastapi`, `uvicorn`, `dotenv`, `litellm`), framework SDKs per extra (`google-adk`, `claude-agent-sdk`, `anthropic`), `git` on PATH.
 - **Agent** *(when run inside a generated agent)* — framework auto-detected from `requirements.txt`; verifies `.env` exists and the right keys are present (`OPENROUTER_API_KEY` for ADK, `ANTHROPIC_API_KEY` for Claude SDK, plus gateway/Composio keys if those overlays are wired); checks Docker daemon if a `Dockerfile` is present.
 
+## `nuvel traces`
+
+Inspect the JSONL trace logs every ADK agent emits. Auto-discovers `./traces`, `generated-agents/*/traces`, and `$TRACE_DIR`; extra paths can be passed with `--source`.
+
+Four subcommands. All accept `--source/-s <dir>` (repeatable) plus the filters `--agent <substring>` and `--since <YYYY-MM-DD|ISO>`.
+
+### `nuvel traces list`
+
+```bash
+nuvel traces list [--limit N] [--agent <q>] [--since <date>] [-s <dir>]
+```
+
+One row per run, newest first: when, agent, trace_id prefix, duration, LLM/tool counts, tokens, cost, input snippet. Default limit is 50 (`--limit 0` for all).
+
+### `nuvel traces show`
+
+```bash
+nuvel traces show <id> [--all] [-s <dir>]
+```
+
+Full event timeline for one run. `<id>` is matched as a prefix against `trace_id` or `session_id`. Output is indented by `agent_depth` so sub-agent transfers and nested calls are visible.
+
+### `nuvel traces stats`
+
+```bash
+nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>]
+```
+
+Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total cost. Prints a cost-coverage warning at the bottom when runs have token usage but no cost — the symptom of a model missing from `pricing.json`. Run `nuvel doctor` to verify.
+
+### `nuvel traces errors`
+
+```bash
+nuvel traces errors [--recent N] [--agent <q>] [--since <date>] [-s <dir>]
+```
+
+Surfaces failure rate across agents. Three error shapes are kept distinct:
+
+- `llm_error` — LiteLLM gave up after its internal retries (transient infra).
+- `tool_exception` — Python raised inside a tool body (likely a bug).
+- `tool_end{status=error}` — tool returned a structured error result (often user-facing: bad input, auth).
+
+Default view is a three-pane summary: by tool (with error rate against total invocations), by model (`llm_error` only), and by `error_type`. `--recent N` switches to a forensic view: last N error events newest-first with timestamps, agent labels, and message previews.
+
+## `nuvel pricing`
+
+Inspect and sync model pricing.json against OpenRouter — treated as the single source of truth for model pricing, including direct-provider ids that route through OR.
+
+All subcommands accept `--target/-t {template|agent|<path>}`. Default: the active generated agent's `<pkg>/plugins/pricing.json` if cwd is one, else the bundled template under `nuvel/backends/adk/templates/`.
+
+### `nuvel pricing list`
+
+```bash
+nuvel pricing list [-t {template|agent|<path>}]
+```
+
+Prints the resolved file path plus every entry with input/output prices in `$/Mtok`. Stable sorted so diffs stay readable.
+
+### `nuvel pricing sync`
+
+```bash
+nuvel pricing sync [--dry-run] [-t {template|agent|<path>}]
+```
+
+Fetches the OpenRouter model catalog and **refreshes the prices of entries already in pricing.json**. Does not pull OR's full ~360-model catalog. Use `add <model>` to bring a new model in explicitly.
+
+Prints a diff: added / updated / unchanged / not-on-OpenRouter. `--dry-run` skips the write. Comment keys (anything starting with `_`) are preserved.
+
+### `nuvel pricing add`
+
+```bash
+nuvel pricing add <model> [--dry-run] [-t {template|agent|<path>}]
+```
+
+Add (or refresh) a single model by its OpenRouter id (e.g. `anthropic/claude-opus-4.7`). Exits non-zero if the model isn't on OpenRouter.
+
 ## `nuvel run`
 
 Launch the meta-agent — an interactive ADK agent that helps you scaffold, configure, and ship other agents.
