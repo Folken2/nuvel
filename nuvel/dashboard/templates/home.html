@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}nuvel · home{% endblock %}
+{% block topbar_right %}
+  <span class="live">live</span> · {{ runs|length }} run{{ '' if runs|length == 1 else 's' }}
+{% endblock %}
+{% block body %}
+
+<h1 class="ed-h1">
+  {% if total_runs == 0 %}
+    No runs yet.
+  {% elif total_runs == 1 %}
+    One run. <span class="accent">{{ total_tokens_short }}</span> tokens.
+  {% else %}
+    {{ total_runs }} runs. <span class="accent">{{ total_tokens_short }}</span> tokens.
+  {% endif %}
+</h1>
+<div class="ed-sub">Last {{ window_label }} · across {{ agents|length }} agent{{ '' if agents|length == 1 else 's' }}{% if agents %} · {{ agents|join(", ") }}{% endif %}</div>
+
+<div class="ed-stats">
+  <div class="ed-stat"><div class="ed-stat-num">{{ total_runs }}</div><div class="ed-stat-lbl">Runs</div></div>
+  <div class="ed-stat"><div class="ed-stat-num">{{ total_tokens_short }}</div><div class="ed-stat-lbl">Tokens</div></div>
+  <div class="ed-stat"><div class="ed-stat-num">{{ total_cost_label }}</div><div class="ed-stat-lbl">Spend</div></div>
+  <div class="ed-stat"><div class="ed-stat-num {% if error_count %}err{% endif %}">{{ error_count }}</div><div class="ed-stat-lbl">Errors</div></div>
+</div>
+
+{% if recent_error %}
+<div class="ed-error-callout">
+  <div class="title">A run failed recently.</div>
+  <div><strong>{{ recent_error.agent }}</strong> · <code>{{ recent_error.trace_id_short }}</code> · {{ recent_error.summary }}</div>
+</div>
+{% endif %}
+
+<div class="ed-section-lbl">Recent activity</div>
+<div id="feed" hx-ext="sse" sse-connect="/sse" sse-swap="run" hx-swap="afterbegin">
+  {% for run in runs %}
+    {% include "_run_card.html" %}
+  {% else %}
+    <div class="ed-empty">
+      <p>No runs yet. Try <code>nuvel dashboard --demo</code> to see what this looks like with sample data.</p>
+    </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block body %}
+<div data-trace-id="{{ run.trace_id or run.session_id }}">{{ run.trace_id or run.session_id }} — {{ run.agent_display }}</div>
+{% endblock %}

@@ -27,10 +27,11 @@ class TraceLoader:
         return list(self._sources)
 
     def runs(self) -> list[Run]:
-        """Return all runs across sources, newest first. No events kept."""
+        """Return all runs across sources, newest first. Events kept so
+        the home view can detect errors via `_run_has_error`."""
         out: list[Run] = []
         for f in _iter_trace_files(self._sources):
-            out.extend(_parse_file_runs(f, keep_events=False))
+            out.extend(_parse_file_runs(f, keep_events=True))
         return _sort_runs(out)
 
     def find_by_id(self, id_or_prefix: str) -> Run | None:
