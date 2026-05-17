@@ -162,6 +162,24 @@ nuvel pricing add <model> [--dry-run] [-t {template|agent|<path>}]
 
 Add (or refresh) a single model by its OpenRouter id (e.g. `anthropic/claude-opus-4.7`). Exits non-zero if the model isn't on OpenRouter.
 
+## `nuvel dashboard`
+
+Open the local web dashboard over your trace logs.
+
+```bash
+nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-open]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--host` | `127.0.0.1` | Bind address. Localhost by design. |
+| `--port` | `8765` | Bind port. |
+| `--source`, `-s` | auto-discovery | Same semantics as `nuvel traces --source`. Repeatable. |
+| `--demo` | off | Load bundled demo fixtures instead of real traces. |
+| `--no-open` | off | Don't open the browser automatically. |
+
+Two pages: a home view (hero + headline stats + recent activity) and a per-run detail with the thinking timeline. Live updates push new runs as the watcher sees them.
+
 ## `nuvel run`
 
 Launch the meta-agent — an interactive ADK agent that helps you scaffold, configure, and ship other agents.
