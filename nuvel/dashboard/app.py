@@ -7,11 +7,12 @@ the templates stay logic-light.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -124,5 +125,37 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
     def runs_feed(request: Request) -> HTMLResponse:
         runs = loader.runs()
         return templates.TemplateResponse(request, "_feed.html", {"runs": [_view(r) for r in runs[:20]]})
+
+    @app.get("/sse")
+    async def sse_stream() -> StreamingResponse:
+        if watcher is None:
+            raise HTTPException(status_code=404, detail="Live updates disabled")
+
+        # Each SSE connection gets its own watcher + queue so multi-tab and
+        # reconnect work cleanly. Disconnect tears down only this client's loop.
+        from nuvel.dashboard.watcher import RunWatcher
+        own_watcher = RunWatcher(sources=loader.sources())
+        queue: asyncio.Queue[Run] = asyncio.Queue()
+        task = asyncio.create_task(own_watcher.run(queue))
+        card_template = templates.get_template("_run_card.html")
+
+        async def event_stream():
+            # Prime the connection so headers flush and the browser fires
+            # `htmx:sseOpen`.
+            yield ": connected\n\n"
+            try:
+                while True:
+                    run = await queue.get()
+                    view = _view(run)
+                    html = card_template.render(run=view)
+                    # SSE framing terminates on \n, \r, or \r\n — strip all of them
+                    # so payloads with Windows-origin newlines don't truncate.
+                    one_line = " ".join(html.splitlines())
+                    yield f"event: run\ndata: {one_line}\n\n"
+            finally:
+                own_watcher.stop()
+                task.cancel()
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     return app

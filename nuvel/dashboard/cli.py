@@ -35,7 +35,11 @@ def _port_in_use(host: str, port: int) -> bool:
 def _cmd_dashboard(args: argparse.Namespace) -> int:
     sources = _resolve_sources(args)
     loader = TraceLoader(sources=sources)
-    app = build_app(loader)
+
+    from nuvel.dashboard.watcher import RunWatcher
+    watcher = None if args.demo else RunWatcher(sources=sources)
+
+    app = build_app(loader, watcher=watcher)
 
     if _port_in_use(args.host, args.port):
         print(
@@ -47,13 +51,13 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
     url = f"http://{args.host}:{args.port}"
     print(f"nuvel dashboard → {url}")
     if args.demo:
-        print("  (demo mode: bundled fixtures)")
+        print("  (demo mode: bundled fixtures · live updates disabled)")
 
     if args.open_browser:
         try:
             webbrowser.open(url)
         except Exception:
-            pass  # Falls through to manual open from the printed URL.
+            pass
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
