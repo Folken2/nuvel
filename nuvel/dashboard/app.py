@@ -107,6 +107,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
             "error_count": sum(1 for v in views if v.has_error),
             "recent_error": next((v for v in views if v.has_error), None),
             "window_label": "all time",
+            "live": watcher is not None,
         }
 
     @app.get("/", response_class=HTMLResponse)

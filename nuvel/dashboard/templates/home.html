@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}nuvel · home{% endblock %}
 {% block topbar_right %}
-  <span class="live">live</span> · {{ runs|length }} run{{ '' if runs|length == 1 else 's' }}
+  {% if live %}<span class="live">live</span> · {% endif %}{{ runs|length }} run{{ '' if runs|length == 1 else 's' }}
 {% endblock %}
 {% block body %}
 
@@ -31,7 +31,7 @@
 {% endif %}
 
 <div class="ed-section-lbl">Recent activity</div>
-<div id="feed" hx-ext="sse" sse-connect="/sse" sse-swap="run" hx-swap="afterbegin">
+<div id="feed"{% if live %} hx-ext="sse" sse-connect="/sse" sse-swap="run" hx-swap="afterbegin"{% endif %}>
   {% for run in runs %}
     {% include "_run_card.html" %}
   {% else %}
