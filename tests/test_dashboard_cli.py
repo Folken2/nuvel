@@ -42,3 +42,14 @@ def test_dashboard_launch_invokes_uvicorn_and_browser() -> None:
     assert run.called
     assert browser.called
     assert browser.call_args.args[0] == "http://127.0.0.1:8765"
+
+
+def test_demo_flag_loads_bundled_fixtures(tmp_path) -> None:
+    from argparse import Namespace
+    from nuvel.dashboard.cli import _resolve_sources
+
+    args = Namespace(demo=True, source=None)
+    sources = _resolve_sources(args)
+    assert len(sources) == 1
+    assert sources[0].name == "fixtures"
+    assert (sources[0] / "multi_agent.jsonl").is_file()
