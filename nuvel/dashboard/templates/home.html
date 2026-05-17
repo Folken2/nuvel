@@ -26,7 +26,7 @@
 {% if recent_error %}
 <div class="ed-error-callout">
   <div class="title">A run failed recently.</div>
-  <div><strong>{{ recent_error.agent }}</strong> · <code>{{ recent_error.trace_id_short }}</code> · {{ recent_error.summary }}</div>
+  <div><strong>{{ recent_error.agent_display }}</strong> · <code>{{ recent_error.trace_id_short }}</code> · {{ recent_error.summary }}</div>
 </div>
 {% endif %}
 

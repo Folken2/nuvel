@@ -44,7 +44,9 @@ class RunWatcher:
     def _snapshot(self) -> dict[str, Run]:
         out: dict[str, Run] = {}
         for f in _iter_trace_files(self._sources):
-            for run in _parse_file_runs(f, keep_events=False):
+            # keep_events=True so RunView.has_error correctly detects
+            # streamed-in error runs at render time.
+            for run in _parse_file_runs(f, keep_events=True):
                 out[self._key(run)] = run
         return out
 
