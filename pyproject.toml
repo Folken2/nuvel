@@ -70,6 +70,7 @@ include = ["nuvel*"]
     "prompt/*",
     "plugins/pricing.json",
 ]
+"nuvel.dashboard" = ["fixtures/*.jsonl", "templates/*.html", "static/*"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
