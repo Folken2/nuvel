@@ -74,7 +74,7 @@ from outlook_king.tools.outlook_actions import (
     PENDING_ACTIONS_KEY,
     ACTION_RESULTS_KEY,
 )
-from outlook_king.tools.style_tools import learn_style_from_sent_email
+from outlook_king.tools.style_tools import record_sent_fingerprint
 from outlook_king.state.memory_service import NeonMemoryService
 from outlook_king.state.memory_singleton import set_memory_service
 from outlook_king.plugins.memory_plugin import MemoryPlugin
@@ -457,17 +457,19 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
 
 
 @app.post("/api/outlook/learn-sent")
-async def learn_sent(req: LearnSentRequest):
+async def learn_sent(req: LearnSentRequest, user_id: str = Depends(get_user_id)):
     """Record a style fingerprint after the user sends an email.
 
     Fire-and-forget from the taskpane — no chat turn, no agent reasoning.
     """
     if not req.body.strip():
         return {"status": "skip", "reason": "empty body"}
-    result = learn_style_from_sent_email(
-        body=req.body, recipient=req.recipient, subject=req.subject
+    return await record_sent_fingerprint(
+        user_id=user_id,
+        body=req.body,
+        recipient=req.recipient,
+        subject=req.subject,
     )
-    return result
 
 
 @app.post("/api/outlook/action-result")

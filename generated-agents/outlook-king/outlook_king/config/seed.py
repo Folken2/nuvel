@@ -16,11 +16,9 @@ from pathlib import Path
 
 from .paths import (
     SEED_AWAKENING_FILE,
-    SEED_MEMORY_DIR,
     SEED_SKILLS_DIR,
     SEED_SOUL_FILE,
     awakening_file,
-    memory_dir,
     skills_dir,
     soul_file,
 )
@@ -65,7 +63,6 @@ def seed_volume_if_empty() -> dict:
         "soul": _seed_file(SEED_SOUL_FILE, soul_file()),
         "awakening": _seed_file(SEED_AWAKENING_FILE, awakening_file()),
         "skills": _seed_dir(SEED_SKILLS_DIR, skills_dir()),
-        "memory": _seed_dir(SEED_MEMORY_DIR, memory_dir()),
     }
     seeded = [k for k, v in results.items() if v]
     if seeded:
