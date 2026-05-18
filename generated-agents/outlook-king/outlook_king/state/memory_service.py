@@ -48,6 +48,7 @@ class NeonMemoryService(BaseMemoryService):
                     (email, display_name),
                 )
                 row = await cur.fetchone()
+                assert row is not None, "RETURNING clause must yield one row"
                 return row[0]
 
     # BaseMemoryService interface stubs — implemented in later tasks.
