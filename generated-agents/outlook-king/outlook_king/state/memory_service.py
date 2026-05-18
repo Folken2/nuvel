@@ -94,6 +94,70 @@ class NeonMemoryService(BaseMemoryService):
             "content": "\n\n".join(r[0] for r in rows),
         }
 
+    async def update(
+        self, user_id: str, content: str, topic: str = "core"
+    ) -> dict:
+        """Overwrite-semantic: delete all rows for the topic, insert one new row.
+
+        Used by the agent when it wants to summarize/reorganize, not append.
+        """
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        DELETE FROM nuvel_memory.memories
+                         WHERE user_id = %s AND app_name = %s AND topic = %s
+                        """,
+                        (user_id, self._app_name, topic),
+                    )
+                    await cur.execute(
+                        """
+                        INSERT INTO nuvel_memory.memories (user_id, app_name, topic, content)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (user_id, self._app_name, topic, content),
+                    )
+                    row = await cur.fetchone()
+                    assert row is not None, "RETURNING clause must yield one row"
+        return {"status": "ok", "id": row[0], "topic": topic}
+
+    async def forget_topic(self, user_id: str, topic: str) -> dict:
+        """Delete every row for (user_id, app_name, topic). Returns rowcount."""
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    DELETE FROM nuvel_memory.memories
+                     WHERE user_id = %s AND app_name = %s AND topic = %s
+                    """,
+                    (user_id, self._app_name, topic),
+                )
+                deleted = cur.rowcount
+        return {"status": "ok", "topic": topic, "deleted": deleted}
+
+    async def stats(self, user_id: str) -> dict:
+        """Return per-topic row counts and total."""
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT topic, COUNT(*)
+                      FROM nuvel_memory.memories
+                     WHERE user_id = %s AND app_name = %s
+                     GROUP BY topic
+                    """,
+                    (user_id, self._app_name),
+                )
+                rows = await cur.fetchall()
+        topics = {topic: int(count) for topic, count in rows}
+        return {
+            "status": "ok",
+            "total_rows": sum(topics.values()),
+            "topics": topics,
+        }
+
     # BaseMemoryService interface stubs — implemented in later tasks.
     async def add_session_to_memory(self, session: Session) -> None:
         return None

@@ -45,3 +45,43 @@ async def test_save_then_recall_topic(service):
     # Core memory is empty
     core = await service.recall(user_id)
     assert core["content"] == ""
+
+
+async def test_update_replaces_topic(service):
+    user_id = await service.upsert_user("eve@example.com")
+    await service.save(user_id, "eve uses dark mode", topic="user-prefs")
+    await service.save(user_id, "eve prefers Slack over email", topic="user-prefs")
+
+    # update() replaces all rows in the topic with a single new row.
+    await service.update(user_id, "eve uses dark mode and prefers Slack", topic="user-prefs")
+
+    recall = await service.recall(user_id, topic="user-prefs")
+    # Old rows are gone, only the consolidated content remains.
+    assert "dark mode and prefers Slack" in recall["content"]
+    assert recall["content"].count("eve") == 1
+
+
+async def test_forget_topic_removes_only_that_topic(service):
+    user_id = await service.upsert_user("frank@example.com")
+    await service.save(user_id, "core fact", topic="core")
+    await service.save(user_id, "topic fact", topic="other")
+
+    result = await service.forget_topic(user_id, "other")
+    assert result["status"] == "ok"
+    assert result["deleted"] == 1
+
+    # Core still there
+    assert "core fact" in (await service.recall(user_id))["content"]
+    # Other gone
+    assert (await service.recall(user_id, topic="other"))["content"] == ""
+
+
+async def test_stats_reports_counts(service):
+    user_id = await service.upsert_user("gina@example.com")
+    await service.save(user_id, "a", topic="core")
+    await service.save(user_id, "b", topic="core")
+    await service.save(user_id, "c", topic="prefs")
+
+    stats = await service.stats(user_id)
+    assert stats["total_rows"] == 3
+    assert stats["topics"] == {"core": 2, "prefs": 1}
