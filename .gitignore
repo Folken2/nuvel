@@ -22,6 +22,7 @@ env/
 .env
 .env.local
 .env.*.local
+.env.test
 
 # Editor / tooling state
 .claude/settings.local.json

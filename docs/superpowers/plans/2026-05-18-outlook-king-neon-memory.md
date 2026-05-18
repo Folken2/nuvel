@@ -77,7 +77,9 @@ git commit -m "feat(memory): add Postgres deps and initial schema"
 
 ---
 
-## Task 2: Test infrastructure — Postgres container fixture
+## Task 2: Test infrastructure — Neon test-branch fixture
+
+> **Revised from the original plan.** Docker is not available on the developer's machine, so testcontainers is replaced by a real Neon dev branch. Pre-provisioned: project `outlook-king` (id `crimson-band-31080272`), branch `test` (id `br-damp-tree-abzz8rjb`). Schema already applied. The branch's connection string lives in the gitignored file `generated-agents/outlook-king/.env.test` as `TEST_DATABASE_URL`.
 
 **Files:**
 - Create: `tests/conftest.py` (or append if it exists)
@@ -95,45 +97,69 @@ Append (or create) `tests/conftest.py`:
 """Shared pytest fixtures for outlook-king."""
 from __future__ import annotations
 
-import asyncio
+import os
 from pathlib import Path
 from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from dotenv import load_dotenv
 from psycopg_pool import AsyncConnectionPool
-from testcontainers.postgres import PostgresContainer
 
-SCHEMA_SQL = Path(__file__).resolve().parents[1] / "db" / "001_init_memory.sql"
+# Load TEST_DATABASE_URL from .env.test (gitignored, points at the Neon `test` branch).
+_ENV_TEST = Path(__file__).resolve().parents[1] / ".env.test"
+if _ENV_TEST.is_file():
+    load_dotenv(_ENV_TEST, override=False)
 
 
-@pytest.fixture(scope="session")
-def postgres_url() -> str:
-    """Spin up a Postgres 16 container for the whole test session."""
-    with PostgresContainer("postgres:16-alpine") as pg:
-        # testcontainers gives a sync URL; psycopg accepts both.
-        url = pg.get_connection_url().replace("postgresql+psycopg2", "postgresql")
-        yield url
+def _require_test_db_url() -> str:
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip(
+            "TEST_DATABASE_URL not set. Provision a Neon test branch and put "
+            "its connection string in generated-agents/outlook-king/.env.test."
+        )
+    return url
 
 
 @pytest_asyncio.fixture
-async def memory_pool(postgres_url: str) -> AsyncIterator[AsyncConnectionPool]:
-    """A fresh pool with the schema applied. Tables are truncated per-test."""
-    pool = AsyncConnectionPool(postgres_url, min_size=1, max_size=2, open=False)
+async def memory_pool() -> AsyncIterator[AsyncConnectionPool]:
+    """Pool against the Neon test branch. Truncates both tables per-test.
+
+    The schema is already applied to the test branch; we only TRUNCATE to
+    keep tests isolated. If the schema is somehow missing, the TRUNCATE
+    will raise — re-apply db/001_init_memory.sql.
+    """
+    url = _require_test_db_url()
+    pool = AsyncConnectionPool(url, min_size=1, max_size=2, open=False)
     await pool.open()
-    sql = SCHEMA_SQL.read_text(encoding="utf-8")
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(sql)
-            # Per-test isolation: wipe both tables.
-            await cur.execute("TRUNCATE nuvel_memory.memories, nuvel_memory.users CASCADE")
+            await cur.execute(
+                "TRUNCATE nuvel_memory.memories, nuvel_memory.users CASCADE"
+            )
     try:
         yield pool
     finally:
         await pool.close()
 ```
 
-- [ ] **Step 3: Verify the fixture loads (no real test yet)**
+Also ensure `pytest_asyncio` has its mode set so async tests run automatically. Append to `tests/conftest.py`:
+
+```python
+# Default asyncio mode for all async tests.
+def pytest_collection_modifyitems(config, items):
+    pass  # placeholder; mode is set via pyproject/pytest.ini-style config below
+```
+
+If `pyproject.toml` or `pytest.ini` does not already declare `asyncio_mode = "auto"`, add this minimal `pytest.ini` at `generated-agents/outlook-king/pytest.ini` (skip if the project already has one — read first):
+
+```ini
+[pytest]
+asyncio_mode = auto
+```
+
+- [ ] **Step 3: Verify the fixture loads against the real Neon branch**
 
 Create `tests/test_memory_fixture_smoke.py`:
 
@@ -141,16 +167,30 @@ Create `tests/test_memory_fixture_smoke.py`:
 import pytest
 
 
-@pytest.mark.asyncio
 async def test_pool_opens(memory_pool):
     async with memory_pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1")
-            assert (await cur.fetchone())[0] == 1
+            row = await cur.fetchone()
+            assert row[0] == 1
+
+
+async def test_schema_is_applied(memory_pool):
+    """Sanity: the test branch already has nuvel_memory tables."""
+    async with memory_pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'nuvel_memory' ORDER BY table_name"
+            )
+            rows = await cur.fetchall()
+    assert [r[0] for r in rows] == ["memories", "users"]
 ```
 
 Run: `pytest tests/test_memory_fixture_smoke.py -v`
-Expected: PASS. Container boots in <5s on first run.
+Expected: both PASS. First request may pay Neon cold-start (~1-2s); subsequent runs are fast.
+
+If you see `TEST_DATABASE_URL not set`, check that `.env.test` exists at `generated-agents/outlook-king/.env.test` and contains the line `TEST_DATABASE_URL=postgresql://...`. The file is gitignored on purpose.
 
 - [ ] **Step 4: Delete the smoke test (it was just verification)**
 
