@@ -6,6 +6,8 @@
  * before building (e.g. in Vercel dashboard or .env).
  */
 
+import { getCurrentUser } from "./identity";
+
 export const BACKEND_URL: string =
   (process.env.BACKEND_URL as string) || "http://localhost:8000";
 export const BACKEND_API_KEY: string =
@@ -17,12 +19,26 @@ export function apiHeaders(extra: Record<string, string> = {}): Record<string, s
   if (BACKEND_API_KEY) {
     headers["X-API-Key"] = BACKEND_API_KEY;
   }
+  const user = getCurrentUser();
+  if (user) {
+    headers["X-User-Email"] = user.email;
+    if (user.displayName) {
+      headers["X-User-Display-Name"] = user.displayName;
+    }
+  }
   return headers;
 }
 
 /** Headers for non-JSON requests (e.g. file uploads). */
 export function apiKeyHeader(): Record<string, string> {
-  return BACKEND_API_KEY ? { "X-API-Key": BACKEND_API_KEY } : {};
+  const headers: Record<string, string> = {};
+  if (BACKEND_API_KEY) headers["X-API-Key"] = BACKEND_API_KEY;
+  const user = getCurrentUser();
+  if (user) {
+    headers["X-User-Email"] = user.email;
+    if (user.displayName) headers["X-User-Display-Name"] = user.displayName;
+  }
+  return headers;
 }
 
 /** Stable per-installation session id, persisted in localStorage. */
