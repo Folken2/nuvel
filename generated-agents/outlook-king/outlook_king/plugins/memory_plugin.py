@@ -1,33 +1,25 @@
-"""
-Memory plugin for the agent.
+"""Memory plugin for outlook-king.
 
-Logs memory loading events and provides lifecycle hooks for the
-markdown file-based long-term memory system.
+Mirrors ``session.user_id`` into ``state['user_id']`` before each agent
+invocation so memory tools (and any future user-scoped tools) can read
+it ergonomically from the ToolContext.
 
-Memory is loaded into the system prompt via the InstructionProvider
-callback in prompt/instructions.py. This plugin complements that by:
-- Logging memory load events for observability
-- Tracking memory usage in session state for tools to reference
+The backend's FastAPI dependency resolves the email header to a
+surrogate user_id via NeonMemoryService.upsert_user and passes it to
+Runner.run_async; this plugin just makes it visible to tools.
 """
+from __future__ import annotations
 
 import logging
-import os
 from typing import Optional
 
-from google.adk.agents import LlmAgent
-from google.adk.models import LlmRequest
+from google.adk.events import Event, EventActions
 from google.adk.plugins.base_plugin import BasePlugin
-
-from ..state.memory import load_all_memory, memory_stats
 
 logger = logging.getLogger(__name__)
 
-_MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
-
 
 class MemoryPlugin(BasePlugin):
-    """Plugin that tracks memory loading for observability."""
-
     def __init__(self) -> None:
         super().__init__(name="memory")
 
@@ -36,26 +28,19 @@ class MemoryPlugin(BasePlugin):
         *,
         invocation_context,
         **kwargs,
-    ) -> Optional[dict]:
-        """Log memory stats at the start of each agent invocation."""
-        if not _MEMORY_ENABLED:
+    ) -> Optional[Event]:
+        """Copy the session's user_id into state so tools can read it."""
+        session = invocation_context.session
+        if not session or not session.user_id:
+            logger.warning("No user_id on session; memory tools will fail")
             return None
 
-        try:
-            stats = memory_stats()
-            core_size = stats["core_memory_size"]
-            topic_count = stats["topic_count"]
+        # Already mirrored? Skip the redundant state write.
+        if session.state.get("user_id") == session.user_id:
+            return None
 
-            if core_size > 0 or topic_count > 0:
-                logger.info(
-                    "Memory loaded: core=%d chars, topics=%d",
-                    core_size,
-                    topic_count,
-                )
-            else:
-                logger.debug("No long-term memory found")
-
-        except Exception as e:
-            logger.warning("Memory plugin error: %s", e)
-
-        return None
+        return Event(
+            invocation_id=invocation_context.invocation_id,
+            author="memory_plugin",
+            actions=EventActions(state_delta={"user_id": session.user_id}),
+        )
