@@ -165,4 +165,40 @@ class NeonMemoryService(BaseMemoryService):
     async def search_memory(
         self, *, app_name: str, user_id: str, query: str
     ) -> SearchMemoryResponse:
-        raise NotImplementedError
+        """FTS query, ranked by ts_rank, top 10. Always scoped to (user_id, self._app_name).
+
+        Note: the ``app_name`` argument from ADK is ignored — we use the
+        service's configured ``self._app_name`` to keep tenant scoping
+        single-sourced. ADK passes its own ``app_name`` for compatibility
+        with multi-app deployments; this service is per-app.
+        """
+        # Import inside the method so it's lazy and matches ADK's actual export path.
+        from google.adk.memory.base_memory_service import MemoryEntry
+        from google.genai.types import Content, Part
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT content, topic, created_at,
+                           ts_rank(fts, plainto_tsquery('english', %s)) AS rank
+                      FROM nuvel_memory.memories
+                     WHERE user_id = %s
+                       AND app_name = %s
+                       AND fts @@ plainto_tsquery('english', %s)
+                     ORDER BY rank DESC, created_at DESC
+                     LIMIT 10
+                    """,
+                    (query, user_id, self._app_name, query),
+                )
+                rows = await cur.fetchall()
+
+        memories = [
+            MemoryEntry(
+                content=Content(role="user", parts=[Part(text=content)]),
+                author=topic,
+                timestamp=created_at.isoformat(),
+            )
+            for (content, topic, created_at, _rank) in rows
+        ]
+        return SearchMemoryResponse(memories=memories)

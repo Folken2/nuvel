@@ -85,3 +85,21 @@ async def test_stats_reports_counts(service):
     stats = await service.stats(user_id)
     assert stats["total_rows"] == 3
     assert stats["topics"] == {"core": 2, "prefs": 1}
+
+
+async def test_search_memory_finds_via_stemming(service):
+    user_id = await service.upsert_user("henry@example.com")
+    await service.save(user_id, "henry prefers concise emails", topic="user-prefs")
+    await service.save(user_id, "henry's car is red", topic="random")
+    await service.save(user_id, "weather is nice today", topic="random")
+
+    resp = await service.search_memory(
+        app_name="outlook-king-test",  # ignored — service uses its own app_name
+        user_id=user_id,
+        query="preferences",
+    )
+    # ADK SearchMemoryResponse has a `memories` list.
+    contents = [m.content.parts[0].text for m in resp.memories]
+    assert any("concise emails" in c for c in contents)
+    # The car/weather rows should not match "preferences" (FTS stemming).
+    assert not any("weather" in c for c in contents)
