@@ -103,3 +103,46 @@ async def test_search_memory_finds_via_stemming(service):
     assert any("concise emails" in c for c in contents)
     # The car/weather rows should not match "preferences" (FTS stemming).
     assert not any("weather" in c for c in contents)
+
+
+async def test_users_cannot_see_each_others_memory(service):
+    """The leak test. If this fails, the multi-tenant story is broken."""
+    alice = await service.upsert_user("alice-leak@example.com")
+    bob = await service.upsert_user("bob-leak@example.com")
+
+    await service.save(alice, "alice secret", topic="core")
+    await service.save(bob, "bob secret", topic="core")
+
+    alice_recall = await service.recall(alice)
+    bob_recall = await service.recall(bob)
+    assert "alice secret" in alice_recall["content"]
+    assert "bob secret" not in alice_recall["content"]
+    assert "bob secret" in bob_recall["content"]
+    assert "alice secret" not in bob_recall["content"]
+
+    alice_search = await service.search_memory(
+        app_name="outlook-king-test", user_id=alice, query="secret"
+    )
+    contents = [m.content.parts[0].text for m in alice_search.memories]
+    assert any("alice secret" in c for c in contents)
+    assert not any("bob secret" in c for c in contents)
+
+
+async def test_delete_user_cascades_memories(service):
+    user_id = await service.upsert_user("ivan@example.com")
+    await service.save(user_id, "fact 1")
+    await service.save(user_id, "fact 2")
+
+    async with service._pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM nuvel_memory.users WHERE user_id = %s", (user_id,)
+            )
+            await cur.execute(
+                "SELECT COUNT(*) FROM nuvel_memory.memories WHERE user_id = %s",
+                (user_id,),
+            )
+            row = await cur.fetchone()
+            assert row is not None
+            count = row[0]
+    assert count == 0
