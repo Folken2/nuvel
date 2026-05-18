@@ -51,6 +51,49 @@ class NeonMemoryService(BaseMemoryService):
                 assert row is not None, "RETURNING clause must yield one row"
                 return row[0]
 
+    async def save(
+        self, user_id: str, content: str, topic: str = "core"
+    ) -> dict:
+        """Append a memory row. Topic defaults to 'core' (the legacy AGENT_MEMORY.md)."""
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO nuvel_memory.memories (user_id, app_name, topic, content)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (user_id, self._app_name, topic, content),
+                )
+                row = await cur.fetchone()
+                assert row is not None, "RETURNING clause must yield one row"
+                return {"status": "ok", "id": row[0], "topic": topic}
+
+    async def recall(
+        self, user_id: str, topic: Optional[str] = None
+    ) -> dict:
+        """Return all rows for a topic concatenated. None / '' → 'core'."""
+        topic_filter = topic or "core"
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT content
+                      FROM nuvel_memory.memories
+                     WHERE user_id = %s AND app_name = %s AND topic = %s
+                     ORDER BY created_at ASC
+                    """,
+                    (user_id, self._app_name, topic_filter),
+                )
+                rows = await cur.fetchall()
+        if not rows:
+            return {"status": "ok", "topic": topic_filter, "content": ""}
+        return {
+            "status": "ok",
+            "topic": topic_filter,
+            "content": "\n\n".join(r[0] for r in rows),
+        }
+
     # BaseMemoryService interface stubs — implemented in later tasks.
     async def add_session_to_memory(self, session: Session) -> None:
         return None
