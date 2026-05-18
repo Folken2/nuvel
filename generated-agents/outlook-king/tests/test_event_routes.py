@@ -11,27 +11,44 @@ Covers:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 
+# Backend lifespan reads DATABASE_URL — point it at the Neon `test` branch
+# via TEST_DATABASE_URL from .env.test. The dependency override below
+# bypasses upsert_user so these route tests don't write to the users table.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+_ENV_TEST = ROOT / ".env.test"
+if _ENV_TEST.is_file():
+    load_dotenv(_ENV_TEST, override=False)
+if "DATABASE_URL" not in os.environ and "TEST_DATABASE_URL" in os.environ:
+    os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
 
-from backend.main import (
+from backend.main import (  # noqa: E402
     app,
     session_service,
     APP_NAME,
-    DEFAULT_USER_ID,
+    get_user_id,
 )
-from outlook_king.tools.outlook_context import COMPOSE_DRAFT_KEY, SPAM_REPORTS_KEY
+from outlook_king.tools.outlook_context import COMPOSE_DRAFT_KEY, SPAM_REPORTS_KEY  # noqa: E402
+
+# Stable test user_id. The route handlers don't care that it's not in the
+# users table — they just store it on the ADK session.
+TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def client():
+    app.dependency_overrides[get_user_id] = lambda: TEST_USER_ID
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
 
 
 def test_compose_opened_persists_draft(client: TestClient):
@@ -54,7 +71,7 @@ def test_compose_opened_persists_draft(client: TestClient):
     import asyncio
     session = asyncio.get_event_loop().run_until_complete(
         session_service.get_session(
-            app_name=APP_NAME, user_id=DEFAULT_USER_ID, session_id=session_id
+            app_name=APP_NAME, user_id=TEST_USER_ID, session_id=session_id
         )
     )
     assert session is not None
@@ -146,7 +163,7 @@ def test_report_spam_logs_metadata(client: TestClient):
     import asyncio
     session = asyncio.get_event_loop().run_until_complete(
         session_service.get_session(
-            app_name=APP_NAME, user_id=DEFAULT_USER_ID, session_id=session_id
+            app_name=APP_NAME, user_id=TEST_USER_ID, session_id=session_id
         )
     )
     assert session is not None

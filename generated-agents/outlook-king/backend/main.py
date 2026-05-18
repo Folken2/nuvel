@@ -387,8 +387,9 @@ async def _run_agent_once(
     ):
         if event.is_final_response() and event.content and event.content.parts:
             for part in event.content.parts:
-                if getattr(part, "text", None):
-                    final_text = part.text
+                text_part = getattr(part, "text", None)
+                if text_part:
+                    final_text = text_part
     actions = await _drain_pending_actions(session_id, user_id)
     return final_text, actions
 
