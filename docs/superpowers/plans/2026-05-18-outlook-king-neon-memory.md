@@ -59,8 +59,7 @@ CREATE TABLE IF NOT EXISTS nuvel_memory.memories (
     topic       TEXT NOT NULL DEFAULT 'core',
     content     TEXT NOT NULL,
     fts         tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS memories_user_app_topic_idx
