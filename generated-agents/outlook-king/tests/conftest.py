@@ -5,7 +5,6 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -34,7 +33,7 @@ def _require_test_db_url() -> str:
 
 
 @pytest_asyncio.fixture
-async def memory_pool() -> AsyncIterator[AsyncConnectionPool]:
+async def memory_pool():
     """Pool against the Neon test branch. Truncates both tables per-test.
 
     The schema is already applied to the test branch; we only TRUNCATE to
