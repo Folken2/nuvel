@@ -127,22 +127,36 @@ async def test_users_cannot_see_each_others_memory(service):
     assert any("alice secret" in c for c in contents)
     assert not any("bob secret" in c for c in contents)
 
+    # stats and write paths are also scoped per user.
+    assert (await service.stats(alice))["total_rows"] == 1
+    assert (await service.stats(bob))["total_rows"] == 1
+
+    # forget_topic on alice must not touch bob's rows.
+    await service.forget_topic(alice, "core")
+    assert (await service.recall(alice))["content"] == ""
+    assert "bob secret" in (await service.recall(bob))["content"]
+
 
 async def test_delete_user_cascades_memories(service):
     user_id = await service.upsert_user("ivan@example.com")
     await service.save(user_id, "fact 1")
     await service.save(user_id, "fact 2")
 
+    # Separate connections: DELETE and the verification SELECT each run in
+    # their own pool checkout so we don't rely on same-connection autocommit
+    # visibility — this mirrors how production callers will see the cascade.
     async with service._pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 "DELETE FROM nuvel_memory.users WHERE user_id = %s", (user_id,)
             )
+
+    async with service._pool.connection() as conn:
+        async with conn.cursor() as cur:
             await cur.execute(
                 "SELECT COUNT(*) FROM nuvel_memory.memories WHERE user_id = %s",
                 (user_id,),
             )
             row = await cur.fetchone()
             assert row is not None
-            count = row[0]
-    assert count == 0
+            assert row[0] == 0

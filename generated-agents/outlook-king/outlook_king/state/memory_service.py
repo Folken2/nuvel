@@ -158,8 +158,11 @@ class NeonMemoryService(BaseMemoryService):
             "topics": topics,
         }
 
-    # BaseMemoryService interface stubs — implemented in later tasks.
+    # BaseMemoryService interface — no-op for curated-only model.
     async def add_session_to_memory(self, session: Session) -> None:
+        # Sessions are NOT auto-ingested; agents curate explicit memories
+        # via the save/update/forget tools. Required by the ABC.
+        del session
         return None
 
     async def search_memory(
