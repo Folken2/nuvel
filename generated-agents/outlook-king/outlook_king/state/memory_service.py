@@ -173,7 +173,7 @@ class NeonMemoryService(BaseMemoryService):
         with multi-app deployments; this service is per-app.
         """
         # Import inside the method so it's lazy and matches ADK's actual export path.
-        from google.adk.memory.base_memory_service import MemoryEntry
+        from google.adk.memory.memory_entry import MemoryEntry
         from google.genai.types import Content, Part
 
         async with self._pool.connection() as conn:
