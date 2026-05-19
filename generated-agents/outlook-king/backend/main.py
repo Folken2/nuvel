@@ -35,9 +35,15 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# psycopg's async pool can't use Windows' default ProactorEventLoop —
+# every Neon connection retries-and-fails without this. No-op on POSIX.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
