@@ -623,3 +623,27 @@ async def report_spam(req: SpamReportRequest, user_id: str = Depends(get_user_id
     existing = existing[-MAX_RECENT_ACTIONS:]
     await _append_state_delta(req.session_id, user_id, {SPAM_REPORTS_KEY: existing})
     return {"status": "ok"}
+
+
+# ── Programmatic launcher ───────────────────────────────────────────
+#
+# On Windows, the `uvicorn` CLI sets WindowsProactorEventLoopPolicy
+# *before* importing this module — too early for the module-level
+# WindowsSelectorEventLoopPolicy override above to take effect, and
+# psycopg's async pool only works on the selector loop. Run with
+# `python -m backend.main` (or `python backend/main.py`) so the policy
+# above lands before uvicorn's loop is created; we then pass
+# `loop="none"` so uvicorn doesn't reset it.
+#
+# On POSIX the policy override at the top is a no-op and either launch
+# style works.
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "backend.main:app",
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8000")),
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
+        loop="none",
+    )
