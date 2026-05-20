@@ -23,6 +23,7 @@ class Flag:
     """
 
     TOOL_ERROR = "tool_error"
+    LLM_ERROR = "llm_error"
     NO_ASSISTANT_OUTPUT = "no_assistant_output"
     EXCESSIVE_TURNS = "excessive_turns"
     COST_OUTLIER = "cost_outlier"

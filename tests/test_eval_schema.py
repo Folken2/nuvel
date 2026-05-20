@@ -14,6 +14,7 @@ def test_scorer_version_is_string() -> None:
 def test_flag_constants_are_unique_strings() -> None:
     values = [
         Flag.TOOL_ERROR,
+        Flag.LLM_ERROR,
         Flag.NO_ASSISTANT_OUTPUT,
         Flag.EXCESSIVE_TURNS,
         Flag.COST_OUTLIER,
