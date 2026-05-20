@@ -64,9 +64,16 @@ def _discover_trace_dirs(extra: list[str] | None = None) -> list[Path]:
     return roots
 
 
+# Eval writes scored.jsonl as a sibling of trace files; never treat it
+# (or any other reserved companion file) as a trace input.
+_RESERVED_TRACE_SIBLINGS = {"scored.jsonl"}
+
+
 def _iter_trace_files(dirs: Iterable[Path]) -> Iterator[Path]:
     for d in dirs:
         for f in sorted(d.glob("*.jsonl")):
+            if f.name in _RESERVED_TRACE_SIBLINGS:
+                continue
             yield f
 
 
