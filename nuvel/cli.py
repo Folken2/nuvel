@@ -246,6 +246,9 @@ def build_parser() -> argparse.ArgumentParser:
     from nuvel import dashboard
     dashboard.register(sub)
 
+    from nuvel.eval import cli as eval_cli
+    eval_cli.register(sub)
+
     return parser
 
 
