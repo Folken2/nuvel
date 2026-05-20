@@ -137,23 +137,78 @@ def _coerce_score(value: Any, default: float = 0.0) -> float:
     return max(0.0, min(1.0, v))
 
 
-async def _call_litellm(model: str, prompt: str) -> tuple[str, float]:
-    """Thin litellm adapter. Returns (content, cost_usd)."""
+# Models that have already warn-logged a cost-lookup miss. One warning
+# per process per model is plenty; don't spam the operator.
+_UNPRICED_MODELS: set[str] = set()
+
+
+def _quiet_litellm_once() -> None:
+    """Suppress litellm's stderr 'Provider List' noise for cost lookups.
+
+    Called lazily from the adapter — keeps litellm imports out of module
+    load order and out of the test path (which never touches the real
+    adapter via the injection seam).
+    """
+    import logging
     import litellm
 
-    response = await litellm.acompletion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
-        max_tokens=400,
-    )
-    content = response.choices[0].message.content or ""
-    cost = 0.0
+    # `suppress_debug_info` silences the 'Provider List' banner that litellm
+    # prints to stderr when it can't price a model. Safe to set repeatedly.
+    if not getattr(litellm, "_nuvel_quieted", False):
+        litellm.suppress_debug_info = True
+        # Belt-and-suspenders: also raise the logger level for litellm itself.
+        logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+        litellm._nuvel_quieted = True  # type: ignore[attr-defined]
+
+
+def _extract_cost(response: object, model: str) -> float:
+    """Best-effort cost lookup via litellm. Warn once per unpriced model."""
+    import litellm
+
     try:
-        cost = float(litellm.completion_cost(completion_response=response) or 0.0)
-    except Exception:  # noqa: BLE001 — cost is best-effort
-        cost = 0.0
-    return content, cost
+        return float(litellm.completion_cost(completion_response=response) or 0.0)
+    except Exception as exc:  # noqa: BLE001 — cost is best-effort
+        if model not in _UNPRICED_MODELS:
+            _UNPRICED_MODELS.add(model)
+            logger.warning(
+                "judge cost lookup failed for %s (%s: %s) — budget guard cannot enforce limits "
+                "on this model; falling back to $0.00 per call",
+                model, type(exc).__name__, exc,
+            )
+        return 0.0
+
+
+async def _call_litellm(model: str, prompt: str) -> tuple[str, float]:
+    """Thin litellm adapter. Returns (content, cost_usd).
+
+    Tries ``response_format=json_object`` first — modern models (Sonnet,
+    GPT-4o, Gemini) honor it and produce cleaner output. Some OpenRouter
+    providers (notably Kimi K2.5) reject the hint and return empty
+    content; in that case we transparently retry once without the hint.
+    Both calls' costs are summed.
+    """
+    import litellm
+
+    _quiet_litellm_once()
+    base_kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 400,
+    }
+
+    response = await litellm.acompletion(**base_kwargs, response_format={"type": "json_object"})
+    content = (response.choices[0].message.content or "").strip()
+    total_cost = _extract_cost(response, model)
+
+    if not content:
+        # response_format wasn't honored — retry plain.
+        logger.info("empty content from %s with response_format; retrying without hint", model)
+        response = await litellm.acompletion(**base_kwargs)
+        content = (response.choices[0].message.content or "").strip()
+        total_cost += _extract_cost(response, model)
+
+    return content, total_cost
 
 
 async def judge_run(

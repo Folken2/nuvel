@@ -167,6 +167,113 @@ async def test_judge_run_uses_rubric_resolved_model(monkeypatch: pytest.MonkeyPa
     assert seen == ["rubric-override"]
 
 
+# ── _call_litellm adapter (real litellm module, mocked acompletion) ──
+
+
+def _fake_response(content: str):
+    """Tiny fake litellm response object that satisfies _call_litellm's accessors."""
+    class _Msg:
+        pass
+    class _Choice:
+        message = _Msg()
+    class _Resp:
+        choices = [_Choice()]
+    _Resp.choices[0].message.content = content
+    return _Resp()
+
+
+async def test_call_litellm_uses_response_format_when_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adapter requests JSON output; uses it directly when the model honors it."""
+    import litellm
+
+    from nuvel.eval.judge import _call_litellm
+
+    captured: list[dict] = []
+
+    async def fake_acompletion(**kwargs):
+        captured.append(kwargs)
+        return _fake_response('{"did_solve": 1, "quality": 1}')
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **_: 0.0001)
+
+    content, cost = await _call_litellm("good-model", "the prompt")
+    assert content == '{"did_solve": 1, "quality": 1}'
+    assert cost == pytest.approx(0.0001)
+    # Only the first call goes out when content is non-empty.
+    assert len(captured) == 1
+    assert captured[0]["response_format"] == {"type": "json_object"}
+
+
+async def test_call_litellm_falls_back_when_response_format_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Some providers (Kimi via OpenRouter) return empty content with response_format; retry without."""
+    import litellm
+
+    from nuvel.eval.judge import _call_litellm
+
+    captured: list[dict] = []
+    contents = iter(["", '{"did_solve": 0.8, "quality": 0.7}'])
+
+    async def fake_acompletion(**kwargs):
+        captured.append(kwargs)
+        return _fake_response(next(contents))
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **_: 0.0002)
+
+    content, cost = await _call_litellm("kimi-like", "p")
+    assert content == '{"did_solve": 0.8, "quality": 0.7}'
+    # Costs sum across both attempts.
+    assert cost == pytest.approx(0.0004)
+    assert len(captured) == 2
+    # First call: with response_format.
+    assert captured[0]["response_format"] == {"type": "json_object"}
+    # Second call: without.
+    assert "response_format" not in captured[1]
+
+
+async def test_call_litellm_cost_failure_warns_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When litellm can't price the model, log a warn — but only once per process per model."""
+    import litellm
+
+    from nuvel.eval.judge import _UNPRICED_MODELS, _call_litellm
+
+    class _FakeMessage:
+        content = "{}"
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    async def fake_acompletion(**_):
+        return _FakeResponse()
+
+    def fake_cost(**_):
+        raise ValueError("unknown model")
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "completion_cost", fake_cost)
+    # Reset the module-level cache so this test is isolated.
+    _UNPRICED_MODELS.discard("mystery-model")
+
+    caplog.set_level("WARNING", logger="nuvel.eval.judge")
+    await _call_litellm("mystery-model", "p")
+    await _call_litellm("mystery-model", "p")
+    await _call_litellm("mystery-model", "p")
+
+    cost_warnings = [r for r in caplog.records if "cost lookup failed" in r.message]
+    assert len(cost_warnings) == 1
+    assert "mystery-model" in cost_warnings[0].message
+
+
 async def test_judge_run_explicit_model_overrides_rubric() -> None:
     seen: list[str] = []
 
