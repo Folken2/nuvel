@@ -1,9 +1,9 @@
 """
 Writing-style memory tools.
 
-Writing style lives as a markdown topic in the agent's existing memory
-system (state/memory.py). These tools give the agent a stable, named
-interface for the learning loop:
+Writing style lives as the ``writing-style`` topic in the multi-tenant
+Postgres memory store (NeonMemoryService). These tools give the agent a
+stable, named interface for the learning loop:
 
     recall_writing_style          read the consolidated style guide
     learn_style_from_sent_email   append a structured fingerprint after a send
@@ -18,11 +18,21 @@ from __future__ import annotations
 
 import re
 
-from google.adk.tools import FunctionTool
+from google.adk.tools import FunctionTool, ToolContext
 
-from ..state.memory import append_topic, load_topic, save_topic
+from ..state.memory_singleton import get_memory_service
 
 STYLE_TOPIC = "writing-style"
+
+
+def _resolve_user_id(tool_context: ToolContext) -> str:
+    user_id = tool_context.state.get("user_id")
+    if not user_id:
+        raise RuntimeError(
+            "tool_context.state['user_id'] is missing — memory_plugin "
+            "must run before any style tool"
+        )
+    return user_id
 
 
 def _fingerprint(body: str) -> dict:
@@ -43,15 +53,33 @@ def _fingerprint(body: str) -> dict:
     }
 
 
-def recall_writing_style() -> dict:
+def _format_fingerprint_note(body: str, recipient: str, subject: str) -> str:
+    fp = _fingerprint(body.strip())
+    return (
+        "## Sent sample\n"
+        f"- to: {recipient or 'unknown'}\n"
+        f"- subject: {subject or 'unknown'}\n"
+        f"- words/sentences: {fp['word_count']}/{fp['sentence_count']} "
+        f"(avg {fp['avg_words_per_sentence']} w/s)\n"
+        f"- opener: \"{fp['opener']}\"\n"
+        f"- signoff: \"{fp['signoff']}\"\n"
+        f"- punctuation: {fp['exclamations']}! / {fp['questions']}? / "
+        f"{fp['contractions']} contractions / {fp['em_dashes']} em-dashes / "
+        f"{fp['bullet_lines']} bullet lines"
+    )
+
+
+async def recall_writing_style(*, tool_context: ToolContext) -> dict:
     """Read the consolidated writing-style guide for the user.
 
     Always call this BEFORE drafting an email in the user's voice or
-    coaching a draft. Returns the markdown style rulebook the user (or the
-    agent's own learning loop) has built up over time.
+    coaching a draft. Returns the rulebook the user (or the agent's own
+    learning loop) has built up over time in the ``writing-style`` topic.
     """
-    content = load_topic(STYLE_TOPIC)
-    if not content:
+    user_id = _resolve_user_id(tool_context)
+    result = await get_memory_service().recall(user_id, STYLE_TOPIC)
+    content = result.get("content") or ""
+    if not content.strip():
         return {
             "status": "empty",
             "message": (
@@ -63,10 +91,12 @@ def recall_writing_style() -> dict:
     return {"status": "ok", "style": content}
 
 
-def learn_style_from_sent_email(
+async def learn_style_from_sent_email(
     body: str,
     recipient: str = "",
     subject: str = "",
+    *,
+    tool_context: ToolContext,
 ) -> dict:
     """Append a structured style fingerprint after the user sends an email.
 
@@ -82,24 +112,14 @@ def learn_style_from_sent_email(
     """
     if not body or not body.strip():
         return {"status": "skip", "reason": "Empty body — nothing to learn from."}
-
-    fp = _fingerprint(body.strip())
-    note = (
-        "## Sent sample\n"
-        f"- to: {recipient or 'unknown'}\n"
-        f"- subject: {subject or 'unknown'}\n"
-        f"- words/sentences: {fp['word_count']}/{fp['sentence_count']} "
-        f"(avg {fp['avg_words_per_sentence']} w/s)\n"
-        f"- opener: \"{fp['opener']}\"\n"
-        f"- signoff: \"{fp['signoff']}\"\n"
-        f"- punctuation: {fp['exclamations']}! / {fp['questions']}? / "
-        f"{fp['contractions']} contractions / {fp['em_dashes']} em-dashes / "
-        f"{fp['bullet_lines']} bullet lines"
-    )
-    return append_topic(STYLE_TOPIC, note)
+    user_id = _resolve_user_id(tool_context)
+    note = _format_fingerprint_note(body, recipient, subject)
+    return await get_memory_service().save(user_id, note, STYLE_TOPIC)
 
 
-def consolidate_writing_style(distilled_markdown: str) -> dict:
+async def consolidate_writing_style(
+    distilled_markdown: str, *, tool_context: ToolContext
+) -> dict:
     """Replace the writing-style memory with a consolidated rulebook.
 
     After several fingerprints accumulate, the agent reads them, derives
@@ -114,7 +134,29 @@ def consolidate_writing_style(distilled_markdown: str) -> dict:
     """
     if not distilled_markdown or not distilled_markdown.strip():
         return {"status": "error", "message": "Empty rulebook — refusing to overwrite memory."}
-    return save_topic(STYLE_TOPIC, distilled_markdown.strip() + "\n")
+    user_id = _resolve_user_id(tool_context)
+    return await get_memory_service().update(
+        user_id, distilled_markdown.strip() + "\n", STYLE_TOPIC
+    )
+
+
+# ── Direct (non-tool) helper for the backend learn-sent route ──────────
+
+
+async def record_sent_fingerprint(
+    *, user_id: str, body: str, recipient: str = "", subject: str = ""
+) -> dict:
+    """Backend-facing twin of ``learn_style_from_sent_email``.
+
+    Called by the fire-and-forget ``/api/outlook/learn-sent`` route, which
+    has the user_id from ``Depends(get_user_id)`` and does not run a chat
+    turn. Bypasses the FunctionTool wrapper but writes the same fingerprint
+    to the same ``writing-style`` topic via NeonMemoryService.
+    """
+    if not body or not body.strip():
+        return {"status": "skip", "reason": "Empty body — nothing to learn from."}
+    note = _format_fingerprint_note(body, recipient, subject)
+    return await get_memory_service().save(user_id, note, STYLE_TOPIC)
 
 
 style_tool_list = [

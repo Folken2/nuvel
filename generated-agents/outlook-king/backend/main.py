@@ -35,14 +35,21 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# psycopg's async pool can't use Windows' default ProactorEventLoop —
+# every Neon connection retries-and-fails without this. No-op on POSIX.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -73,23 +80,40 @@ from outlook_king.tools.outlook_actions import (
     PENDING_ACTIONS_KEY,
     ACTION_RESULTS_KEY,
 )
-from outlook_king.tools.style_tools import learn_style_from_sent_email
+from outlook_king.tools.style_tools import record_sent_fingerprint
+from outlook_king.state.memory_service import NeonMemoryService
+from outlook_king.state.memory_singleton import set_memory_service
+from outlook_king.plugins.memory_plugin import MemoryPlugin
 
 APP_NAME = "outlook_king"
-DEFAULT_USER_ID = "outlook-user"
 MAX_RECENT_ACTIONS = 25
 
 session_service = InMemorySessionService()
 artifact_service = InMemoryArtifactService()
 
 _known_sessions: set[str] = set()
+_db_pool: AsyncConnectionPool | None = None
+_memory_service: NeonMemoryService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("outlook-king backend starting on PID %d", os.getpid())
-    yield
-    logger.info("outlook-king backend shutdown")
+    global _db_pool, _memory_service
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required. Point it at your Neon connection string."
+        )
+    _db_pool = AsyncConnectionPool(database_url, min_size=1, max_size=10, open=False)
+    await _db_pool.open()
+    _memory_service = NeonMemoryService(_db_pool, app_name=APP_NAME)
+    set_memory_service(_memory_service)
+    logger.info("outlook-king backend starting on PID %d (Neon pool open)", os.getpid())
+    try:
+        yield
+    finally:
+        logger.info("outlook-king backend shutdown")
+        await _db_pool.close()
 
 
 app = FastAPI(title="outlook-king backend", lifespan=lifespan)
@@ -175,7 +199,7 @@ class AccountPayload(BaseModel):
 
 class ContextRequest(BaseModel):
     session_id: str
-    user_id: str | None = None
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
     compose: ComposePayload | None = None
     selected: SelectedMessagePayload | None = None
     account: AccountPayload | None = None
@@ -183,7 +207,7 @@ class ContextRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     session_id: str
-    user_id: str | None = None
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
     prompt: str
     compose: ComposePayload | None = None
     selected: SelectedMessagePayload | None = None
@@ -198,20 +222,20 @@ class LearnSentRequest(BaseModel):
 
 class ComposeOpenedRequest(BaseModel):
     session_id: str
-    user_id: str | None = None
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
     compose_type: str = "newMail"  # "newMail" | "reply" | "forward"
     compose: ComposePayload | None = None
 
 
 class PreSendCheckRequest(BaseModel):
     session_id: str
-    user_id: str | None = None
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
     compose: ComposePayload | None = None
 
 
 class SpamReportRequest(BaseModel):
     session_id: str
-    user_id: str | None = None
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
     message_id: str | None = None
     conversation_id: str | None = None
     subject: str = ""
@@ -222,7 +246,7 @@ class SpamReportRequest(BaseModel):
 
 class ActionResultRequest(BaseModel):
     session_id: str
-    user_id: str | None = None
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
     action_id: str
     action_type: str = ""
     status: str = "ok"  # "ok" | "error" | "skipped"
@@ -309,6 +333,19 @@ async def _drain_pending_actions(session_id: str, user_id: str) -> list[dict]:
     return pending
 
 
+async def get_user_id(
+    x_user_email: str = Header(..., alias="X-User-Email"),
+    x_user_display_name: str | None = Header(None, alias="X-User-Display-Name"),
+) -> str:
+    """Resolve the X-User-Email header to a stable surrogate user_id.
+
+    Idempotent — upserts on every request (cheap; bumps last_seen_at).
+    Missing header → FastAPI returns 422 automatically (Header(...)).
+    """
+    assert _memory_service is not None  # lifespan invariant
+    return await _memory_service.upsert_user(x_user_email, x_user_display_name)
+
+
 # ── Routes ──────────────────────────────────────────────────────────
 
 
@@ -318,14 +355,13 @@ async def health():
 
 
 @app.post("/api/outlook/context")
-async def push_context(req: ContextRequest):
+async def push_context(req: ContextRequest, user_id: str = Depends(get_user_id)):
     """Push the user's current Outlook view into session state.
 
     Called by the taskpane every time the Outlook state changes (compose
     body edit, selection change, new message selection). Cheap idempotent
     write — safe to call on every keystroke debounce.
     """
-    user_id = req.user_id or DEFAULT_USER_ID
     await _write_outlook_state(
         req.session_id, user_id, req.compose, req.selected, req.account
     )
@@ -347,6 +383,8 @@ async def _run_agent_once(
         agent=root_agent,
         session_service=session_service,
         artifact_service=artifact_service,
+        memory_service=_memory_service,
+        plugins=[MemoryPlugin()],
     )
     content = types.Content(role="user", parts=[types.Part(text=prompt)])
     final_text = ""
@@ -355,16 +393,16 @@ async def _run_agent_once(
     ):
         if event.is_final_response() and event.content and event.content.parts:
             for part in event.content.parts:
-                if getattr(part, "text", None):
-                    final_text = part.text
+                text_part = getattr(part, "text", None)
+                if text_part:
+                    final_text = text_part
     actions = await _drain_pending_actions(session_id, user_id)
     return final_text, actions
 
 
 @app.post("/api/outlook/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, user_id: str = Depends(get_user_id)):
     """Non-streaming chat. Returns the agent's final response + actions."""
-    user_id = req.user_id or DEFAULT_USER_ID
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
     try:
@@ -378,9 +416,8 @@ async def chat(req: ChatRequest):
 
 
 @app.post("/api/outlook/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
     """SSE chat. Streams tool events, the final response, and queued actions."""
-    user_id = req.user_id or DEFAULT_USER_ID
     if not req.prompt.strip():
         raise HTTPException(400, "Empty prompt.")
 
@@ -395,6 +432,8 @@ async def chat_stream(req: ChatRequest):
                 agent=root_agent,
                 session_service=session_service,
                 artifact_service=artifact_service,
+                memory_service=_memory_service,
+                plugins=[MemoryPlugin()],
             )
             content = types.Content(role="user", parts=[types.Part(text=req.prompt)])
             async for event in runner.run_async(
@@ -424,21 +463,23 @@ async def chat_stream(req: ChatRequest):
 
 
 @app.post("/api/outlook/learn-sent")
-async def learn_sent(req: LearnSentRequest):
+async def learn_sent(req: LearnSentRequest, user_id: str = Depends(get_user_id)):
     """Record a style fingerprint after the user sends an email.
 
     Fire-and-forget from the taskpane — no chat turn, no agent reasoning.
     """
     if not req.body.strip():
         return {"status": "skip", "reason": "empty body"}
-    result = learn_style_from_sent_email(
-        body=req.body, recipient=req.recipient, subject=req.subject
+    return await record_sent_fingerprint(
+        user_id=user_id,
+        body=req.body,
+        recipient=req.recipient,
+        subject=req.subject,
     )
-    return result
 
 
 @app.post("/api/outlook/action-result")
-async def action_result(req: ActionResultRequest):
+async def action_result(req: ActionResultRequest, user_id: str = Depends(get_user_id)):
     """Record the outcome of an action the add-in just executed.
 
     Stored in session state under ``outlook:action_results`` (full log,
@@ -446,7 +487,6 @@ async def action_result(req: ActionResultRequest):
     agent can inspect either via ``get_recent_action_results`` /
     ``get_full_outlook_state`` on the next turn.
     """
-    user_id = req.user_id or DEFAULT_USER_ID
     await _ensure_session(req.session_id, user_id)
     session = await session_service.get_session(
         app_name=APP_NAME, user_id=user_id, session_id=req.session_id
@@ -523,14 +563,13 @@ def _missing_attachment_heuristic(body: str, attachments: list) -> tuple[bool, s
 
 
 @app.post("/api/outlook/compose-opened")
-async def compose_opened(req: ComposeOpenedRequest):
+async def compose_opened(req: ComposeOpenedRequest, user_id: str = Depends(get_user_id)):
     """Push an early compose-mode snapshot into session state.
 
     Fired by the JSON manifest's ``OnNewMessageCompose`` / ``OnMessageCompose``
     event handlers. Lets the agent answer "what's in my draft?" before the
     user opens the task pane. Stored under ``outlook:compose_draft``.
     """
-    user_id = req.user_id or DEFAULT_USER_ID
     snapshot = (req.compose.model_dump() if req.compose else {}) | {
         "compose_type": req.compose_type,
     }
@@ -539,7 +578,7 @@ async def compose_opened(req: ComposeOpenedRequest):
 
 
 @app.post("/api/outlook/pre-send-check")
-async def pre_send_check(req: PreSendCheckRequest):
+async def pre_send_check(req: PreSendCheckRequest, user_id: str = Depends(get_user_id)):
     """Smart Alerts pre-send check.
 
     Runs cheap heuristics and returns ``{allow, message}``. The add-in
@@ -550,6 +589,7 @@ async def pre_send_check(req: PreSendCheckRequest):
     here — call the agent via ``Runner`` if you need a model in the loop.
     The contract back to the add-in must stay ``{allow, message}``.
     """
+    del user_id  # required header only — defense-in-depth for identity invariant
     body = req.compose.body if req.compose else ""
     atts = [a.model_dump() for a in (req.compose.attachments if req.compose else [])]
     allow, message = _missing_attachment_heuristic(body, atts)
@@ -559,13 +599,12 @@ async def pre_send_check(req: PreSendCheckRequest):
 
 
 @app.post("/api/outlook/report-spam")
-async def report_spam(req: SpamReportRequest):
+async def report_spam(req: SpamReportRequest, user_id: str = Depends(get_user_id)):
     """Integrated spam-reporting sink.
 
     Logs the report and appends metadata to session state so the agent
     can later triage. Full agent integration is intentionally stubbed.
     """
-    user_id = req.user_id or DEFAULT_USER_ID
     entry = {
         "message_id": req.message_id,
         "conversation_id": req.conversation_id,
@@ -584,3 +623,27 @@ async def report_spam(req: SpamReportRequest):
     existing = existing[-MAX_RECENT_ACTIONS:]
     await _append_state_delta(req.session_id, user_id, {SPAM_REPORTS_KEY: existing})
     return {"status": "ok"}
+
+
+# ── Programmatic launcher ───────────────────────────────────────────
+#
+# On Windows, the `uvicorn` CLI sets WindowsProactorEventLoopPolicy
+# *before* importing this module — too early for the module-level
+# WindowsSelectorEventLoopPolicy override above to take effect, and
+# psycopg's async pool only works on the selector loop. Run with
+# `python -m backend.main` (or `python backend/main.py`) so the policy
+# above lands before uvicorn's loop is created; we then pass
+# `loop="none"` so uvicorn doesn't reset it.
+#
+# On POSIX the policy override at the top is a no-op and either launch
+# style works.
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "backend.main:app",
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8000")),
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
+        loop="none",
+    )

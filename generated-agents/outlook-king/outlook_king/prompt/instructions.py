@@ -6,16 +6,17 @@ Composes the system prompt every turn from these layers:
   2. SOUL.md      (character — read fresh each turn)
   3. Frame        (system posture)
   4. Date
-  5. Memory       (AGENT_MEMORY.md + topics)
 
 Skills are exposed via the LazySkillToolset (see agent.py) — queried on
-demand rather than injected into the prompt.
+demand rather than injected into the prompt. Long-term memory lives in
+Neon Postgres and is queried on demand via the memory tools
+(``load_memory``, ``recall_memory``, ``memory_status``) rather than
+spliced into every prompt.
 """
 
 import logging
 
 from ..utils.date_utils import format_current_date
-from ..state.memory import load_all_memory
 from ..config.paths import awakening_file, soul_file
 
 logger = logging.getLogger(__name__)
@@ -123,11 +124,6 @@ async def get_agent_instruction(ctx) -> str:
     """ADK InstructionProvider — assembled per turn."""
     soul = _read(soul_file())
     awakening = _read(awakening_file())
-    memory = ""
-    try:
-        memory = load_all_memory()
-    except Exception as e:
-        logger.warning("Failed to load memory: %s", e)
 
     parts: list[str] = []
     if awakening:
@@ -136,6 +132,4 @@ async def get_agent_instruction(ctx) -> str:
         parts.append(soul)
     parts.append(_FRAME)
     parts.append(f"Today: {format_current_date()}")
-    if memory:
-        parts.append(f"# Memory\n\n{memory}")
     return "\n\n".join(parts)

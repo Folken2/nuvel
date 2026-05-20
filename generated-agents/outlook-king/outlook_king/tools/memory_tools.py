@@ -1,137 +1,97 @@
+"""Memory tools for outlook-king.
+
+Same five tools the agent saw before — same names, same parameters —
+but now backed by NeonMemoryService over Postgres instead of markdown
+files. ``user_id`` comes from session state, populated by the memory
+plugin before each invocation.
 """
-Memory tools for the agent.
+from __future__ import annotations
 
-Provides tools for the agent to persist and recall information across sessions
-using markdown file-based long-term memory.
-"""
+from google.adk.tools import FunctionTool, ToolContext
 
-from google.adk.tools import FunctionTool
-
-from ..state.memory import (
-    append_core_memory,
-    append_topic,
-    delete_topic,
-    list_topics,
-    load_core_memory,
-    load_topic,
-    memory_stats,
-    save_core_memory,
-    save_topic,
-)
+from ..state.memory_singleton import get_memory_service
 
 
-def save_memory(
-    content: str,
-    topic: str = "",
+def _resolve_user_id(tool_context: ToolContext) -> str:
+    user_id = tool_context.state.get("user_id")
+    if not user_id:
+        raise RuntimeError(
+            "tool_context.state['user_id'] is missing — memory_plugin "
+            "must run before any memory tool"
+        )
+    return user_id
 
-) -> dict:
+
+async def save_memory(content: str, topic: str = "", *, tool_context: ToolContext) -> dict:
     """Save a piece of information to long-term memory.
 
     Use this to remember important facts, user preferences, project details,
-    or anything that should persist across conversations. Information saved
-    here will be available in future sessions.
+    or anything that should persist across conversations.
 
     Args:
         content: The information to remember. Be concise and specific.
-        topic: Optional topic category (e.g. "user-preferences", "project-setup").
-               If empty, saves to core memory. If provided, saves to a
-               topic-specific file.
+        topic: Optional topic category (e.g. "user-preferences"). Empty
+               string saves to the default "core" topic.
 
     Returns:
         Status dict confirming the save.
     """
-    if topic:
-        return append_topic(topic, content)
-    return append_core_memory(content)
+    user_id = _resolve_user_id(tool_context)
+    return await get_memory_service().save(user_id, content, topic or "core")
 
 
-def recall_memory(
-    topic: str = "",
-
-) -> dict:
+async def recall_memory(topic: str = "", *, tool_context: ToolContext) -> dict:
     """Recall information from long-term memory.
 
-    Use this to retrieve previously saved information. Call without a topic
-    to get core memory, or specify a topic to get topic-specific memory.
-
     Args:
-        topic: Optional topic to recall. If empty, returns core memory.
+        topic: Optional topic to recall. Empty string returns core memory.
                Use memory_status() to see all available topics.
 
     Returns:
         Dict with the memory content.
     """
-    if topic:
-        content = load_topic(topic)
-        if not content:
-            return {
-                "status": "ok",
-                "content": "",
-                "message": f"No memory found for topic '{topic}'.",
-                "available_topics": list_topics(),
-            }
-        return {"status": "ok", "topic": topic, "content": content}
-
-    content = load_core_memory()
-    if not content:
-        return {
-            "status": "ok",
-            "content": "",
-            "message": "No core memory saved yet. Use save_memory() to store information.",
-        }
-    return {"status": "ok", "content": content}
+    user_id = _resolve_user_id(tool_context)
+    return await get_memory_service().recall(user_id, topic or None)
 
 
-def update_memory(
-    content: str,
-    topic: str = "",
+async def update_memory(content: str, topic: str = "", *, tool_context: ToolContext) -> dict:
+    """Replace all rows for a topic with a single consolidated entry.
 
-) -> dict:
-    """Replace the full content of a memory file.
-
-    Use this when you need to reorganize, summarize, or rewrite memory
-    rather than just appending. This overwrites the entire file.
+    Use when you need to reorganize, summarize, or rewrite memory rather
+    than just append.
 
     Args:
-        content: The new full content for the memory file.
-        topic: Optional topic. If empty, updates core memory.
+        content: The new consolidated content.
+        topic: Optional topic. Empty string updates core memory.
 
     Returns:
         Status dict confirming the update.
     """
-    if topic:
-        return save_topic(topic, content)
-    return save_core_memory(content)
+    user_id = _resolve_user_id(tool_context)
+    return await get_memory_service().update(user_id, content, topic or "core")
 
 
-def forget_topic(
-    topic: str,
-
-) -> dict:
-    """Delete a topic memory file entirely.
-
-    Use this to clean up topics that are no longer relevant.
+async def forget_topic(topic: str, *, tool_context: ToolContext) -> dict:
+    """Delete every row in a topic. Use to clean up obsolete categories.
 
     Args:
         topic: The topic to delete.
 
     Returns:
-        Status dict confirming deletion.
+        Status dict with rowcount.
     """
-    return delete_topic(topic)
+    user_id = _resolve_user_id(tool_context)
+    return await get_memory_service().forget_topic(user_id, topic)
 
 
-def memory_status(
-
-) -> dict:
-    """Get memory usage statistics.
-
-    Shows how much memory is used, available topics, and size limits.
+async def memory_status(*, tool_context: ToolContext) -> dict:
+    """Get memory usage statistics: total rows and per-topic counts.
 
     Returns:
-        Dict with memory statistics.
+        Dict with row counts.
     """
-    return memory_stats()
+    user_id = _resolve_user_id(tool_context)
+    return await get_memory_service().stats(user_id)
 
 
 # ── Tool exports ───────────────────────────────────────────────────────

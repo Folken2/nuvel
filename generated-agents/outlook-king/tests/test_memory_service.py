@@ -1,0 +1,162 @@
+"""Tests for NeonMemoryService."""
+from __future__ import annotations
+
+import pytest
+
+from outlook_king.state.memory_service import NeonMemoryService
+
+
+@pytest.fixture
+def service(memory_pool):
+    return NeonMemoryService(memory_pool, app_name="outlook-king-test")
+
+
+async def test_upsert_user_creates_new_user(service):
+    user_id = await service.upsert_user("alice@example.com", "Alice Smith")
+    assert isinstance(user_id, str)
+    assert len(user_id) == 36  # UUID
+
+
+async def test_upsert_user_is_idempotent(service):
+    a = await service.upsert_user("bob@example.com", "Bob")
+    b = await service.upsert_user("bob@example.com", "Bob")
+    assert a == b
+
+
+async def test_save_then_recall_core(service):
+    user_id = await service.upsert_user("carol@example.com")
+    save_result = await service.save(user_id, "carol prefers concise replies")
+    assert save_result["status"] == "ok"
+
+    recall = await service.recall(user_id)
+    assert recall["status"] == "ok"
+    assert "concise replies" in recall["content"]
+
+
+async def test_save_then_recall_topic(service):
+    user_id = await service.upsert_user("dave@example.com")
+    await service.save(user_id, "dave is a senior PM", topic="user-bio")
+    await service.save(user_id, "dave works at Acme", topic="user-bio")
+
+    recall = await service.recall(user_id, topic="user-bio")
+    assert "senior PM" in recall["content"]
+    assert "Acme" in recall["content"]
+
+    # Core memory is empty
+    core = await service.recall(user_id)
+    assert core["content"] == ""
+
+
+async def test_update_replaces_topic(service):
+    user_id = await service.upsert_user("eve@example.com")
+    await service.save(user_id, "eve uses dark mode", topic="user-prefs")
+    await service.save(user_id, "eve prefers Slack over email", topic="user-prefs")
+
+    # update() replaces all rows in the topic with a single new row.
+    await service.update(user_id, "eve uses dark mode and prefers Slack", topic="user-prefs")
+
+    recall = await service.recall(user_id, topic="user-prefs")
+    # Old rows are gone, only the consolidated content remains.
+    assert "dark mode and prefers Slack" in recall["content"]
+    assert recall["content"].count("eve") == 1
+
+
+async def test_forget_topic_removes_only_that_topic(service):
+    user_id = await service.upsert_user("frank@example.com")
+    await service.save(user_id, "core fact", topic="core")
+    await service.save(user_id, "topic fact", topic="other")
+
+    result = await service.forget_topic(user_id, "other")
+    assert result["status"] == "ok"
+    assert result["deleted"] == 1
+
+    # Core still there
+    assert "core fact" in (await service.recall(user_id))["content"]
+    # Other gone
+    assert (await service.recall(user_id, topic="other"))["content"] == ""
+
+
+async def test_stats_reports_counts(service):
+    user_id = await service.upsert_user("gina@example.com")
+    await service.save(user_id, "a", topic="core")
+    await service.save(user_id, "b", topic="core")
+    await service.save(user_id, "c", topic="prefs")
+
+    stats = await service.stats(user_id)
+    assert stats["total_rows"] == 3
+    assert stats["topics"] == {"core": 2, "prefs": 1}
+
+
+async def test_search_memory_finds_via_stemming(service):
+    user_id = await service.upsert_user("henry@example.com")
+    await service.save(user_id, "henry prefers concise emails", topic="user-prefs")
+    await service.save(user_id, "henry's car is red", topic="random")
+    await service.save(user_id, "weather is nice today", topic="random")
+
+    resp = await service.search_memory(
+        app_name="outlook-king-test",  # ignored — service uses its own app_name
+        user_id=user_id,
+        query="preferences",
+    )
+    # ADK SearchMemoryResponse has a `memories` list.
+    contents = [m.content.parts[0].text for m in resp.memories]
+    assert any("concise emails" in c for c in contents)
+    # The car/weather rows should not match "preferences" (FTS stemming).
+    assert not any("weather" in c for c in contents)
+
+
+async def test_users_cannot_see_each_others_memory(service):
+    """The leak test. If this fails, the multi-tenant story is broken."""
+    alice = await service.upsert_user("alice-leak@example.com")
+    bob = await service.upsert_user("bob-leak@example.com")
+
+    await service.save(alice, "alice secret", topic="core")
+    await service.save(bob, "bob secret", topic="core")
+
+    alice_recall = await service.recall(alice)
+    bob_recall = await service.recall(bob)
+    assert "alice secret" in alice_recall["content"]
+    assert "bob secret" not in alice_recall["content"]
+    assert "bob secret" in bob_recall["content"]
+    assert "alice secret" not in bob_recall["content"]
+
+    alice_search = await service.search_memory(
+        app_name="outlook-king-test", user_id=alice, query="secret"
+    )
+    contents = [m.content.parts[0].text for m in alice_search.memories]
+    assert any("alice secret" in c for c in contents)
+    assert not any("bob secret" in c for c in contents)
+
+    # stats and write paths are also scoped per user.
+    assert (await service.stats(alice))["total_rows"] == 1
+    assert (await service.stats(bob))["total_rows"] == 1
+
+    # forget_topic on alice must not touch bob's rows.
+    await service.forget_topic(alice, "core")
+    assert (await service.recall(alice))["content"] == ""
+    assert "bob secret" in (await service.recall(bob))["content"]
+
+
+async def test_delete_user_cascades_memories(service):
+    user_id = await service.upsert_user("ivan@example.com")
+    await service.save(user_id, "fact 1")
+    await service.save(user_id, "fact 2")
+
+    # Separate connections: DELETE and the verification SELECT each run in
+    # their own pool checkout so we don't rely on same-connection autocommit
+    # visibility — this mirrors how production callers will see the cascade.
+    async with service._pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM nuvel_memory.users WHERE user_id = %s", (user_id,)
+            )
+
+    async with service._pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT COUNT(*) FROM nuvel_memory.memories WHERE user_id = %s",
+                (user_id,),
+            )
+            row = await cur.fetchone()
+            assert row is not None
+            assert row[0] == 0

@@ -13,6 +13,8 @@ reading what the user is currently looking at, learning their voice,
 grounding draft coaching, and shaping search queries.
 """
 
+from google.adk.tools import load_memory  # built-in tool instance; calls NeonMemoryService.search_memory
+
 from .memory_tools import memory_tool_list
 from ..cron.tools import cronjob_tool_list
 from .soul_tools import soul_tool_list
@@ -31,6 +33,7 @@ def get_tools() -> list:
     """Return the list of tools available to the agent."""
     tools: list = []
     tools.extend(memory_tool_list)
+    tools.append(load_memory)
     tools.extend(cronjob_tool_list)
     tools.extend(soul_tool_list)
     tools.extend(skill_tool_list)
