@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}nuvel · {{ run.trace_id[:8] if run.trace_id else run.session_id[:8] }}{% endblock %}
+{% block topbar_right %}session {{ run.session_id[:8] }}…{% endblock %}
+{% block body %}
+
+<div class="ed-back"><a href="/" class="arrow">←</a> all runs</div>
+<div class="ed-id">{{ run.trace_id or run.session_id }} · {{ run.started_at_short }} · {{ (raw.duration_ms / 1000)|round(1) if raw.duration_ms else 0 }}s</div>
+<h1 class="ed-detail-h">{{ run.headline }}</h1>
+
+{% if run.user_input_short %}
+<div class="ed-quote">"{{ raw.user_input or run.user_input_short }}"</div>
+{% endif %}
+
+<div class="ed-summary">
+  <div class="ed-stat"><div class="ed-stat-num">{{ raw.llm_calls or 0 }}</div><div class="ed-stat-lbl">LLM calls</div></div>
+  <div class="ed-stat"><div class="ed-stat-num">{{ raw.tool_calls or 0 }}</div><div class="ed-stat-lbl">Tool calls</div></div>
+  <div class="ed-stat"><div class="ed-stat-num">{{ run.tokens_short }}</div><div class="ed-stat-lbl">Tokens</div></div>
+  <div class="ed-stat"><div class="ed-stat-num">{{ run.cost_label }}</div><div class="ed-stat-lbl">Cost</div></div>
+  <div class="ed-stat"><div class="ed-stat-num">{{ (raw.duration_ms / 1000)|round(1) if raw.duration_ms else 0 }}s</div><div class="ed-stat-lbl">Duration</div></div>
+  <div class="ed-stat"><div class="ed-stat-num {% if run.has_error %}err{% endif %}">{{ '1+' if run.has_error else '0' }}</div><div class="ed-stat-lbl">Errors</div></div>
+</div>
+
+<div class="ed-section-lbl">Thinking timeline</div>
+<div class="ed-timeline">
+  {% for ev in raw.events %}
+    {% include "_event_row.html" %}
+  {% endfor %}
+</div>
+
+{% endblock %}

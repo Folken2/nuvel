@@ -43,6 +43,9 @@ docs = [
     "mkdocs-material>=9.5",
     "pymdown-extensions>=10.7",
 ]
+test = [
+    "pytest-asyncio>=0.23,<2.0",
+]
 
 [project.scripts]
 nuvel = "nuvel.cli:main"
@@ -70,6 +73,10 @@ include = ["nuvel*"]
     "prompt/*",
     "plugins/pricing.json",
 ]
+"nuvel.dashboard" = ["fixtures/*.jsonl", "templates/*.html", "static/*"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

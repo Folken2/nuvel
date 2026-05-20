@@ -13,6 +13,8 @@ Subcommands:
         Inspect JSONL trace logs across all local agents.
     nuvel pricing list|sync|add <model>
         Inspect and sync model pricing.json against OpenRouter.
+    nuvel dashboard
+        Open the local web dashboard over your trace logs.
 """
 
 from __future__ import annotations
@@ -240,6 +242,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     from nuvel import pricing
     pricing.register(sub)
+
+    from nuvel import dashboard
+    dashboard.register(sub)
 
     return parser
 

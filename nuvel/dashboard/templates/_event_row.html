@@ -1,0 +1,39 @@
+{% set kind = ev.event %}
+{% set ts = (ev.timestamp or "").split("+")[0].split("Z")[0][11:23] %}
+{% set depth = ev.agent_depth or 0 %}
+<div class="ed-event {% if kind == 'llm_response' %}llm-resp{% elif kind == 'agent_transfer' %}transfer{% elif kind in ('tool_exception','llm_error') or (kind == 'tool_end' and ev.status == 'error') %}err{% endif %}">
+  <div class="ts">{{ ts }}</div>
+  <div class="marker {% if depth >= 2 %}depth{% endif %}">
+    {% if kind == 'run_start' %}▶{% elif kind == 'run_end' %}■{% elif kind == 'agent_transfer' %}⇢{% elif kind == 'tool_start' %}▸{% elif kind == 'tool_end' %}◂{% elif kind == 'llm_request' %}→{% elif kind == 'llm_response' %}←{% else %}·{% endif %}
+  </div>
+  <div class="body">
+    {% if kind == 'llm_response' %}
+      {{ ev.response_text or "" }}
+      <div class="detail">{{ ev.latency_ms or 0 }}ms · {{ (ev.usage.total_tokens if ev.usage else 0) or 0 }} tokens · {{ (ev.function_calls or [])|length }} tool calls planned</div>
+    {% elif kind == 'tool_start' %}
+      <span class="kind">tool</span> <strong>{{ ev.tool }}</strong>
+      {% if ev.args %}<span class="detail">{{ ev.args | tojson }}</span>{% endif %}
+    {% elif kind == 'tool_end' %}
+      <span class="kind">tool</span> <strong>{{ ev.tool }}</strong>
+      <span class="detail">→ {{ ev.status }}, {{ ev.duration_ms or 0 }}ms</span>
+    {% elif kind == 'agent_transfer' %}
+      <span class="kind">transfer</span> {{ ev.from_agent }} <strong>→</strong> {{ ev.to_agent }}
+    {% elif kind == 'tool_exception' %}
+      <span class="kind">tool error</span> <strong>{{ ev.tool }}</strong>
+      <span class="detail">{{ ev.error_type }}: {{ ev.error_message }}</span>
+    {% elif kind == 'llm_error' %}
+      <span class="kind">llm error</span>
+      <span class="detail">{{ ev.error_type }}: {{ ev.error_message }}</span>
+    {% elif kind == 'run_start' %}
+      <span class="kind">run start</span>
+    {% elif kind == 'run_end' %}
+      <span class="kind">run end</span>
+      <span class="detail">{{ ev.llm_calls or 0 }} LLM · {{ ev.tool_calls or 0 }} tool · {{ ev.total_tokens or 0 }} tokens</span>
+    {% elif kind == 'llm_request' %}
+      <span class="kind">llm request</span>
+      <span class="detail">{{ ev.model }} · {{ ev.message_count or 0 }} msgs · {{ (ev.tools_available or [])|length }} tools</span>
+    {% else %}
+      <span class="kind">{{ kind }}</span>
+    {% endif %}
+  </div>
+</div>

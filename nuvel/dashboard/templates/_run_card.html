@@ -1,0 +1,15 @@
+<a href="/run/{{ run.trace_id or run.session_id }}" class="ed-run">
+  <div class="time">{{ run.started_at_short }}</div>
+  <div>
+    <div class="agent">{{ run.agent_display }}</div>
+    <div class="input">{{ run.user_input_short or run.headline or "" }}</div>
+  </div>
+  <div class="stat">{{ run.llm_calls }} turn{{ '' if run.llm_calls == 1 else 's' }}</div>
+  <div class="stat">{{ run.tokens_short }}</div>
+  {% if run.has_error %}
+    <div class="pill err">error</div>
+  {% else %}
+    <div class="pill">ok</div>
+  {% endif %}
+  <div class="arrow">→</div>
+</a>
