@@ -6,6 +6,7 @@
   </div>
   <div class="stat">{{ run.llm_calls }} turn{{ '' if run.llm_calls == 1 else 's' }}</div>
   <div class="stat">{{ run.tokens_short }}</div>
+  <div class="score score-{{ run.score_class }}" title="{% if run.flags %}{{ run.flags|join(', ') }}{% else %}no flags{% endif %}">{{ run.score_label }}</div>
   {% if run.has_error %}
     <div class="pill err">error</div>
   {% else %}
