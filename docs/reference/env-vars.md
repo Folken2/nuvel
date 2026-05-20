@@ -167,6 +167,16 @@ Opt-in audio transcription. When enabled, voice memos are converted to text befo
 
 On provider error / missing key / oversized audio, the user message becomes `[Voice memo received but transcription failed]` so the turn isn't silently dropped.
 
+## Eval harness (`nuvel eval`)
+
+The eval harness scores discovered traces with deterministic heuristics plus an LLM judge. Heuristics run on every run; the judge only fires when no hard-floor flag (e.g. `no_assistant_output`) condemned the run already. Scored output is written to `scored.jsonl` siblings of the trace files.
+
+| Var | Default | Description |
+|---|---|---|
+| `EVAL_JUDGE_MODEL` | `DEFAULT_FAST_MODEL` from `nuvel/_defaults.py` (currently `openrouter/moonshotai/kimi-k2.5`) | Litellm-style model id used by the judge. Per-agent `evals/rubric.yaml` overrides this; `EVAL_JUDGE_MODEL` overrides only the in-code default. |
+
+The judge calls `litellm.acompletion`, so any provider-prefixed id works. Cost per call typically lands well under `$0.001` with Kimi K2.5; budget the whole batch via `nuvel eval score --max-cost-usd 1.00`.
+
 ## Skill curator (opt-in plugin)
 
 The `SkillCuratorPlugin` is registered in the generated agent's plugin chain but stays inert until explicitly enabled. When active, it watches each run and — on complex turns — proposes new skills or patches to existing ones. Proposals are written to `~/.nuvel/skill-proposals/` for human review; nothing is auto-applied.

@@ -162,6 +162,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel traces list \| show \| stats \| errors` | Inspect JSONL trace logs across all local agents |
 | `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs |
+| `nuvel eval score \| report \| worst \| drift` | Score traces (heuristics + LLM judge), surface worst runs, detect drift |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |
 

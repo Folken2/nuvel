@@ -180,6 +180,48 @@ nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-op
 
 Two pages: a home view (hero + headline stats + recent activity) and a per-run detail with the thinking timeline. Live updates push new runs as the watcher sees them.
 
+## `nuvel eval`
+
+Online trace scorer. Heuristics-first, judge-on-pass. Writes `scored.jsonl` siblings into each trace directory; the dashboard joins on `trace_id` and surfaces a score column.
+
+```bash
+nuvel eval score [--since 7d] [--agent X] [--force] [--dry-run] [--max-cost-usd 1.00]
+nuvel eval report [--since 7d] [--agent X]
+nuvel eval worst  [-n 10] [--agent X]
+nuvel eval drift  [--window-days 7] [--threshold 0.1]
+```
+
+### `score`
+
+Run heuristics on every discovered trace; call the LLM judge on runs that survive the heuristic floor (so `no_assistant_output` / `incomplete_trace` skip the judge for free). Idempotent — runs with a matching `trace_id` + `scorer_version` are skipped unless `--force` is given.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--source / -s` | discover | Extra trace directory to scan. Repeatable. |
+| `--max-cost-usd` | `1.00` | Hard cap on judge spend. Once crossed, remaining runs score with heuristics only. |
+| `--concurrency` | `5` | Max simultaneous judge calls. |
+| `--force` | off | Rescore every run regardless of existing `scored.jsonl` rows. |
+| `--dry-run` | off | Compute scores but write nothing. |
+
+Resolves the judge model in this order: per-agent `generated-agents/<agent>/evals/rubric.yaml` `judge.model` → `EVAL_JUDGE_MODEL` env var → `DEFAULT_FAST_MODEL`. Calls go through `litellm.acompletion`, so any provider-prefixed id works.
+
+### `report`
+
+Per-agent summary table: run count, mean overall, mean per component, most common flag.
+
+### `worst`
+
+N worst-scoring runs ranked by `overall`, with judge notes inline. The triage entry point: start your day with `nuvel eval worst -n 10`.
+
+### `drift`
+
+Rolling-window comparison per agent. Computes mean `overall` for the last `--window-days` and compares against the same-length window before it. Exits with code `2` if any agent crosses `--threshold` — so a future CI / webhook layer can react without further parsing.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--window-days` | `7` | Length of each rolling window. |
+| `--threshold` | `0.1` | Flag drift when `|delta| >= threshold`. |
+
 ## `nuvel run`
 
 Launch the meta-agent — an interactive ADK agent that helps you scaffold, configure, and ship other agents.
