@@ -92,6 +92,21 @@ def main() -> None:
 
     print(f"[ADK] Meta-Agent starting: PORT={port}, DEV_MODE={dev_mode}")
 
+    if os.getenv("NUVEL_ORG_MEMORY_DSN"):
+        # OrgMemoryService DB pre-flight: import-only sanity + log.
+        # Note: ADK 2.x get_fast_api_app accepts only memory_service_uri (string)
+        # not a constructed instance, so OrgMemoryService is not auto-wired here.
+        # Custom runners can call nuvel.memory.factory.build_default_service().
+        try:
+            import asyncio
+            from nuvel.memory.factory import build_default_service
+            asyncio.run(build_default_service())  # migrates DB, then drops the service
+            print("[ADK] OrgMemoryService initialized (DB migrated). "
+                  "NOTE: not auto-wired into get_fast_api_app in this ADK version. "
+                  "Use a custom Runner to consume it.")
+        except Exception as exc:
+            print(f"[ADK] OrgMemoryService init failed: {exc}")
+
     if dev_mode:
         print("[ADK] DEVELOPMENT mode (in-memory sessions)")
         app = get_fast_api_app(
