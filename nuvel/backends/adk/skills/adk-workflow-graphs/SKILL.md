@@ -40,17 +40,17 @@ Run with `adk run my_agent/` (CLI) or `adk web my_agent/` (web UI).
 **The `'START'` sentinel** is the workflow's entry point. `('START', greet)`
 means "when the workflow begins, pass the user input to `greet`."
 
-## Function reference
+## References
 
-| Topic | Use when | Reference |
-|-------|----------|-----------|
-| Function nodes | Any Python step in the graph (transform, validate, branch logic) | `references/function-nodes.md` |
-| LLM agent nodes | A step is an `LlmAgent` — auto-wrapped to emit `str` or parsed `dict` | `references/llm-agent-nodes.md` |
-| Routing & conditions | Branch on a node's result; cycles for revision; default fallback | `references/routing-and-conditions.md` |
-| Parallel & fan-out | Run nodes concurrently; join their outputs with `JoinNode` | `references/parallel-and-fanout.md` |
-| Dynamic nodes | Spawn child nodes at runtime with `ctx.run_node()` | `references/dynamic-nodes.md` |
+| Resource | Description | Load when |
+|----------|-------------|-----------|
+| function-nodes | `@node` decorator and `FunctionNode`; param resolution from `ctx.state`; async/generator nodes | A graph step is plain Python — transform, validate, branch logic |
+| llm-agent-nodes | `_LlmAgentWrapper` behavior; `output_schema` for parsed dicts; tools-in-workflow; emitting routes from LLM output | A graph step is an `LlmAgent` and you need to compose its output cleanly |
+| routing-and-conditions | `Event(route=...)`, dict-syntax edges, `__DEFAULT__` fallback, cyclical edges with validation rules | Branching on a node's result, revision loops, or a state-machine-shaped flow |
+| parallel-and-fanout | Tuple syntax for fan-out/fan-in, `JoinNode`, diamond patterns, parallel-state-write rules | Running nodes concurrently — especially when you also need to aggregate results |
+| dynamic-nodes | `ctx.run_node()` API, `rerun_on_resume=True`, deterministic naming for replay, mixing static + dynamic | The set of next steps depends on runtime data (data-driven fan-out, recursion) |
 
-Load a reference with `load_skill_resource("adk-workflow-graphs", "references/<file>.md")`.
+Load a reference with `load_skill_resource("adk-workflow-graphs", "<resource>.md")`.
 
 ## Core mental model
 
