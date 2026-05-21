@@ -22,8 +22,8 @@ class RecordingStore:
     async def delete(self, memory_id):
         self.calls.append(("delete", memory_id))
 
-    async def list_by_scope(self, scope, limit=100):
-        self.calls.append(("list", scope, limit))
+    async def list_by_scope(self, *, org_id, scope, limit=100):
+        self.calls.append(("list", org_id, scope, limit))
         return []
 
 
@@ -33,6 +33,7 @@ async def test_move_recomputes_chain_from_resolver_levels():
     admin = OrgMemoryAdmin(
         store=store,
         chain_for_scope=lambda s: [s.tag(), "org:acme"],
+        org_id="acme",
     )
     await admin.move("m1", Scope(level="team", id="platform"))
     assert store.calls == [
@@ -43,10 +44,10 @@ async def test_move_recomputes_chain_from_resolver_levels():
 @pytest.mark.asyncio
 async def test_delete_and_list_pass_through():
     store = RecordingStore()
-    admin = OrgMemoryAdmin(store=store, chain_for_scope=lambda s: [s.tag()])
+    admin = OrgMemoryAdmin(store=store, chain_for_scope=lambda s: [s.tag()], org_id="acme")
     await admin.delete("m9")
     await admin.list_by_scope(Scope(level="org", id="acme"), limit=50)
     assert store.calls == [
         ("delete", "m9"),
-        ("list", Scope(level="org", id="acme"), 50),
+        ("list", "acme", Scope(level="org", id="acme"), 50),
     ]

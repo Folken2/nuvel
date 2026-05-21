@@ -72,7 +72,7 @@ async def test_admin_move_promotes_user_to_team():
         memories=[{"content": f"promote-me-{suffix}"}],
     )
     # Find the id
-    rows = await store.list_by_scope(Scope(level="user", id="albert"))
+    rows = await store.list_by_scope(org_id="acme", scope=Scope(level="user", id="albert"))
     row = next(r for r in rows if f"promote-me-{suffix}" in r.content)
 
     admin = OrgMemoryAdmin(
@@ -80,6 +80,7 @@ async def test_admin_move_promotes_user_to_team():
         chain_for_scope=lambda s: {
             "team:platform": ["team:platform", "division:eu", "org:acme"],
         }[s.tag()],
+        org_id="acme",
     )
     await admin.move(row.id, Scope(level="team", id="platform"))
 

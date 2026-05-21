@@ -114,7 +114,7 @@ class PostgresStore:
         async with pool.acquire() as conn:
             await conn.execute("delete from org_memories where id = $1::uuid", memory_id)
 
-    async def list_by_scope(self, scope: Scope, limit: int = 100) -> list[MemoryRow]:
+    async def list_by_scope(self, *, org_id: str, scope: Scope, limit: int = 100) -> list[MemoryRow]:
         pool = await get_pool(self._dsn)
         async with pool.acquire() as conn:
             records = await conn.fetch(
@@ -123,11 +123,11 @@ class PostgresStore:
                        content, embedding, source_app, source_session,
                        custom_metadata, created_at
                 from org_memories
-                where scope_level = $1 and scope_id = $2
+                where org_id = $3 and scope_level = $1 and scope_id = $2
                 order by created_at desc
-                limit $3
+                limit $4
                 """,
-                scope.level, scope.id, limit,
+                scope.level, scope.id, org_id, limit,
             )
         return [_row_from_record(r) for r in records]
 

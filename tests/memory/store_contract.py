@@ -37,7 +37,7 @@ def make_contract_tests(store_factory: StoreFactory) -> type:
             row = _row("hello", "user", f"u-{uid}", [f"user:u-{uid}", "org:acme"])
             new_id = await store.insert(row)
             assert new_id
-            found = await store.list_by_scope(Scope(level=row.scope_level, id=row.scope_id))
+            found = await store.list_by_scope(org_id="acme", scope=Scope(level=row.scope_level, id=row.scope_id))
             assert any(r.content == "hello" for r in found)
 
         @pytest.mark.asyncio
@@ -67,7 +67,7 @@ def make_contract_tests(store_factory: StoreFactory) -> type:
             mid = await store.insert(_row("movable", "user", uid, [f"user:{uid}", "org:acme"]))
             await store.move(mid, Scope(level="team", id=team_id),
                              [f"team:{team_id}", "org:acme"])
-            in_team = await store.list_by_scope(Scope(level="team", id=team_id))
+            in_team = await store.list_by_scope(org_id="acme", scope=Scope(level="team", id=team_id))
             assert any(r.id == mid for r in in_team)
 
         @pytest.mark.asyncio
@@ -76,7 +76,7 @@ def make_contract_tests(store_factory: StoreFactory) -> type:
             uid = uuid.uuid4().hex[:6]
             mid = await store.insert(_row("del", "user", uid, [f"user:{uid}", "org:acme"]))
             await store.delete(mid)
-            in_scope = await store.list_by_scope(Scope(level="user", id=uid))
+            in_scope = await store.list_by_scope(org_id="acme", scope=Scope(level="user", id=uid))
             assert all(r.id != mid for r in in_scope)
 
     return _Contract

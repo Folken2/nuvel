@@ -14,9 +14,11 @@ class OrgMemoryAdmin:
         *,
         store: MemoryStore,
         chain_for_scope: Callable[[Scope], list[str]],
+        org_id: str,
     ) -> None:
         self._store = store
         self._chain_for_scope = chain_for_scope
+        self._org_id = org_id
 
     async def move(self, memory_id: str, new_scope: Scope) -> None:
         new_chain = self._chain_for_scope(new_scope)
@@ -26,4 +28,4 @@ class OrgMemoryAdmin:
         await self._store.delete(memory_id)
 
     async def list_by_scope(self, scope: Scope, limit: int = 100) -> list[MemoryRow]:
-        return await self._store.list_by_scope(scope, limit)
+        return await self._store.list_by_scope(org_id=self._org_id, scope=scope, limit=limit)
