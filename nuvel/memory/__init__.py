@@ -1,5 +1,6 @@
 """Hierarchical, scope-aware memory for nuvel agents."""
 
+from nuvel.memory.admin import OrgMemoryAdmin
 from nuvel.memory.embedder import Embedder, GoogleEmbedder, NullEmbedder
 from nuvel.memory.resolver import ConfigScopeResolver, ScopeResolver
 from nuvel.memory.scope import Scope, ScopeChain
@@ -12,6 +13,7 @@ __all__ = [
     "MemoryRow",
     "MemoryStore",
     "NullEmbedder",
+    "OrgMemoryAdmin",
     "Scope",
     "ScopeAuthorizationError",
     "ScopeChain",
