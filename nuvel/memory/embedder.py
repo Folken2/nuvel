@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Protocol
@@ -12,13 +13,13 @@ log = logging.getLogger(__name__)
 class Embedder(Protocol):
     dim: int
 
-    def embed(self, text: str) -> list[float] | None: ...
+    async def embed(self, text: str) -> list[float] | None: ...
 
 
 class NullEmbedder:
     dim = 1536
 
-    def embed(self, text: str) -> list[float] | None:  # noqa: ARG002
+    async def embed(self, text: str) -> list[float] | None:  # noqa: ARG002
         return None
 
 
@@ -44,7 +45,7 @@ class GoogleEmbedder:
 
         self._client = genai.Client(api_key=self._api_key) if self._api_key else genai.Client()
 
-    def embed(self, text: str) -> list[float] | None:
+    def _sync_embed(self, text: str) -> list[float] | None:
         try:
             self._ensure()
             assert self._client is not None
@@ -53,3 +54,6 @@ class GoogleEmbedder:
         except Exception as exc:  # noqa: BLE001
             log.warning("embed failed (%s); returning None for lexical fallback", exc)
             return None
+
+    async def embed(self, text: str) -> list[float] | None:
+        return await asyncio.get_running_loop().run_in_executor(None, self._sync_embed, text)

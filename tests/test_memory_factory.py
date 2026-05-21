@@ -24,7 +24,7 @@ async def test_build_default_service_uses_explicit_args(monkeypatch, tmp_path):
     )
     assert svc._resolver.org_id == "acme"
     # NullEmbedder when no GOOGLE_API_KEY
-    assert svc._embedder.embed("x") is None
+    assert await svc._embedder.embed("x") is None
 
 
 @pytest.mark.asyncio

@@ -106,7 +106,7 @@ class OrgMemoryService(BaseMemoryService):
         self, *, app_name: str, user_id: str, query: str
     ) -> SearchMemoryResponse:
         chain = self._resolver.resolve(user_id)
-        q_embedding = self._embedder.embed(query)
+        q_embedding = await self._embedder.embed(query)
         rows = await self._store.search(
             org_id=self._resolver.org_id,
             user_chain_tags=chain.tags(),
@@ -162,7 +162,7 @@ class OrgMemoryService(BaseMemoryService):
         session_id: str | None,
         custom_metadata: dict[str, Any] | None,
     ) -> None:
-        embedding = self._embedder.embed(content)
+        embedding = await self._embedder.embed(content)
         row = MemoryRow(
             id=None,
             org_id=self._resolver.org_id,
