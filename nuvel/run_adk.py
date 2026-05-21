@@ -101,9 +101,10 @@ def main() -> None:
             import asyncio
             from nuvel.memory.factory import build_default_service
             asyncio.run(build_default_service())  # migrates DB, then drops the service
-            print("[ADK] OrgMemoryService initialized (DB migrated). "
-                  "NOTE: not auto-wired into get_fast_api_app in this ADK version. "
-                  "Use a custom Runner to consume it.")
+            print("[ADK] DB migration OK (NUVEL_ORG_MEMORY_DSN set).")
+            print("[ADK] WARNING: OrgMemoryService is NOT wired into get_fast_api_app in this ADK "
+                  "version — the running agent has no memory. See docs/memory/org-memory-service.md "
+                  "to consume the service from a custom Runner.")
         except Exception as exc:
             print(f"[ADK] OrgMemoryService init failed: {exc}")
 
