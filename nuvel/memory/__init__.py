@@ -1,5 +1,6 @@
 """Hierarchical, scope-aware memory for nuvel agents."""
 
+from nuvel.memory.resolver import ConfigScopeResolver, ScopeResolver
 from nuvel.memory.scope import Scope, ScopeChain
 
-__all__ = ["Scope", "ScopeChain"]
+__all__ = ["Scope", "ScopeChain", "ScopeResolver", "ConfigScopeResolver"]
