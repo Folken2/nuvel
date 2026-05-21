@@ -96,6 +96,52 @@ The markdown body after the frontmatter is the L2 content.
 - Include complete, runnable code examples
 - Recommended: under 300 lines per file
 
+## Function Routing Table (ADK 2.0)
+
+When a skill has 2 or more reference files, list them in a **3-column markdown
+table** placed near the top of the SKILL.md body. The columns are fixed:
+
+| Column | Content |
+|--------|---------|
+| `Resource` | The file slug — `kebab-case`, matching the filename without `.md`. This is the argument to `load_skill_resource(skill_name, resource)`. |
+| `Description` | What the file teaches. Concrete enough to disambiguate from sibling references. Avoid "details on X" — say what's actually inside. |
+| `Load when` | The trigger condition (task type, question shape, symptom). One short clause. |
+
+### Why the Description column
+
+Before ADK 2.0, references were listed as bullet links at the bottom of
+SKILL.md: `- Load `api-patterns` for details on API patterns.` The LLM had to
+load each candidate file just to see if it was the right one. The Description
+column eliminates that round-trip — the LLM can choose correctly from the
+SKILL.md alone.
+
+### Canonical example
+
+```markdown
+| Resource | Description | Load when |
+|----------|-------------|-----------|
+| api-patterns | Retry/backoff with jitter, rate-limit handling, idempotency keys | Building a tool that calls an external HTTP API |
+| error-handling | Mapping HTTP status codes to user-facing messages; redaction rules | The agent needs to report a failure to the user |
+| auth-flows | OAuth 2.0 code flow, PKCE, refresh-token rotation | The API requires user-delegated auth |
+```
+
+### Rules
+
+- One row per reference file. No grouping rows, no merged cells.
+- Resource cells contain only the slug — no backticks, no `.md`, no path prefix.
+- Description cells are sentence fragments (no trailing period required); be
+  specific about *what is inside* the file, not what topic it relates to.
+- `Load when` cells are also sentence fragments; phrase them as triggers the
+  LLM would notice mid-conversation.
+- Place the table after a one-paragraph Overview, **before** the main body /
+  Steps section.
+
+### When to skip the table
+
+A skill with **0 or 1** reference files doesn't need a routing table — the L2
+body can mention the single reference inline. The table earns its place when
+the LLM has to choose between siblings.
+
 ## Progressive Disclosure Summary
 
 ```

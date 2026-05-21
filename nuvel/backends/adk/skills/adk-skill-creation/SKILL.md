@@ -96,6 +96,46 @@ The description determines whether the LLM loads the skill. Be specific about **
 11. Use clear headings so the LLM can scan quickly.
 12. Keep each reference file focused — under 300 lines if possible.
 
+## The References Table (ADK 2.0 convention)
+
+When a skill has 2 or more reference files, **list them in a markdown table near
+the top of the SKILL.md body**, with three columns:
+
+| Column | Content |
+|--------|---------|
+| **Resource** | The file slug (the argument you'd pass to `load_skill_resource`). Use `kebab-case` matching the filename without `.md`. |
+| **Description** | What the file teaches — concrete enough that the LLM can pick the right one without first loading it. Avoid filler ("details on X"); say what's inside ("How `@node` resolves params from `ctx.state`; async/generator nodes"). |
+| **Load when** | The trigger condition: a task type, a question shape, or a symptom the LLM would notice. |
+
+### Why a table beats a bullet list
+
+The pre-2.0 convention was `- Load `name` for details on X.` at the bottom of
+SKILL.md. Two problems with that:
+
+1. **Ambiguity.** "details on X" tells the LLM nothing about whether `X.md`
+   actually contains what's needed — so it loads, reads, then often loads
+   another. Wasted turns.
+2. **Position.** Bullets at the bottom mean the LLM has to read the whole
+   SKILL.md before seeing the routing. The table near the top lets it route
+   immediately.
+
+The new convention: a **routing table** the LLM can scan in one pass to pick
+the right L3 file on the first try, without `load_skill_resource` round-trips.
+
+### Example table
+
+```markdown
+| Resource | Description | Load when |
+|----------|-------------|-----------|
+| api-patterns | Retry/backoff with jitter, rate-limit handling, idempotency keys | Building a tool that calls an external HTTP API |
+| error-handling | Mapping HTTP status codes to user-facing error messages; redaction rules | The agent needs to report a failure to the user |
+| auth-flows | OAuth 2.0 code flow, PKCE, refresh-token rotation | The API requires user-delegated auth |
+```
+
+Place it after a short Overview/Steps section but **before** the long-form
+prose. Reference files mentioned inline in the body are still fine — the table
+is the index, the inline mentions are the cross-refs.
+
 ## Skill Design Patterns
 
 Before writing a skill from scratch, load `adk-skill-design-patterns` to identify which canonical pattern fits. The 5 patterns (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline) provide proven structures with skeleton templates. Use the decision matrix to match the agent's needs to the right pattern, then load the pattern's reference for a starting template.
