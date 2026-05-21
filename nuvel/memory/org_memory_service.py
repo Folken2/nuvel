@@ -100,13 +100,32 @@ class OrgMemoryService(BaseMemoryService):
             session_id=session.id,
         )
 
-    # ── reads (stub — Task 6) ─────────────────────────────────
+    # ── reads ─────────────────────────────────────────────────
 
     async def search_memory(
         self, *, app_name: str, user_id: str, query: str
     ) -> SearchMemoryResponse:
-        # Implemented in Task 6; return empty response to satisfy abstract method
-        return SearchMemoryResponse(memories=[])
+        chain = self._resolver.resolve(user_id)
+        q_embedding = self._embedder.embed(query)
+        rows = await self._store.search(
+            org_id=self._resolver.org_id,
+            user_chain_tags=chain.tags(),
+            q_embedding=q_embedding,
+            query_text=query,
+            k=self._top_k,
+            tier_boost=self._tier_boost,
+        )
+        return SearchMemoryResponse(
+            memories=[self._row_to_entry(r) for r in rows]
+        )
+
+    def _row_to_entry(self, r: MemoryRow) -> MemoryEntry:
+        # MemoryEntry.content is a google.genai Content. Build one from the
+        # row's plain-text content (single text part).
+        from google.genai.types import Content, Part
+        return MemoryEntry(
+            content=Content(parts=[Part(text=r.content)]),
+        )
 
     # ── internals ──────────────────────────────────────────────
 
