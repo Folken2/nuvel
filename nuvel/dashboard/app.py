@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 
 from nuvel.dashboard.headlines import describe_run
 from nuvel.dashboard.loader import TraceLoader
+from nuvel.eval.schema import ScoredRun
 from nuvel.traces_cli import Run
 
 
@@ -44,6 +45,15 @@ def _run_has_error(run: Run) -> bool:
     return False
 
 
+def _score_class(overall: float) -> str:
+    """CSS class hint for the score pill."""
+    if overall >= 0.8:
+        return "good"
+    if overall >= 0.5:
+        return "warn"
+    return "bad"
+
+
 @dataclass
 class RunView:
     """Pre-computed display fields wrapped over a Run."""
@@ -58,6 +68,13 @@ class RunView:
     has_error: bool
     trace_id_short: str
     summary: str
+    score_label: str = "—"
+    score_class: str = "none"
+    flags: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.flags is None:
+            self.flags = []
 
     @property
     def trace_id(self) -> str | None: return self.run.trace_id
@@ -65,12 +82,19 @@ class RunView:
     def session_id(self) -> str: return self.run.session_id
 
 
-def _view(run: Run) -> RunView:
+def _view(run: Run, scored: ScoredRun | None = None) -> RunView:
     ts = (run.started_at or run.ended_at or "")[:16].replace("T", " ")
     user = (run.user_input or "")
     user_short = user[:80] + ("…" if len(user) > 80 else "")
     short = (run.trace_id or run.session_id or "")[:8]
     headline = describe_run(run)
+    score_label = "—"
+    score_class = "none"
+    flags: list[str] = []
+    if scored is not None:
+        score_label = f"{scored.overall:.2f}"
+        score_class = _score_class(scored.overall)
+        flags = list(scored.flags or [])
     return RunView(
         run=run,
         started_at_short=ts,
@@ -83,6 +107,9 @@ def _view(run: Run) -> RunView:
         has_error=_run_has_error(run),
         trace_id_short=short,
         summary=headline,
+        score_label=score_label,
+        score_class=score_class,
+        flags=flags,
     )
 
 
@@ -94,7 +121,8 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(_DASHBOARD_DIR / "static")), name="static")
 
     def _home_context(runs: list[Run]) -> dict:
-        views = [_view(r) for r in runs]
+        scored = loader.scored_index()
+        views = [_view(r, scored.get(r.trace_id or r.session_id)) for r in runs]
         agents = sorted({r.agent.split("/")[0] for r in runs})
         total_tokens = sum(r.total_tokens or 0 for r in runs)
         total_cost = sum(r.cost_usd or 0 for r in runs if r.cost_usd is not None)
@@ -120,12 +148,15 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
         run = loader.find_by_id(trace_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        return templates.TemplateResponse(request, "run_detail.html", {"run": _view(run), "raw": run})
+        scored = loader.scored_index().get(run.trace_id or run.session_id)
+        return templates.TemplateResponse(request, "run_detail.html", {"run": _view(run, scored), "raw": run})
 
     @app.get("/api/runs/feed", response_class=HTMLResponse)
     def runs_feed(request: Request) -> HTMLResponse:
         runs = loader.runs()
-        return templates.TemplateResponse(request, "_feed.html", {"runs": [_view(r) for r in runs[:20]]})
+        scored = loader.scored_index()
+        views = [_view(r, scored.get(r.trace_id or r.session_id)) for r in runs[:20]]
+        return templates.TemplateResponse(request, "_feed.html", {"runs": views})
 
     @app.get("/sse")
     async def sse_stream() -> StreamingResponse:

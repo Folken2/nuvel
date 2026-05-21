@@ -30,7 +30,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
 .ed-section-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ed-muted); font-weight: 600; margin-bottom: 14px; }
 
 /* Recent runs feed */
-a.ed-run { color: inherit; text-decoration: none; display: grid; grid-template-columns: 56px 1fr auto auto auto 16px; gap: 16px; align-items: center; padding: 14px 0; border-bottom: 1px solid rgba(0,0,0,0.06); font-size: 13px; }
+a.ed-run { color: inherit; text-decoration: none; display: grid; grid-template-columns: 56px 1fr auto auto auto auto 16px; gap: 16px; align-items: center; padding: 14px 0; border-bottom: 1px solid rgba(0,0,0,0.06); font-size: 13px; }
 a.ed-run:hover { background: rgba(0,0,0,0.02); }
 .ed-run .time { font-family: ui-monospace, monospace; font-size: 11px; color: #9a9a9a; }
 .ed-run .agent { font-weight: 500; }
@@ -38,6 +38,11 @@ a.ed-run:hover { background: rgba(0,0,0,0.02); }
 .ed-run .stat { font-family: ui-monospace, monospace; font-size: 11px; color: var(--ed-muted); }
 .ed-run .pill { font-size: 9px; padding: 2px 7px; border-radius: 100px; background: #ede9e0; color: var(--ed-muted); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
 .ed-run .pill.err { background: #fef3c7; color: #92400e; }
+.ed-run .score { font-family: ui-monospace, monospace; font-size: 11px; padding: 2px 7px; border-radius: 4px; min-width: 30px; text-align: center; }
+.ed-run .score.score-none { color: #c0c0c0; }
+.ed-run .score.score-good { background: #e6f4ea; color: #1e6b3a; }
+.ed-run .score.score-warn { background: #fff4dc; color: #8a5a00; }
+.ed-run .score.score-bad  { background: #fde2e2; color: #8a1f1f; }
 .ed-run .arrow { color: var(--ed-accent); font-size: 14px; }
 
 /* Error callout */
