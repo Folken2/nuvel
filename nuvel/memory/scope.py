@@ -16,6 +16,8 @@ class Scope(BaseModel):
 
 
 class ScopeChain(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     scopes: list[Scope]
 
     def tags(self) -> list[str]:
