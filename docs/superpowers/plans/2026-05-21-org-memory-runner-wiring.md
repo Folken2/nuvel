@@ -373,7 +373,7 @@ If ADK rejects this minimal shape, adjust to whatever's needed for `get_fast_api
 - [ ] **Step 3: Run integration test**
 
 ```bash
-NUVEL_MEMORY_TEST_DSN="postgresql://neondb_owner:npg_hs1fOV8WAqgr@ep-curly-term-abx15vj8-pooler.eu-west-2.aws.neon.tech/neondb?channel_binding=require&sslmode=require" \
+NUVEL_MEMORY_TEST_DSN="$NEON_DEV_DSN" \
   pytest tests/test_run_adk_memory_wiring.py -v
 ```
 
