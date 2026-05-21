@@ -49,9 +49,9 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
         return 1
 
     url = f"http://{args.host}:{args.port}"
-    print(f"nuvel dashboard → {url}")
+    print(f"nuvel dashboard -> {url}")
     if args.demo:
-        print("  (demo mode: bundled fixtures · live updates disabled)")
+        print("  (demo mode: bundled fixtures; live updates disabled)")
 
     if args.open_browser:
         try:

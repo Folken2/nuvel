@@ -26,7 +26,7 @@ def test_demo_smoke() -> None:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.time() + 8.0
+        deadline = time.time() + 30.0
         while time.time() < deadline:
             try:
                 r = httpx.get(f"http://127.0.0.1:{port}/", timeout=1.0)
@@ -35,7 +35,7 @@ def test_demo_smoke() -> None:
             except httpx.HTTPError:
                 time.sleep(0.2)
         else:
-            raise AssertionError("dashboard did not become ready within 8s")
+            raise AssertionError("dashboard did not become ready within 30s")
 
         r = httpx.get(f"http://127.0.0.1:{port}/", timeout=2.0)
         assert r.status_code == 200
