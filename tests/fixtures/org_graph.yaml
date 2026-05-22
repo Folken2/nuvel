@@ -1,0 +1,21 @@
+org_id: acme
+levels: [user, team, division, org]
+users:
+  albert:
+    chain:
+      - { level: user,     id: albert }
+      - { level: team,     id: platform }
+      - { level: division, id: eu }
+      - { level: org,      id: acme }
+  bea:
+    chain:
+      - { level: user,     id: bea }
+      - { level: team,     id: platform }
+      - { level: division, id: eu }
+      - { level: org,      id: acme }
+  carlos:
+    chain:
+      - { level: user,     id: carlos }
+      - { level: team,     id: growth }
+      - { level: division, id: na }
+      - { level: org,      id: acme }

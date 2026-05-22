@@ -1,6 +1,6 @@
 # OrgMemoryService v1 — Design
 
-**Status:** Approved (brainstorm) — pending implementation plan
+**Status:** Implemented (v1 shipped 2026-05-21). Spec updated post-implementation to reflect actual behavior; see "Post-Implementation Corrections" at the end.
 **Date:** 2026-05-15
 **Owner:** @Folken2
 
@@ -75,7 +75,7 @@ create table org_memories (
   scope_id        text not null,                -- "albert" | "platform-team" | ...
   scope_chain     text[] not null,              -- ["user:albert","team:platform",...,"org:acme"]
   content         text not null,
-  embedding       vector(1536),
+  embedding       vector(768),  -- Google text-embedding-004 (v1 default)
   source_app      text,
   source_session  text,
   custom_metadata jsonb not null default '{}'::jsonb,
@@ -145,7 +145,7 @@ If the resolver returns an empty chain (unknown user), `OrgMemoryService` falls 
 `OrgMemoryService.search_memory(*, app_name, user_id, query) -> SearchMemoryResponse`:
 
 1. `user_chain = ScopeResolver.resolve(user_id)`.
-2. `q_embedding = embedder.embed(query)`.
+2. `q_embedding = await embedder.embed(query)` (Embedder.embed is async in v1 — wraps blocking provider calls via `run_in_executor` so the event loop never stalls).
 3. Single SQL (tier boost rendered as a `CASE` expression from the Python config dict at query time):
 
 ```sql
@@ -160,10 +160,12 @@ select id, content, scope_level, scope_chain, custom_metadata,
        end as score
 from org_memories
 where org_id = $org
-  and scope_chain && $user_chain_tags
+  and (scope_level || ':' || scope_id) = any($user_chain_tags)
 order by score desc
 limit $k;
 ```
+
+**Isolation filter:** rows match only when their own scope tag (`scope_level:scope_id`) is in the caller's resolved chain. The earlier draft used `scope_chain && $user_chain_tags` (array overlap), which would have leaked any peer's user-scoped memory at a shared higher scope — e.g., Albert and Bea both on `team:platform` would see each other's `user:*` rows because the rows' chains share `team:platform`. The `= any(...)` form correctly enforces inheritance + isolation: Albert sees `team:platform`, `division:eu`, `org:acme` memories AND his own `user:albert`, but never Bea's `user:bea`. The denormalized `scope_chain` column is still stored for future ancestry queries and audit (e.g. "show me everything under division:eu").
 
 4. `tier_boost` is a config dict, defaults: `{user: 1.0, team: 0.9, division: 0.75, country: 0.7, corporate: 0.65, org: 0.6}`. Tunable per deployment.
 5. Map rows to `MemoryEntry`s.
@@ -183,7 +185,11 @@ class OrgMemoryService(BaseMemoryService):
     async def search_memory(self, *, app_name, user_id, query) -> SearchMemoryResponse: ...
 ```
 
-Wired via the existing `nuvel/backends/adk/` runner config — same pattern as session services.
+**Wiring (v1 reality):** ADK 2.x's `google.adk.cli.fast_api.get_fast_api_app` accepts only `memory_service_uri: Optional[str]` — there is no kwarg for a constructed `BaseMemoryService` instance. So `OrgMemoryService` is **not auto-wired** into the default FastAPI runner. v1 ships:
+
+- `nuvel.memory.factory.build_default_service()` — env-driven factory (`NUVEL_ORG_MEMORY_DSN`, `NUVEL_ORG_GRAPH_PATH`, optional `GOOGLE_API_KEY`) that returns a fully-wired service after running `PostgresStore.migrate()`.
+- `run_adk.py` gates a startup DB migration on `NUVEL_ORG_MEMORY_DSN`, then logs a WARNING line that the service is not auto-wired and points to the docs.
+- Consumption: build a custom `Runner(..., memory_service=build_default_service())`. The hand-rolled runner is the v1 integration seam until ADK exposes a memory_service kwarg on `get_fast_api_app`.
 
 ## MemoryStore Protocol
 
@@ -195,7 +201,7 @@ class MemoryStore(Protocol):
                      tier_boost: dict[str, float]) -> list[MemoryRow]: ...
     async def move(self, memory_id: str, new_scope: Scope, new_chain: list[str]) -> None: ...
     async def delete(self, memory_id: str) -> None: ...
-    async def list_by_scope(self, scope: Scope, limit: int = 100) -> list[MemoryRow]: ...
+    async def list_by_scope(self, *, org_id: str, scope: Scope, limit: int = 100) -> list[MemoryRow]: ...
 ```
 
 One implementation in v1: `PostgresStore`. A shared contract test suite (`tests/memory/store_contract.py`) any backend must pass — primes a future Supermemory/mem0 backend without rewriting tests.
@@ -240,7 +246,19 @@ No governance, no approval flow — those are v2.
 - Skill promotion (separate but related — reuses `Scope` + `ScopeResolver`).
 - Backfill / migration from per-agent memory backends.
 
+## Post-Implementation Corrections (2026-05-21)
+
+Recorded here so future readers can trust the spec matches the code in `nuvel/memory/`.
+
+1. **Isolation filter** — see "Read Semantics". Spec originally said `scope_chain && $user_chain_tags`; implementation uses `(scope_level || ':' || scope_id) = any($user_chain_tags)` to prevent peer-leak at shared higher scopes. Integration test at `tests/test_memory_integration.py::test_inheritance_and_isolation` is the binding behavior.
+2. **Embedding dimension** — `vector(768)` not `vector(1536)`. v1 default embedder is Google `text-embedding-004`.
+3. **`Embedder.embed` is async** — wraps blocking provider calls via `run_in_executor` so the FastAPI event loop is never stalled by a sync HTTP call.
+4. **`MemoryStore.list_by_scope` requires `org_id`** — added as a keyword-only arg to prevent cross-org row leaks via shared `scope_id` values. `OrgMemoryAdmin` carries `org_id` in its constructor and threads it through.
+5. **ADK wiring is not automatic** — ADK 2.x `get_fast_api_app` accepts only `memory_service_uri: str`. v1 ships `nuvel.memory.factory.build_default_service()` as the consumption seam; custom Runner code must wire it. `run_adk.py` runs the DB migration on startup but logs a WARNING that the service is not injected into the running agent.
+
 ## Related
 
 - [[project-nuvel-vision]] — long-term thesis this spec executes against.
 - `nuvel/plugins/skill_curator_plugin.py` — seed of the skill-promotion path; not touched in v1.
+- `docs/memory/org-memory-service.md` — operator-facing usage doc.
+- `docs/superpowers/plans/2026-05-21-org-memory-service.md` — implementation plan (executed 2026-05-21).
