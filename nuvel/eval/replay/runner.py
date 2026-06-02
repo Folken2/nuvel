@@ -8,15 +8,18 @@ trace; ``ReplayRunner`` (Task 4) is the batch driver.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from dataclasses import asdict
+from datetime import datetime as _datetime
+from pathlib import Path
 from typing import Awaitable, Callable
 
-from nuvel.eval.replay.schema import ReplayResult, Variant
+from nuvel.eval.replay.schema import ReplayResult, Variant, append_replay, load_replay_index
 from nuvel.eval.rubric import DEFAULT_RUBRIC, Rubric
 from nuvel.eval.scorer import JudgeFn, score_run
-from nuvel.traces_cli import Run
+from nuvel.traces_cli import Run, _agent_label_for, _iter_trace_files, _parse_file_runs
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,8 @@ async def replay_run(
 
     last_exc: Exception | None = None
     output_text = ""
+    # Not accumulated across retries — a failed call is billed nothing; a
+    # successful call overwrites. (Differs from judge._call_litellm's `+=`.)
     replay_cost = 0.0
     for attempt in (1, 2):
         try:
@@ -128,3 +133,124 @@ async def replay_run(
         replay_cost_usd=replay_cost,
         scored=asdict(scored),
     )
+
+
+@dataclass
+class ReplayReport:
+    """Summary of one ``ReplayRunner.run()``."""
+
+    replayed: int = 0
+    skipped_existing: int = 0
+    skipped_no_input: int = 0
+    replay_errors: int = 0
+    total_cost_usd: float = 0.0
+    budget_exhausted: bool = False
+
+
+@dataclass
+class ReplayRunner:
+    """Batch driver: replay a variant across one agent's traces dir.
+
+    Mirrors ``ScoreSession`` — idempotency on ``(trace_id, variant.version)``,
+    a shared cost budget across BOTH the replay chat call and the judge call,
+    and bounded concurrency.
+    """
+
+    variant: Variant
+    traces_dir: Path
+    agent: str
+    since: "_datetime | None" = None
+    max_cost_usd: float = 1.0
+    concurrency: int = 5
+    force: bool = False
+    dry_run: bool = False
+    rubric: Rubric | None = None
+    chat_fn: ChatFn = field(default=_call_litellm_chat)
+    judge_fn: JudgeFn | None = None
+
+    def _replay_path(self) -> Path:
+        return self.traces_dir / "replays" / f"{self.variant.name}.jsonl"
+
+    def _collect_runs(self) -> list[Run]:
+        seen_sessions: set[str] = set()
+        runs: list[Run] = []
+        for f in _iter_trace_files([self.traces_dir]):
+            for r in _parse_file_runs(f, keep_events=True):
+                if self.since is not None and r.started_at:
+                    try:
+                        ts = _datetime.fromisoformat(r.started_at.replace("Z", "+00:00"))
+                        if ts < self.since:
+                            continue
+                    except ValueError:
+                        pass
+                # Deduplicate: _parse_file_runs may produce a shadow Run for
+                # run_end events whose trace_id is absent (keyed by session_id
+                # alone), in addition to the real Run keyed by trace_id.
+                # Track by session_id — whichever Run arrives first (with
+                # user_input from run_start) wins; subsequent duplicates skip.
+                sid = r.session_id
+                if sid and sid in seen_sessions:
+                    continue
+                if sid:
+                    seen_sessions.add(sid)
+                runs.append(r)
+        return runs
+
+    async def run(self) -> ReplayReport:
+        report = ReplayReport()
+        runs = self._collect_runs()
+        if not runs:
+            return report
+
+        replay_path = self._replay_path()
+        existing = load_replay_index(replay_path)
+
+        budget_lock = asyncio.Lock()
+        budget = {"spent": 0.0, "exhausted": False}
+        write_lock = asyncio.Lock()
+        sem = asyncio.Semaphore(self.concurrency)
+
+        async def _one(r: Run) -> None:
+            tid = r.trace_id or r.session_id or ""
+            if not (r.user_input or "").strip():
+                report.skipped_no_input += 1
+                return
+            if not self.force:
+                prior = existing.get(tid)
+                if prior is not None and prior.variant_version == self.variant.version:
+                    report.skipped_existing += 1
+                    return
+            async with budget_lock:
+                if budget["exhausted"]:
+                    return
+            async with sem:
+                try:
+                    result = await replay_run(
+                        r, self.variant,
+                        rubric=self.rubric,
+                        _call=self.chat_fn,
+                        judge_fn=self.judge_fn,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("replay failed for %s: %s", tid, exc)
+                    report.replay_errors += 1
+                    return
+
+            judge_cost = float((result.scored.get("judge") or {}).get("cost_usd") or 0.0)
+            call_cost = result.replay_cost_usd + judge_cost
+
+            if not self.dry_run:
+                replay_path.parent.mkdir(parents=True, exist_ok=True)
+                async with write_lock:
+                    append_replay(replay_path, result)
+            report.replayed += 1
+            report.total_cost_usd += call_cost
+
+            async with budget_lock:
+                budget["spent"] += call_cost
+                if budget["spent"] >= self.max_cost_usd:
+                    budget["exhausted"] = True
+
+        await asyncio.gather(*(asyncio.create_task(_one(r)) for r in runs))
+        report.budget_exhausted = budget["exhausted"]
+        return report
