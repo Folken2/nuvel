@@ -76,3 +76,14 @@ def test_discover_variants_finds_and_filters(tmp_path: Path, monkeypatch) -> Non
 
     filtered = discover_variants(agent_filter="ppt")
     assert {r.agent for r in filtered} == {"ppt-king"}
+
+
+def test_discover_variants_skips_malformed_file(tmp_path: Path, monkeypatch) -> None:
+    vdir = tmp_path / "generated-agents" / "outlook-king" / "evals" / "variants"
+    vdir.mkdir(parents=True)
+    (vdir / "good.yaml").write_text(_GOOD, encoding="utf-8")
+    (vdir / "bad.yaml").write_text(": : : corrupt", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    rows = discover_variants()
+    assert len(rows) == 1
+    assert rows[0].variant.name == "friendlier-tone"

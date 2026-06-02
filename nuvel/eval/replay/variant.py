@@ -74,7 +74,7 @@ def discover_variants(agent_filter: str | None = None) -> list[DiscoveredVariant
         for yml in sorted(vdir.glob("*.yaml")):
             try:
                 variant = load_variant(yml)
-            except ValueError:
+            except (ValueError, OSError):
                 continue
             rows.append(
                 DiscoveredVariant(
