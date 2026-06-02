@@ -12,14 +12,13 @@ import asyncio
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from datetime import datetime as _datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
 from nuvel.eval.replay.schema import ReplayResult, Variant, append_replay, load_replay_index
 from nuvel.eval.rubric import DEFAULT_RUBRIC, Rubric
 from nuvel.eval.scorer import JudgeFn, score_run
-from nuvel.traces_cli import Run, _agent_label_for, _iter_trace_files, _parse_file_runs
+from nuvel.traces_cli import Run, _iter_trace_files, _parse_file_runs
 
 logger = logging.getLogger(__name__)
 
@@ -154,12 +153,15 @@ class ReplayRunner:
     Mirrors ``ScoreSession`` — idempotency on ``(trace_id, variant.version)``,
     a shared cost budget across BOTH the replay chat call and the judge call,
     and bounded concurrency.
+    Budget enforcement is best-effort: up to ``concurrency`` in-flight replays
+    may complete after the budget threshold is crossed (mirrors ``ScoreSession``;
+    matches the spec's 'in-flight replays complete').
     """
 
     variant: Variant
     traces_dir: Path
     agent: str
-    since: "_datetime | None" = None
+    since: "datetime | None" = None
     max_cost_usd: float = 1.0
     concurrency: int = 5
     force: bool = False
@@ -178,11 +180,18 @@ class ReplayRunner:
             for r in _parse_file_runs(f, keep_events=True):
                 if self.since is not None and r.started_at:
                     try:
-                        ts = _datetime.fromisoformat(r.started_at.replace("Z", "+00:00"))
+                        ts = datetime.fromisoformat(r.started_at.replace("Z", "+00:00"))
                         if ts < self.since:
                             continue
                     except ValueError:
                         pass
+                # No per-file agent filter here: `traces_dir` is a single
+                # agent's dir by construction (the CLI derives it from the
+                # variant's location), so every run already belongs to
+                # `self.agent`. The field is retained for caller/reporting
+                # context — it is intentionally not a filter. (A path-derived
+                # `_agent_label_for` check would also misbehave outside the
+                # generated-agents/ layout, e.g. under $TRACE_DIR.)
                 # Deduplicate: _parse_file_runs may produce a shadow Run for
                 # run_end events whose trace_id is absent (keyed by session_id
                 # alone), in addition to the real Run keyed by trace_id.
@@ -243,6 +252,8 @@ class ReplayRunner:
                 replay_path.parent.mkdir(parents=True, exist_ok=True)
                 async with write_lock:
                     append_replay(replay_path, result)
+            # Safe without a lock: no await separates these report mutations,
+            # so the single-threaded event loop cannot interleave them.
             report.replayed += 1
             report.total_cost_usd += call_cost
 

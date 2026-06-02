@@ -85,7 +85,6 @@ async def test_replay_run_raises_after_second_chat_failure() -> None:
         await replay_run(_src_run(), _variant(), _call=dead_chat, judge_fn=_fake_judge)
 
 
-# --- append to tests/test_eval_replay_runner.py ---
 import json
 
 from nuvel.eval.replay.runner import ReplayRunner
@@ -167,10 +166,11 @@ async def test_runner_skips_traces_without_user_input(tmp_path: Path) -> None:
 async def test_runner_stops_at_cost_budget(tmp_path: Path) -> None:
     traces = tmp_path / "outlook-king" / "traces"
     _write_traces(traces, n=10)
-    # each trace = 0.0001 (chat) + 0.0002 (judge) = 0.0003; budget 0.0005 ⇒ ~2 traces
+    # each trace = 0.0001 (chat) + 0.0002 (judge) = 0.0003; budget 0.0005 stops
+    # after the first 1-2 traces, but in-flight concurrent runs may push higher.
     report = await _runner(traces, max_cost_usd=0.0005).run()
     assert report.budget_exhausted is True
-    assert report.replayed < 10
+    assert 1 <= report.replayed < 10
 
 
 async def test_runner_dry_run_writes_nothing(tmp_path: Path) -> None:
