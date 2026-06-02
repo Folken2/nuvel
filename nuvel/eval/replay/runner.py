@@ -181,9 +181,14 @@ class ReplayRunner:
                 if self.since is not None and r.started_at:
                     try:
                         ts = datetime.fromisoformat(r.started_at.replace("Z", "+00:00"))
-                        if ts < self.since:
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        target = self.since
+                        if target.tzinfo is None:
+                            target = target.replace(tzinfo=timezone.utc)
+                        if ts < target:
                             continue
-                    except ValueError:
+                    except (ValueError, TypeError):
                         pass
                 # No per-file agent filter here: `traces_dir` is a single
                 # agent's dir by construction (the CLI derives it from the

@@ -179,3 +179,25 @@ async def test_runner_dry_run_writes_nothing(tmp_path: Path) -> None:
     report = await _runner(traces, dry_run=True).run()
     assert report.replayed == 2
     assert not (traces / "replays" / "friendlier.jsonl").exists()
+
+
+async def test_runner_since_filter_handles_tzaware_timestamps(tmp_path: Path) -> None:
+    """--since (naive datetime) must not crash against tz-aware trace timestamps."""
+    from datetime import datetime as _dt
+    traces = tmp_path / "outlook-king" / "traces"
+    traces.mkdir(parents=True)
+    rec = [
+        {"event": "run_start", "session_id": "s0", "trace_id": "t0",
+         "user_input": "q", "timestamp": "2026-05-20T12:00:00+00:00"},  # tz-aware
+        {"event": "llm_response", "session_id": "s0", "response_text": "orig"},
+        {"event": "run_end", "session_id": "s0"},
+    ]
+    (traces / "2026-05-20.jsonl").write_text(
+        "\n".join(json.dumps(d) for d in rec) + "\n", encoding="utf-8")
+
+    # Naive `since` in the future → filters everything out, must NOT raise.
+    report = await _runner(traces, since=_dt(2026, 6, 1)).run()
+    assert report.replayed == 0
+    # Naive `since` in the past → keeps the run.
+    report2 = await _runner(traces, since=_dt(2026, 1, 1)).run()
+    assert report2.replayed == 1

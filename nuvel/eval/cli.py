@@ -230,7 +230,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_replay = sub.add_parser("replay", help="Replay a variant against historical traces.")
     p_replay.add_argument("variant_name", help="Variant name (see `nuvel eval variants`).")
     p_replay.add_argument("--agent", "-a", default=None, help="Disambiguate by agent (substring).")
-    p_replay.add_argument("--since", default=None, help="Only traces at/after this date (YYYY-MM-DD, ISO, or Nd).")
+    p_replay.add_argument("--since", default=None, help="Only traces at/after this date (YYYY-MM-DD or ISO).")
     p_replay.add_argument("--max-cost-usd", type=float, default=1.0,
                           help="Stop past this total spend across replay + judge (default $1.00).")
     p_replay.add_argument("--concurrency", type=int, default=5, help="Max simultaneous replays (default 5).")

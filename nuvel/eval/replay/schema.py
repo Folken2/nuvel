@@ -62,6 +62,7 @@ class ReplayResult:
     output_text: str
     replay_cost_usd: float
     scored: dict[str, Any] = field(default_factory=dict)  # asdict(ScoredRun)
+    replay_version: str = REPLAY_VERSION
 
     def to_json_line(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
