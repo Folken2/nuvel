@@ -340,7 +340,7 @@ traces/
     2026-04-06_<session>.json         # Consolidated record (per-conversation, for evals)
 ```
 
-The consolidated JSON includes: full system prompt, user input, LLM thinking/reasoning, response, tool calls with args/results, token usage, cost, and timing — everything an eval agent needs to score quality and drive improvements.
+The consolidated JSON includes: full system prompt, user input, LLM thinking/reasoning, response, tool calls with args/results, token usage, cost, context-window occupancy (per call, plus a `peak_context_tokens` / `peak_context_pct` in the summary), and timing — everything an eval agent needs to score quality and drive improvements.
 
 ## Configuration
 

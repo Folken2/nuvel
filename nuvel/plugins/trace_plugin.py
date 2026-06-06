@@ -47,6 +47,7 @@ from google.adk.tools.base_tool import BaseTool
 
 from .conversation_trace_writer import ConversationTraceWriter
 from .cost_guard_plugin import calculate_cost, _load_pricing
+from .context_window_plugin import compute_context_usage, _load_windows
 
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
@@ -426,6 +427,9 @@ class TracePlugin(BasePlugin):
         self._first_tools_available: list[str] = []
         self._pricing = _load_pricing()
         self._total_cost: float = 0.0
+        self._windows = _load_windows()
+        self._peak_context_tokens: int = 0
+        self._peak_context: Optional[dict] = None
 
         if _TRACE_DB:
             logger.info("[TracePlugin] DB tracing enabled (TRACE_DB=true)")
@@ -516,6 +520,8 @@ class TracePlugin(BasePlugin):
             "total_completion_tokens": self._total_completion_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
             "total_cost_usd": round(self._total_cost, 8) if self._total_cost > 0 else None,
+            "peak_context_tokens": self._peak_context_tokens or None,
+            "peak_context": self._peak_context,
         })
         if _TRACE_ENABLED:
             self._conversation_writer.finish_run()
@@ -597,6 +603,20 @@ class TracePlugin(BasePlugin):
             if cost_usd is not None:
                 self._total_cost += cost_usd
 
+        # Context-window occupancy for this call (peak tracked for the summary)
+        context_window = None
+        if usage:
+            used_tokens = usage.get("total_tokens") or (
+                (usage.get("prompt_tokens") or 0)
+                + (usage.get("completion_tokens") or 0)
+            )
+            context_window = compute_context_usage(
+                model_id, used_tokens, self._windows
+            )
+            if used_tokens > self._peak_context_tokens:
+                self._peak_context_tokens = used_tokens
+                self._peak_context = context_window
+
         text = _extract_text(llm_response.content)
         thinking = _extract_thinking(llm_response.content)
         function_calls = _extract_function_calls(llm_response.content)
@@ -609,6 +629,7 @@ class TracePlugin(BasePlugin):
             "finish_reason": str(llm_response.finish_reason) if llm_response.finish_reason else None,
             "usage": usage,
             "cost_usd": cost_usd,
+            "context_window": context_window,
             "thinking": _safe_serialize(thinking, max_len=10_000),
             "response_text": _safe_serialize(text, max_len=10_000),
             "function_calls": function_calls,
@@ -629,6 +650,7 @@ class TracePlugin(BasePlugin):
             usage=usage,
             latency_ms=latency_ms,
             cost_usd=cost_usd,
+            context_window=context_window,
         )
         return None
 
