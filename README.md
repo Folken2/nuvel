@@ -33,7 +33,7 @@ Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Age
 
 nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, the Claude Agent SDK, and Anthropic Managed Agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 10-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 11-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
 
 ## Frameworks
 
@@ -46,7 +46,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 ## Features
 
 - **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
-- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (10-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
+- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (11-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
 - **Portable knowledge skills** — 13 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
 - **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character. Inspired by OpenClaw. *(ADK only.)*
 - **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more. *(ADK only.)*
@@ -190,7 +190,7 @@ nuvel/
 │   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── plugins/               # 10 plugins (see Plugin Chain below)
+│   ├── plugins/               # 11 plugins (see Plugin Chain below)
 │   ├── config/                # LiteLLM/OpenRouter config
 │   └── backends/              # Per-framework scaffolders + skills
 │       ├── adk/               # Google ADK backend
@@ -250,6 +250,7 @@ Every generated agent ships with a full plugin chain — cross-cutting concerns 
 | Plugin | Type | What it does |
 |--------|------|-------------|
 | **CostGuardPlugin** | Budget | Calculates USD cost per LLM call, enforces per-session budget limits |
+| **ContextWindowPlugin** | Observability | Tracks context-window occupancy per response (tokens used / max / %) for live UI indicators |
 | **TracePlugin** | Observability | Raw event JSONL + consolidated conversation JSON for eval pipelines |
 | **ConsoleLoggerPlugin** | Observability | Color-coded terminal output for all lifecycle events |
 | **ToolEventsPlugin** | Observability | Structured tool execution events for SSE streaming |
@@ -289,6 +290,44 @@ The pricing config lives at `nuvel/plugins/pricing.json` (or `<agent>/plugins/pr
 Keys are model IDs (matching what your LLM provider returns). The plugin auto-strips provider prefixes — `openrouter/moonshotai/kimi-k2.5` matches `moonshotai/kimi-k2.5`. Prices are in USD per token.
 
 To find current prices: check [OpenRouter models](https://openrouter.ai/models) or your provider's pricing page.
+
+### Context Window Tracking
+
+The ContextWindowPlugin knows the total context window of the selected model and reports how full it is after every response — the same "context used" signal Claude Code shows. It's read-only: it never mutates the request and never blocks.
+
+After each LLM call it publishes a `context_window` snapshot into session state, so a frontend consuming the SSE stream can render a live indicator on every agent response:
+
+```json
+{
+  "model": "anthropic/claude-sonnet-4",
+  "used_tokens": 12345,
+  "prompt_tokens": 12000,
+  "completion_tokens": 345,
+  "max_tokens": 200000,
+  "remaining_tokens": 187655,
+  "used_pct": 6.17,
+  "remaining_pct": 93.83
+}
+```
+
+`used_tokens` prefers the provider's `total_token_count` (so reasoning/thinking tokens are included) and falls back to `prompt + completion`. When the model isn't in the config, percentages are omitted (`max_tokens: null`) unless `CONTEXT_WINDOW_DEFAULT` is set.
+
+**Maintaining `context_windows.json`:**
+
+Window sizes live at `nuvel/plugins/context_windows.json` (or `<agent>/plugins/context_windows.json` for generated agents) and use the same keys as `pricing.json`, so provider prefixes are auto-stripped (`openrouter/anthropic/claude-sonnet-4` matches `anthropic/claude-sonnet-4`):
+
+```json
+{
+  "anthropic/claude-sonnet-4": 200000,
+  "google/gemini-2.5-pro": 1048576
+}
+```
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `CONTEXT_WINDOW_CONFIG` | auto-detected | Path to a custom `context_windows.json` |
+| `CONTEXT_WINDOW_DEFAULT` | `0` (unknown) | Fallback window size for models not in the config |
+| `CONTEXT_WINDOW_WARN_PCT` | `0` (off) | Log a one-time warning once usage crosses this percent |
 
 ### Traces for Self-Improvement Evals
 

@@ -46,7 +46,7 @@ ADK has an additional `templates_overlays/` directory (e.g. `gateway-slack/`, `g
 - `nuvel/plugins/` — plugins for the **meta-agent itself** (cost guard, trace, console logger, etc.). Wired via `PLUGIN_FLAGS` in the [Makefile](Makefile) and loaded by `nuvel run`.
 - `nuvel/backends/adk/templates/{{agent_package}}/plugins/` — the analogous plugin chain that gets *copied into every generated ADK agent*. Modifications here affect future scaffolded projects, not the meta-agent.
 
-The 10 plugins (CostGuard, Trace, ConsoleLogger, ToolEvents, ContextFilter, Cache, Resilience, ReflectAndRetryTool, SaveFilesAsArtifacts, Memory) follow the ADK plugin lifecycle and apply cross-cutting concerns without touching agent code.
+The 11 plugins (CostGuard, ContextWindow, Trace, ConsoleLogger, ToolEvents, ContextFilter, Cache, Resilience, ReflectAndRetryTool, SaveFilesAsArtifacts, Memory) follow the ADK plugin lifecycle and apply cross-cutting concerns without touching agent code.
 
 ### Skills are progressive-disclosure docs, not Python code
 

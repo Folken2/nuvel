@@ -1,0 +1,13 @@
+{
+  "_comment": "Max context window in tokens per model. Keys mirror pricing.json so provider prefixes (openrouter/, litellm/, ...) are stripped on lookup. Update to add new models.",
+  "_format": "{ 'model_id_or_pattern': max_context_tokens }",
+  "anthropic/claude-opus-4": 200000,
+  "anthropic/claude-sonnet-4": 200000,
+  "deepseek/deepseek-r1": 128000,
+  "google/gemini-2.5-flash": 1048576,
+  "google/gemini-2.5-pro": 1048576,
+  "google/gemini-3.1-pro-preview": 1048576,
+  "moonshotai/kimi-k2.5": 256000,
+  "openai/gpt-4o": 128000,
+  "openai/gpt-4o-mini": 128000
+}
