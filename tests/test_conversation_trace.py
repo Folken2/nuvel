@@ -66,6 +66,58 @@ class TestConversationTraceWriter(unittest.TestCase):
         self.assertEqual(data["summary"]["total_tool_calls"], 0)
         self.assertEqual(data["summary"]["total_tokens"], 120)
 
+    def test_context_window_persisted_and_peak_in_summary(self):
+        """Per-call context_window is stored and the peak surfaces in summary."""
+        self.writer.start_run(
+            conversation_id="ctx-001",
+            session_id="sess-ctx",
+            agent="nuvel",
+            model="anthropic/claude-sonnet-4",
+            system_prompt="sys",
+            skills_loaded=[],
+            tools_available=[],
+        )
+        self.writer.add_user_turn("first")
+        self.writer.add_llm_call(
+            thinking=None, response="a", function_calls=[],
+            usage={"prompt_tokens": 1000, "completion_tokens": 100},
+            latency_ms=10,
+            context_window={"used_tokens": 1100, "used_pct": 0.55, "max_tokens": 200000},
+        )
+        # Second call has higher occupancy — should become the peak.
+        self.writer.add_llm_call(
+            thinking=None, response="b", function_calls=[],
+            usage={"prompt_tokens": 5000, "completion_tokens": 300},
+            latency_ms=10,
+            context_window={"used_tokens": 5300, "used_pct": 2.65, "max_tokens": 200000},
+        )
+        self.writer.close_turn()
+        data = json.loads(self.writer.finish_run().read_text())
+
+        calls = data["turns"][0]["llm_calls"]
+        self.assertEqual(calls[0]["context_window"]["used_tokens"], 1100)
+        self.assertEqual(calls[1]["context_window"]["used_pct"], 2.65)
+
+        self.assertEqual(data["summary"]["peak_context_tokens"], 5300)
+        self.assertEqual(data["summary"]["peak_context_pct"], 2.65)
+
+    def test_no_context_window_leaves_peak_none(self):
+        """Without context_window data the peak fields are None, not errors."""
+        self.writer.start_run(
+            conversation_id="ctx-002", session_id="sess-ctx2", agent="nuvel",
+            model="m", system_prompt="s", skills_loaded=[], tools_available=[],
+        )
+        self.writer.add_user_turn("hi")
+        self.writer.add_llm_call(
+            thinking=None, response="x", function_calls=[],
+            usage={"prompt_tokens": 10, "completion_tokens": 5}, latency_ms=1,
+        )
+        self.writer.close_turn()
+        data = json.loads(self.writer.finish_run().read_text())
+        self.assertIsNone(data["summary"]["peak_context_tokens"])
+        self.assertIsNone(data["summary"]["peak_context_pct"])
+        self.assertIsNone(data["turns"][0]["llm_calls"][0]["context_window"])
+
     def test_multi_turn_with_tool_calls(self):
         """Multiple turns with tool calls and multiple LLM calls per turn."""
         self.writer.start_run(

@@ -28,12 +28,14 @@ from .console_logger_plugin import ConsoleLoggerPlugin
 from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
 from .cost_guard_plugin import CostGuardPlugin
+from .context_window_plugin import ContextWindowPlugin
 from .trace_plugin import TracePlugin
 from .skill_curator_plugin import SkillCuratorPlugin
 
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
 cost_guard = CostGuardPlugin()
+context_window = ContextWindowPlugin()
 trace = TracePlugin()
 context_filter = ContextFilterPlugin(
     num_invocations_to_keep=int(os.getenv("CONTEXT_FILTER_KEEP", "10")),
@@ -59,6 +61,7 @@ skill_curator = SkillCuratorPlugin()
 # otherwise, so it's always safe to leave in the chain).
 PLUGIN_PATHS = [
     "nuvel.plugins.cost_guard",
+    "nuvel.plugins.context_window",
     "nuvel.plugins.trace",
     "nuvel.plugins.context_filter",
     "nuvel.plugins.console_logger",
@@ -78,6 +81,7 @@ __all__ = [
     "ToolEventsPlugin",
     "ResiliencePlugin",
     "TracePlugin",
+    "ContextWindowPlugin",
     "SkillCuratorPlugin",
     "PLUGIN_PATHS",
 ]

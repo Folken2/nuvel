@@ -275,9 +275,23 @@ async def _cmd_help(ctx: CommandContext) -> CommandResult:
     return CommandResult(handled=True, replies=["\n".join(lines)])
 
 
-@command("/usage", help="Show this session's turn count and a token-cost estimate")
+def _fmt_tokens(n: int) -> str:
+    """Compact token count: 1234 -> '1.2k', 1048576 -> '1.0M'."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return str(n)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+@command("/usage", help="Show this session's turns, context-window usage and cost")
 async def _cmd_usage(ctx: CommandContext) -> CommandResult:
     turns: int | None = None
+    state = None
     if ctx.runner is not None and ctx.app_name:
         try:
             sess = await ctx.runner.session_service.get_session(
@@ -285,14 +299,46 @@ async def _cmd_usage(ctx: CommandContext) -> CommandResult:
             )
             events = getattr(sess, "events", None) or []
             turns = sum(1 for e in events if getattr(e, "author", None) == "user")
+            state = getattr(sess, "state", None)
         except Exception:
             logger.exception("commands: /usage session lookup failed")
     if turns is None:
         return CommandResult(handled=True, replies=["Usage stats unavailable in this context."])
-    return CommandResult(
-        handled=True,
-        replies=[f"Session usage: {turns} user turn(s). Token-cost estimate: not yet wired."],
-    )
+
+    lines = [f"Session usage: {turns} user turn(s)."]
+
+    # Session state may be a plain dict or an ADK State object — both expose .get().
+    def _sget(key):
+        try:
+            return state.get(key) if state is not None else None
+        except Exception:
+            return None
+
+    # Context window — published by ContextWindowPlugin after each response.
+    cw = _sget("context_window")
+    if isinstance(cw, dict) and cw.get("used_tokens") is not None:
+        used = cw["used_tokens"]
+        used_pct = cw.get("used_pct")
+        max_tokens = cw.get("max_tokens")
+        if used_pct is not None and max_tokens:
+            lines.append(
+                f"Context: {used_pct}% used "
+                f"({_fmt_tokens(used)}/{_fmt_tokens(max_tokens)} tokens)."
+            )
+        else:
+            lines.append(f"Context: {_fmt_tokens(used)} tokens used.")
+
+    # Cost — published by CostGuardPlugin after each LLM call.
+    cg = _sget("cost_guard")
+    if isinstance(cg, dict) and cg.get("session_cost_usd") is not None:
+        cost = cg["session_cost_usd"]
+        budget = cg.get("budget_usd") or 0
+        if budget > 0:
+            lines.append(f"Cost: ${cost:.4f} of ${budget:.2f} budget.")
+        else:
+            lines.append(f"Cost: ${cost:.4f} this session.")
+
+    return CommandResult(handled=True, replies=["\n".join(lines)])
 
 
 @command("/stop", help="Cancel the current run if one is in progress")

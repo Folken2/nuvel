@@ -159,6 +159,55 @@ class TestNewCommandResetsSession(_CommandsTestBase):
         runner.session_service.create_session.assert_awaited_once()
 
 
+class TestUsageCommand(_CommandsTestBase):
+    def _run_usage(self, *, events, state):
+        sess = MagicMock()
+        sess.events = events
+        sess.state = state
+        runner = MagicMock()
+        runner.session_service.get_session = AsyncMock(return_value=sess)
+        ctx = self.commands.CommandContext(
+            user_id="u", channel="c", session_id="s",
+            text="/usage", runner=runner, app_name="agent_test",
+        )
+        result = asyncio.run(self.commands.try_dispatch("/usage", ctx))
+        self.assertTrue(result.handled)
+        return result.replies[0]
+
+    def test_usage_reports_context_and_cost_from_state(self):
+        events = [MagicMock(author="user"), MagicMock(author="model"), MagicMock(author="user")]
+        state = {
+            "context_window": {
+                "used_tokens": 146000, "used_pct": 73.0, "max_tokens": 200000,
+            },
+            "cost_guard": {"session_cost_usd": 0.0123, "budget_usd": 0.0},
+        }
+        text = self._run_usage(events=events, state=state)
+        self.assertIn("2 user turn(s)", text)
+        self.assertIn("73.0% used", text)
+        self.assertIn("146.0k/200.0k", text)
+        self.assertIn("$0.0123", text)
+
+    def test_usage_shows_budget_when_set(self):
+        state = {"cost_guard": {"session_cost_usd": 0.25, "budget_usd": 0.50}}
+        text = self._run_usage(events=[MagicMock(author="user")], state=state)
+        self.assertIn("$0.2500 of $0.50 budget", text)
+
+    def test_usage_without_state_reports_turns_only(self):
+        text = self._run_usage(events=[MagicMock(author="user")], state={})
+        self.assertIn("1 user turn(s)", text)
+        self.assertNotIn("Context:", text)
+        self.assertNotIn("Cost:", text)
+
+    def test_usage_unavailable_without_runner(self):
+        ctx = self.commands.CommandContext(
+            user_id="u", channel="c", session_id="s", text="/usage",
+        )
+        result = asyncio.run(self.commands.try_dispatch("/usage", ctx))
+        self.assertTrue(result.handled)
+        self.assertTrue(any("unavailable" in r.lower() for r in result.replies))
+
+
 class TestStopAndCancelEvent(_CommandsTestBase):
     def test_stop_without_active_run(self):
         ctx = self.commands.CommandContext(
