@@ -197,8 +197,28 @@ Office.js. The outcome is recorded under `outlook:action_results`.
 | `create_forward_draft` | read | Open a forward compose with recipients pre-filled |
 | `apply_categories` | any | Apply Outlook categories to the current item |
 | `set_flag` | read | Flag / complete / unflag the selected message |
+| `fetch_attachment` | any | Download an attachment's content (Office.js `getAttachmentContentAsync`, Mailbox 1.8+) into an ADK artifact |
 | `refresh_outlook_context` | any | Ask the add-in to re-snapshot when state may be stale |
 | `get_recent_action_results` | — | Inspect outcomes of recently-executed actions |
+
+### Attachment reading (PDF / Excel / images / text)
+
+Two-step, because attachment bytes live in the Outlook client while the
+agent runs server-side:
+
+1. `fetch_attachment(attachment_id, name)` queues a download; after the
+   turn the add-in pulls the content via `getAttachmentContentAsync` and
+   POSTs it to `/api/outlook/attachment-content`.
+2. The backend stores the raw bytes as ADK artifact `attachment:<name>`
+   and extracts text (pypdf for PDF, openpyxl for .xlsx, decode for
+   CSV/text) into `attachment_text:<name>`. Next turn the agent calls
+   `read_attachment(name)` for paged text, or the built-in
+   `load_artifacts` tool to view images (and scanned PDFs) directly.
+
+Limits: 20 MB per file; cloud/OneDrive attachments and legacy `.xls`
+aren't downloadable (clear errors are returned). The fetched index lives
+in session state under `outlook:fetched_attachments`
+(`list_fetched_attachments` shows it).
 
 ### Analysis & memory
 

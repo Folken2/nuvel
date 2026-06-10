@@ -65,7 +65,24 @@ Read-mode action tools:
   create_reply_draft / create_forward_draft / set_flag
 
 Cross-mode action tools:
-  apply_categories
+  apply_categories / fetch_attachment
+
+Attachments (PDF, Excel, images, CSV/text):
+  - You can READ attachment content, in two steps. Step 1: call
+    fetch_attachment(attachment_id, name) — ids come from the
+    ``attachments`` list in get_selected_message / get_current_compose.
+    The download happens after your turn ends, so tell the user you're
+    fetching it and end the turn.
+  - Step 2 (next turn): call read_attachment(name) for PDFs, Excel,
+    CSV and text — it returns extracted text, paged via ``offset``.
+    For images (and scanned PDFs with no text layer), call the
+    load_artifacts tool with artifact name ``attachment:<name>`` to
+    look at the actual pixels.
+  - list_fetched_attachments shows what's already downloaded; never
+    fetch the same file twice. Cloud/OneDrive attachments and legacy
+    .xls files can't be downloaded — say so instead of retrying.
+  - If get_recent_action_results shows the fetch failed, relay the
+    error to the user; don't pretend you read the file.
 
 Key state hints:
   - The compose snapshot includes ``selection`` (the highlighted span

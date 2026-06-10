@@ -10,6 +10,7 @@ import {
   insertIntoCompose,
   replaceCompose,
   executeOutlookAction,
+  getAttachmentContent,
 } from "../helpers/outlookContext";
 import {
   BACKEND_URL,
@@ -415,6 +416,34 @@ const App: React.FC = () => {
 
   /* ── Action execution (agent → Outlook) ── */
 
+  // This report is how the agent learns whether its action actually
+  // landed — retry hard before giving up, or its model of the mailbox
+  // silently drifts.
+  const postActionResult = async (
+    action: any,
+    status: "ok" | "error" | "skipped",
+    error = "",
+    detail: Record<string, any> = {}
+  ): Promise<void> => {
+    try {
+      await fetchWithRetry(`${BACKEND_URL}/api/outlook/action-result`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+          action_id: action.id,
+          action_type: action.type,
+          status,
+          error,
+          detail,
+        }),
+      }, { maxRetries: 3, baseDelayMs: 1000 });
+    } catch (e) {
+      logger.warn("action-result post failed after retries", { error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   const executeAndReportAction = async (action: any): Promise<ExecutedAction> => {
     if (action?.type === "refresh_context") {
       try {
@@ -433,49 +462,65 @@ const App: React.FC = () => {
           headers: apiHeaders(),
           body: JSON.stringify(body),
         }, { maxRetries: 2, baseDelayMs: 1000 });
-        await fetchWithRetry(`${BACKEND_URL}/api/outlook/action-result`, {
+        await postActionResult(action, "ok");
+        return { type: action.type, status: "ok", description: action.description };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await postActionResult(action, "error", msg);
+        return { type: action.type, status: "error", description: action.description, error: msg };
+      }
+    }
+
+    if (action?.type === "fetch_attachment") {
+      const p = action.params || {};
+      try {
+        const { content, format } = await getAttachmentContent(p.attachment_id);
+        const fmt = (format || "base64").toLowerCase();
+        if (fmt === "url") {
+          throw new Error(
+            "This is a cloud attachment (link only) — its content can't be downloaded from Outlook."
+          );
+        }
+        // ~28M base64 chars ≈ 21MB raw; backend enforces 20MB after decode.
+        if (content.length > 28_000_000) {
+          throw new Error("Attachment is too large to download (20 MB limit).");
+        }
+        const known = ((ctx as any)?.attachments || []).find((a: any) => a.id === p.attachment_id);
+        const res = await fetchWithRetry(`${BACKEND_URL}/api/outlook/attachment-content`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({
             session_id: sessionIdRef.current,
             user_id: userIdRef.current,
-            action_id: action.id,
-            action_type: action.type,
-            status: "ok",
+            attachment_id: p.attachment_id,
+            name: p.name || known?.name || "attachment",
+            content_type: known?.content_type || "",
+            format: fmt,
+            content,
           }),
         }, { maxRetries: 2, baseDelayMs: 1000 });
+        if (!res.ok) {
+          throw new Error((await readErrorMessage(res)) || `Upload failed: HTTP ${res.status}`);
+        }
+        const info: any = await res.json().catch(() => ({}));
+        await postActionResult(action, "ok", "", {
+          name: p.name,
+          kind: info.kind,
+          text_chars: info.text_chars,
+          extraction_error: info.extraction_error || "",
+        });
         return { type: action.type, status: "ok", description: action.description };
       } catch (e) {
-        return {
-          type: action.type,
-          status: "error",
-          description: action.description,
-          error: e instanceof Error ? e.message : String(e),
-        };
+        const msg = e instanceof Error ? e.message : String(e);
+        // Report the failure so the agent can tell the user why instead
+        // of waiting for content that will never arrive.
+        await postActionResult(action, "error", msg);
+        return { type: action.type, status: "error", description: action.description, error: msg };
       }
     }
 
     const result = await executeOutlookAction(action);
-    try {
-      // This report is how the agent learns whether its action actually
-      // landed — retry hard before giving up, or its model of the
-      // mailbox silently drifts.
-      await fetchWithRetry(`${BACKEND_URL}/api/outlook/action-result`, {
-        method: "POST",
-        headers: apiHeaders(),
-        body: JSON.stringify({
-          session_id: sessionIdRef.current,
-          user_id: userIdRef.current,
-          action_id: action.id,
-          action_type: action.type,
-          status: result.status,
-          error: result.error || "",
-          detail: result.detail || {},
-        }),
-      }, { maxRetries: 3, baseDelayMs: 1000 });
-    } catch (e) {
-      logger.warn("action-result post failed after retries", { error: e instanceof Error ? e.message : String(e) });
-    }
+    await postActionResult(action, result.status, result.error || "", result.detail || {});
     return {
       type: action.type,
       status: result.status,

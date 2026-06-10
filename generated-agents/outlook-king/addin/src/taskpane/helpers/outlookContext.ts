@@ -415,6 +415,31 @@ export function createForward(to: string[], body: string, asHtml: boolean): Prom
   return createReply(body, false, asHtml);
 }
 
+export interface AttachmentContentResult {
+  /** Base64 string for files; raw text for eml/iCalendar; a link for cloud attachments. */
+  content: string;
+  /** Office.MailboxEnums.AttachmentContentFormat: "base64" | "eml" | "iCalendar" | "url". */
+  format: string;
+}
+
+/**
+ * Download an attachment's content via getAttachmentContentAsync
+ * (Mailbox 1.8+, read AND compose modes). File attachments come back
+ * base64-encoded (25 MB pre-encoding cap enforced by Office); cloud
+ * attachments return only a URL.
+ */
+export function getAttachmentContent(attachmentId: string): Promise<AttachmentContentResult> {
+  const item: any = Office.context?.mailbox?.item;
+  if (!item?.getAttachmentContentAsync) {
+    return Promise.reject(
+      new Error("Attachment download requires Outlook with Mailbox API 1.8 or later.")
+    );
+  }
+  return asyncify<AttachmentContentResult>((cb) =>
+    item.getAttachmentContentAsync(attachmentId, cb)
+  );
+}
+
 export function attachFileFromUrl(url: string, name: string, isInline: boolean): Promise<void> {
   const item: any = Office.context?.mailbox?.item;
   if (!item?.addFileAttachmentAsync) return Promise.reject(new Error("Attachments unavailable."));
@@ -472,6 +497,9 @@ export async function executeOutlookAction(
       case "refresh_context":
         // The caller (App.tsx) handles this by re-snapshotting after the
         // turn and pushing to /api/outlook/context. No-op here.
+        return { status: "ok", detail: { handled_by: "caller" } };
+      case "fetch_attachment":
+        // Handled by the caller (App.tsx) — needs backend upload.
         return { status: "ok", detail: { handled_by: "caller" } };
       default:
         return { status: "skipped", error: `Unknown action: ${action.type}` };

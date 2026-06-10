@@ -32,6 +32,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -79,6 +80,14 @@ from outlook_king.tools.outlook_context import (
 from outlook_king.tools.outlook_actions import (
     PENDING_ACTIONS_KEY,
     ACTION_RESULTS_KEY,
+)
+from outlook_king.tools.attachment_tools import (
+    FETCHED_ATTACHMENTS_KEY,
+    MAX_FETCH_BYTES,
+)
+from outlook_king.utils.attachment_extract import (
+    extract_attachment_text,
+    guess_mime_type,
 )
 from outlook_king.tools.style_tools import record_sent_fingerprint
 from outlook_king.state.memory_service import NeonMemoryService
@@ -252,6 +261,19 @@ class ActionResultRequest(BaseModel):
     status: str = "ok"  # "ok" | "error" | "skipped"
     error: str = ""
     detail: dict = Field(default_factory=dict)
+
+
+class AttachmentContentRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
+    attachment_id: str
+    name: str
+    content_type: str = ""
+    # Office.js AttachmentContentFormat: "base64" for files, "eml" /
+    # "iCalendar" arrive as plain text. "url" (cloud attachments) is
+    # rejected client-side — there are no bytes to upload.
+    format: str = "base64"
+    content: str
 
 
 class FrontendLogEntry(BaseModel):
@@ -685,6 +707,109 @@ async def action_result(req: ActionResultRequest, user_id: str = Depends(get_use
         {ACTION_RESULTS_KEY: existing_results, RECENT_ACTIONS_KEY: recent},
     )
     return {"status": "ok"}
+
+
+@app.post("/api/outlook/attachment-content")
+async def attachment_content(
+    req: AttachmentContentRequest, user_id: str = Depends(get_user_id)
+):
+    """Receive attachment bytes from the add-in (``fetch_attachment`` action).
+
+    Raw content is stored as an ADK artifact (``attachment:<name>``); for
+    PDF / Excel / CSV / text files the extracted text lands in a companion
+    artifact (``attachment_text:<name>``). An index entry is written to
+    session state under ``outlook:fetched_attachments`` so the agent's
+    ``read_attachment`` / ``load_artifacts`` tools can find it next turn.
+    """
+    fmt = (req.format or "base64").lower()
+    if fmt == "url":
+        raise HTTPException(
+            422,
+            {
+                "code": "cloud_attachment",
+                "message": "Cloud attachments only expose a link — their "
+                "content can't be downloaded via Office.js.",
+            },
+        )
+    if fmt == "base64":
+        try:
+            data = base64.b64decode(req.content, validate=True)
+        except Exception:
+            raise HTTPException(
+                400, {"code": "bad_content", "message": "content is not valid base64."}
+            )
+    else:
+        # eml / iCalendar item attachments arrive as plain text.
+        data = req.content.encode("utf-8", errors="replace")
+    if not data:
+        raise HTTPException(
+            400, {"code": "bad_content", "message": "Attachment content is empty."}
+        )
+    if len(data) > MAX_FETCH_BYTES:
+        raise HTTPException(
+            413,
+            {
+                "code": "attachment_too_large",
+                "message": f"Attachment exceeds the "
+                f"{MAX_FETCH_BYTES // (1024 * 1024)} MB limit.",
+            },
+        )
+
+    mime = guess_mime_type(req.name, req.content_type)
+    raw_artifact = f"attachment:{req.name}"
+    await _ensure_session(req.session_id, user_id)
+    await artifact_service.save_artifact(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=req.session_id,
+        filename=raw_artifact,
+        artifact=types.Part.from_bytes(data=data, mime_type=mime),
+    )
+
+    extraction = extract_attachment_text(data, req.name, mime)
+    text_artifact = None
+    if extraction.text:
+        text_artifact = f"attachment_text:{req.name}"
+        await artifact_service.save_artifact(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=req.session_id,
+            filename=text_artifact,
+            artifact=types.Part.from_text(text=extraction.text),
+        )
+
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    fetched = dict((session.state.get(FETCHED_ATTACHMENTS_KEY) if session else None) or {})
+    fetched[req.name] = {
+        "name": req.name,
+        "attachment_id": req.attachment_id,
+        "content_type": mime,
+        "size_bytes": len(data),
+        "kind": extraction.kind,
+        "artifact": raw_artifact,
+        "text_artifact": text_artifact,
+        "text_chars": len(extraction.text or ""),
+        "extraction_error": extraction.error,
+    }
+    await _append_state_delta(
+        req.session_id, user_id, {FETCHED_ATTACHMENTS_KEY: fetched}
+    )
+    logger.info(
+        "attachment stored: %s (%d bytes, kind=%s, text_chars=%d)",
+        req.name,
+        len(data),
+        extraction.kind,
+        len(extraction.text or ""),
+    )
+    return {
+        "status": "ok",
+        "name": req.name,
+        "kind": extraction.kind,
+        "text_chars": len(extraction.text or ""),
+        "extraction_error": extraction.error,
+    }
 
 
 # ── JSON-manifest-only event hooks ──────────────────────────────────
