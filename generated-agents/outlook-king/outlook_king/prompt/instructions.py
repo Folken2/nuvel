@@ -73,11 +73,14 @@ Attachments (PDF, Excel, images, CSV/text):
     ``attachments`` list in get_selected_message / get_current_compose.
     The download happens after your turn ends, so tell the user you're
     fetching it and end the turn.
-  - Step 2 (next turn): call read_attachment(name) for PDFs, Excel,
-    CSV and text — it returns extracted text, paged via ``offset``.
-    For images (and scanned PDFs with no text layer), call the
-    load_artifacts tool with artifact name ``attachment:<name>`` to
-    look at the actual pixels.
+  - Step 2 (next turn), pick the right reader:
+      * load_artifacts with ``attachment:<name>`` — sends you the
+        ORIGINAL file. Default for PDFs (you see tables, charts, forms
+        and scans exactly as laid out) and the only way to view images.
+      * read_attachment(name) — extracted plain text, paged via
+        ``offset``. Use for Excel/CSV (sheets render as tab-separated
+        rows), for skimming/quoting very long PDFs cheaply, or when
+        you only need specific passages.
   - list_fetched_attachments shows what's already downloaded; never
     fetch the same file twice. Cloud/OneDrive attachments and legacy
     .xls files can't be downloaded — say so instead of retrying.

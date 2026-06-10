@@ -14,9 +14,12 @@ other Outlook actions:
      files into a companion artifact (``attachment_text:<name>``), and
      records an index entry in session state under
      ``outlook:fetched_attachments``.
-  3. On the next turn the agent calls ``read_attachment`` for text, or
-     the built-in ``load_artifacts`` tool to view images (and scanned
-     PDFs) with the model's own eyes.
+  3. On the next turn the agent reads it. Two readers:
+     - ``load_artifacts`` on ``attachment:<name>`` sends the ORIGINAL
+       file to the model (ADK's LiteLLM bridge converts PDFs and images
+       into provider file/image parts) — full layout, tables, charts.
+     - ``read_attachment`` returns extracted plain text, paged — cheap
+       for long documents, and the only reader for Excel/CSV.
 
 Attachment ids come from ``get_selected_message`` /
 ``get_current_compose`` — each attachment entry carries ``id``, ``name``,
@@ -44,9 +47,10 @@ def fetch_attachment(tool_context: ToolContext, attachment_id: str, name: str) -
     """Download an attachment from the current Outlook item so you can read it.
 
     Queues a download in the add-in; the content arrives AFTER this turn
-    ends. Tell the user you're fetching it, end the turn, then call
-    ``read_attachment`` (text/PDF/Excel) or ``load_artifacts`` (images)
-    on the next turn.
+    ends. Tell the user you're fetching it, end the turn, then on the
+    next turn call ``load_artifacts`` on ``attachment:<name>`` to view
+    the original (best for PDFs with tables/layout, and for images), or
+    ``read_attachment`` for paged plain text (Excel/CSV, long docs).
 
     Get ``attachment_id`` and ``name`` from the ``attachments`` list in
     ``get_selected_message`` or ``get_current_compose``. Supported:
@@ -92,15 +96,16 @@ def list_fetched_attachments(tool_context: ToolContext) -> dict:
 
 
 async def read_attachment(tool_context: ToolContext, name: str, offset: int = 0) -> dict:
-    """Read the extracted text of a previously fetched attachment.
+    """Read the extracted plain text of a previously fetched attachment.
 
     Works for PDF, Excel (.xlsx), CSV and plain-text attachments after
     ``fetch_attachment`` completed. Long documents are paged: if
     ``has_more`` is true, call again with the returned ``next_offset``.
 
-    For images (or scanned PDFs with no text layer), use the
-    ``load_artifacts`` tool with the artifact name from the response
-    instead — it shows the actual pixels to you.
+    Plain text loses document structure. For PDFs where layout matters
+    (tables, charts, forms, scans), prefer the ``load_artifacts`` tool
+    with the ``raw_artifact`` name from this response — it sends you the
+    original file. Images are only viewable that way.
 
     Args:
         name: The attachment filename used in ``fetch_attachment``.
@@ -151,6 +156,7 @@ async def read_attachment(tool_context: ToolContext, name: str, offset: int = 0)
         "offset": offset,
         "has_more": has_more,
         "next_offset": offset + READ_CHUNK_CHARS if has_more else None,
+        "raw_artifact": entry.get("artifact"),
         "text": chunk,
     }
 

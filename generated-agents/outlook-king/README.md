@@ -211,9 +211,13 @@ agent runs server-side:
    POSTs it to `/api/outlook/attachment-content`.
 2. The backend stores the raw bytes as ADK artifact `attachment:<name>`
    and extracts text (pypdf for PDF, openpyxl for .xlsx, decode for
-   CSV/text) into `attachment_text:<name>`. Next turn the agent calls
-   `read_attachment(name)` for paged text, or the built-in
-   `load_artifacts` tool to view images (and scanned PDFs) directly.
+   CSV/text) into `attachment_text:<name>`. Next turn the agent reads it:
+   - `load_artifacts` on `attachment:<name>` sends the **original file**
+     to the model — ADK's LiteLLM bridge converts PDFs into provider
+     `file` content parts and images into `image_url` parts, so layout,
+     tables and charts survive. This is the default for PDFs and images.
+   - `read_attachment(name)` returns extracted plain text, paged by
+     `offset` — for Excel/CSV and for cheaply skimming very long PDFs.
 
 Limits: 20 MB per file; cloud/OneDrive attachments and legacy `.xls`
 aren't downloadable (clear errors are returned). The fetched index lives

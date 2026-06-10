@@ -107,6 +107,7 @@ async def test_read_attachment_returns_text():
                 "data.csv": {
                     "name": "data.csv",
                     "kind": "text",
+                    "artifact": "attachment:data.csv",
                     "text_artifact": "attachment_text:data.csv",
                 }
             }
@@ -118,6 +119,8 @@ async def test_read_attachment_returns_text():
     assert out["text"] == "name,qty\nfoo,1"
     assert out["has_more"] is False
     assert out["next_offset"] is None
+    # the original file stays loadable for structure-preserving viewing
+    assert out["raw_artifact"] == "attachment:data.csv"
 
 
 async def test_read_attachment_pages_long_text():
