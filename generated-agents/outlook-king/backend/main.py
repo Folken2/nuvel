@@ -254,6 +254,107 @@ class ActionResultRequest(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
+class FrontendLogEntry(BaseModel):
+    level: str = "info"
+    message: str = ""
+    data: dict | None = None
+    timestamp: str = ""
+    source: str = "frontend"
+
+
+class FrontendLogBatch(BaseModel):
+    entries: list[FrontendLogEntry] = Field(default_factory=list)
+
+
+# ── Error classification ────────────────────────────────────────────
+#
+# Raw exception strings must never reach the add-in — they can contain
+# connection strings, provider payloads, or tracebacks. Every agent-run
+# failure is mapped to a stable code + a message safe to show the user;
+# the raw exception only goes to the server log.
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def classify_agent_error(exc: BaseException) -> tuple[int, str, str]:
+    """Map an exception to ``(http_status, error_code, user_message)``."""
+    chain = _exception_chain(exc)
+    names = {type(e).__name__ for e in chain}
+    modules = {type(e).__module__ or "" for e in chain}
+    text = " ".join(str(e) for e in chain).lower()
+
+    if any(m.startswith("psycopg") for m in modules) or "PoolTimeout" in names:
+        return (
+            503,
+            "memory_unavailable",
+            "The assistant's memory store is temporarily unavailable. "
+            "Please try again in a moment.",
+        )
+    if "RateLimitError" in names or "rate limit" in text or "quota exceeded" in text:
+        return (
+            503,
+            "llm_rate_limited",
+            "The AI service is handling too many requests right now. "
+            "Please try again in a few seconds.",
+        )
+    if (
+        any(n in names for n in ("AuthenticationError", "PermissionDeniedError"))
+        or "invalid api key" in text
+        or "authentication" in text
+    ):
+        return (
+            502,
+            "llm_auth_failed",
+            "The AI service rejected this deployment's credentials. "
+            "Please contact your administrator.",
+        )
+    if (
+        any("Timeout" in n or n == "TimeoutError" for n in names)
+        or "timed out" in text
+        or "timeout" in text
+    ):
+        return (
+            504,
+            "upstream_timeout",
+            "The request took too long to complete. Please try again.",
+        )
+    if any(n in names for n in ("APIConnectionError", "ConnectionError", "ServiceUnavailableError")) or (
+        "connection" in text and any(w in text for w in ("refused", "reset", "closed", "failed"))
+    ):
+        return (
+            503,
+            "upstream_unavailable",
+            "A service the assistant depends on is temporarily unreachable. "
+            "Please try again in a moment.",
+        )
+    return (
+        500,
+        "internal_error",
+        "Something went wrong while processing your request. Please try "
+        "again — if it keeps happening, contact support.",
+    )
+
+
+def _agent_error_detail(exc: BaseException) -> tuple[int, dict]:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, dict) else {
+            "code": "internal_error",
+            "message": str(exc.detail),
+        }
+        return exc.status_code, detail
+    status, code, message = classify_agent_error(exc)
+    return status, {"code": code, "message": message}
+
+
 # ── Session helpers ─────────────────────────────────────────────────
 
 
@@ -262,11 +363,22 @@ async def _ensure_session(session_id: str, user_id: str) -> None:
     if cache_key in _known_sessions:
         return
     try:
-        await session_service.create_session(
+        existing = await session_service.get_session(
             app_name=APP_NAME, user_id=user_id, session_id=session_id
         )
-    except Exception:
-        pass
+        if existing is None:
+            await session_service.create_session(
+                app_name=APP_NAME, user_id=user_id, session_id=session_id
+            )
+    except Exception as exc:
+        logger.exception("Failed to ensure session %s for user %s", session_id, user_id)
+        raise HTTPException(
+            503,
+            {
+                "code": "session_unavailable",
+                "message": "Could not initialize the conversation session. Please try again.",
+            },
+        ) from exc
     _known_sessions.add(cache_key)
 
 
@@ -286,7 +398,13 @@ async def _append_state_delta(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
     if session is None:
-        raise HTTPException(500, "Failed to load session after creation")
+        raise HTTPException(
+            503,
+            {
+                "code": "session_unavailable",
+                "message": "Could not load the conversation session. Please try again.",
+            },
+        )
     event = Event(
         invocation_id=f"sys-{uuid.uuid4().hex[:8]}",
         author=author,
@@ -351,7 +469,51 @@ async def get_user_id(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "app": APP_NAME}
+    """Liveness + dependency probe.
+
+    Returns 200 when fully healthy, 503 with per-check detail when a
+    dependency is down — so load balancers and the add-in's warm-up
+    banner can tell "booting" apart from "up but degraded".
+    """
+    checks: dict[str, str] = {}
+    healthy = True
+    if _db_pool is not None:
+        try:
+            async with _db_pool.connection(timeout=2) as conn:
+                await conn.execute("SELECT 1")
+            checks["database"] = "ok"
+        except Exception as exc:
+            logger.warning("Health check: database unreachable: %s", exc)
+            checks["database"] = "error"
+            healthy = False
+    body = {"status": "ok" if healthy else "degraded", "app": APP_NAME, "checks": checks}
+    if not healthy:
+        return JSONResponse(status_code=503, content=body)
+    return body
+
+
+_frontend_logger = logging.getLogger("outlook_king.frontend")
+_FRONTEND_LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+
+@app.post("/api/logs")
+async def ingest_frontend_logs(batch: FrontendLogBatch):
+    """Sink for the add-in's batched remote logger (src/config/logger.ts).
+
+    Without this route every frontend log line 404s silently and add-in
+    failures are invisible in server logs.
+    """
+    for entry in batch.entries[:100]:
+        level = _FRONTEND_LOG_LEVELS.get(entry.level, logging.INFO)
+        _frontend_logger.log(
+            level, "%s | %s | %s", entry.source, entry.message, entry.data or {}
+        )
+    return {"status": "ok"}
 
 
 @app.post("/api/outlook/context")
@@ -409,9 +571,12 @@ async def chat(req: ChatRequest, user_id: str = Depends(get_user_id)):
         text, actions = await _run_agent_once(
             req.session_id, user_id, req.prompt, req.compose, req.selected, req.account
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Agent run failed")
-        raise HTTPException(500, f"Agent error: {exc}") from exc
+        status, detail = _agent_error_detail(exc)
+        logger.exception("Agent run failed (code=%s)", detail.get("code"))
+        raise HTTPException(status, detail) from exc
     return {"status": "ok", "message": text, "actions": actions}
 
 
@@ -456,8 +621,9 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Stream failed")
-            yield f"event: error\ndata: {json.dumps({'message': str(exc)})}\n\n"
+            _, detail = _agent_error_detail(exc)
+            logger.exception("Stream failed (code=%s)", detail.get("code"))
+            yield f"event: error\ndata: {json.dumps(detail)}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -492,7 +658,10 @@ async def action_result(req: ActionResultRequest, user_id: str = Depends(get_use
         app_name=APP_NAME, user_id=user_id, session_id=req.session_id
     )
     if session is None:
-        raise HTTPException(500, "Session not found")
+        raise HTTPException(
+            404,
+            {"code": "session_not_found", "message": "Conversation session not found."},
+        )
 
     existing_results = list(session.state.get(ACTION_RESULTS_KEY) or [])
     existing_results.append(

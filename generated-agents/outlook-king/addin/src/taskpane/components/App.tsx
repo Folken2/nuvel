@@ -15,6 +15,7 @@ import {
   BACKEND_URL,
   apiHeaders,
   fetchWithRetry,
+  readErrorMessage,
   waitForBackend,
   getSessionId,
 } from "../../config/api";
@@ -427,12 +428,12 @@ const App: React.FC = () => {
         };
         if (snap?.mode === "compose") body.compose = snap;
         else if (snap?.mode === "read") body.selected = snap;
-        await fetch(`${BACKEND_URL}/api/outlook/context`, {
+        await fetchWithRetry(`${BACKEND_URL}/api/outlook/context`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify(body),
-        });
-        await fetch(`${BACKEND_URL}/api/outlook/action-result`, {
+        }, { maxRetries: 2, baseDelayMs: 1000 });
+        await fetchWithRetry(`${BACKEND_URL}/api/outlook/action-result`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({
@@ -442,7 +443,7 @@ const App: React.FC = () => {
             action_type: action.type,
             status: "ok",
           }),
-        });
+        }, { maxRetries: 2, baseDelayMs: 1000 });
         return { type: action.type, status: "ok", description: action.description };
       } catch (e) {
         return {
@@ -456,7 +457,10 @@ const App: React.FC = () => {
 
     const result = await executeOutlookAction(action);
     try {
-      await fetch(`${BACKEND_URL}/api/outlook/action-result`, {
+      // This report is how the agent learns whether its action actually
+      // landed — retry hard before giving up, or its model of the
+      // mailbox silently drifts.
+      await fetchWithRetry(`${BACKEND_URL}/api/outlook/action-result`, {
         method: "POST",
         headers: apiHeaders(),
         body: JSON.stringify({
@@ -468,9 +472,9 @@ const App: React.FC = () => {
           error: result.error || "",
           detail: result.detail || {},
         }),
-      });
+      }, { maxRetries: 3, baseDelayMs: 1000 });
     } catch (e) {
-      logger.warn("action-result post failed", { error: e instanceof Error ? e.message : String(e) });
+      logger.warn("action-result post failed after retries", { error: e instanceof Error ? e.message : String(e) });
     }
     return {
       type: action.type,
@@ -487,11 +491,11 @@ const App: React.FC = () => {
       const snap = await snapshotCurrentContext();
       const recipient = snap?.mode === "compose" ? (snap as ComposeContext).to[0] || "" : "";
       const subject = snap?.mode === "compose" ? (snap as ComposeContext).subject || "" : "";
-      await fetch(`${BACKEND_URL}/api/outlook/learn-sent`, {
+      await fetchWithRetry(`${BACKEND_URL}/api/outlook/learn-sent`, {
         method: "POST",
         headers: apiHeaders(),
         body: JSON.stringify({ body: draft, recipient, subject }),
-      });
+      }, { maxRetries: 2, baseDelayMs: 1000 });
     } catch (e) {
       logger.warn("learn-sent failed", { error: e instanceof Error ? e.message : String(e) });
     }
@@ -616,82 +620,125 @@ const App: React.FC = () => {
         };
       }
 
-      const response = await fetchWithRetry(`${BACKEND_URL}/api/outlook/chat/stream`, {
-        method: "POST",
-        headers: apiHeaders({ Accept: "text/event-stream" }),
-        body: JSON.stringify(body),
-      });
+      const progress = {
+        finalText: "",
+        collectedEvents: [] as ToolEvent[],
+        queuedActions: [] as any[],
+      };
 
-      if (!response.ok) throw new Error(`Backend error: ${response.status}`);
-      if (backendStatus !== "ready") setBackendStatus("ready");
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalText = "";
-      const collectedEvents: ToolEvent[] = [];
-      const toolStartedAt: Record<string, number> = {};
-      const queuedActions: any[] = [];
-
-      const STALL_TIMEOUT_MS = 360_000;
-
-      while (true) {
-        const readPromise = reader.read();
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          const id = setTimeout(() => {
-            reject(new Error("Connection to backend appears stalled. Please try again."));
-          }, STALL_TIMEOUT_MS);
-          readPromise.then(() => clearTimeout(id), () => clearTimeout(id));
+      const streamOnce = async (): Promise<void> => {
+        const response = await fetchWithRetry(`${BACKEND_URL}/api/outlook/chat/stream`, {
+          method: "POST",
+          headers: apiHeaders({ Accept: "text/event-stream" }),
+          body: JSON.stringify(body),
         });
 
-        let done: boolean;
-        let value: Uint8Array | undefined;
-        try {
-          ({ done, value } = await Promise.race([readPromise, timeoutPromise]));
-        } catch (stallError) {
-          reader.cancel().catch(() => {});
-          throw stallError;
+        if (!response.ok) {
+          const detailMsg = await readErrorMessage(response);
+          const err = new Error(detailMsg || `Backend error: ${response.status}`) as Error & {
+            backendReported?: boolean;
+          };
+          if (detailMsg) err.backendReported = true;
+          throw err;
         }
-        if (done) break;
+        if (backendStatus !== "ready") setBackendStatus("ready");
 
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() || "";
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body");
 
-        for (const block of blocks) {
-          const evMatch = block.match(/^event:\s*(\w+)\s*$/m);
-          const dataMatch = block.match(/^data:\s*(.*)$/m);
-          if (!evMatch || !dataMatch) continue;
-          const evt = evMatch[1];
-          let payload: any = {};
-          try { payload = JSON.parse(dataMatch[1]); } catch { /* */ }
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const toolStartedAt: Record<string, number> = {};
 
-          if (evt === "tool_start") {
-            const tool = payload.tool || "tool";
-            toolStartedAt[tool] = Date.now();
-            collectedEvents.push({ type: "tool_start", tool, status: "running" });
-            setLiveEvents([...collectedEvents]);
-          } else if (evt === "tool_end") {
-            const tool = payload.tool || "tool";
-            const startedAt = toolStartedAt[tool];
-            const duration_ms = startedAt ? Date.now() - startedAt : undefined;
-            const status: string = payload.status || (payload.error ? "error" : "ok");
-            collectedEvents.push({ type: "tool_end", tool, status, duration_ms });
-            setLiveEvents([...collectedEvents]);
-          } else if (evt === "final") {
-            finalText = payload.text || "";
-          } else if (evt === "action") {
-            queuedActions.push(payload);
-          } else if (evt === "error") {
-            throw new Error(payload.message || "Backend error during streaming.");
+        const STALL_TIMEOUT_MS = 360_000;
+
+        while (true) {
+          const readPromise = reader.read();
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            const id = setTimeout(() => {
+              reject(new Error("Connection to backend appears stalled. Please try again."));
+            }, STALL_TIMEOUT_MS);
+            readPromise.then(() => clearTimeout(id), () => clearTimeout(id));
+          });
+
+          let done: boolean;
+          let value: Uint8Array | undefined;
+          try {
+            ({ done, value } = await Promise.race([readPromise, timeoutPromise]));
+          } catch (streamError) {
+            reader.cancel().catch(() => {});
+            // A drop after the connection was established is retryable —
+            // but not a stall, where the server may still be working.
+            const e = streamError as Error & { midStream?: boolean };
+            if (!(e?.message || "").includes("stalled")) e.midStream = true;
+            throw e;
           }
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split("\n\n");
+          buffer = blocks.pop() || "";
+
+          for (const block of blocks) {
+            const evMatch = block.match(/^event:\s*(\w+)\s*$/m);
+            const dataMatch = block.match(/^data:\s*(.*)$/m);
+            if (!evMatch || !dataMatch) continue;
+            const evt = evMatch[1];
+            let payload: any = {};
+            try { payload = JSON.parse(dataMatch[1]); } catch { /* */ }
+
+            if (evt === "tool_start") {
+              const tool = payload.tool || "tool";
+              toolStartedAt[tool] = Date.now();
+              progress.collectedEvents.push({ type: "tool_start", tool, status: "running" });
+              setLiveEvents([...progress.collectedEvents]);
+            } else if (evt === "tool_end") {
+              const tool = payload.tool || "tool";
+              const startedAt = toolStartedAt[tool];
+              const duration_ms = startedAt ? Date.now() - startedAt : undefined;
+              const status: string = payload.status || (payload.error ? "error" : "ok");
+              progress.collectedEvents.push({ type: "tool_end", tool, status, duration_ms });
+              setLiveEvents([...progress.collectedEvents]);
+            } else if (evt === "final") {
+              progress.finalText = payload.text || "";
+            } else if (evt === "action") {
+              progress.queuedActions.push(payload);
+            } else if (evt === "error") {
+              const err = new Error(
+                payload.message || "Backend error during streaming."
+              ) as Error & { backendReported?: boolean };
+              err.backendReported = true;
+              throw err;
+            }
+          }
+        }
+      };
+
+      // Auto-reconnect dropped streams, but only while the server has shown
+      // no visible progress — re-sending after tool calls risks duplicate
+      // side effects (e.g. the same action queued twice).
+      const MAX_STREAM_ATTEMPTS = 3;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await streamOnce();
+          break;
+        } catch (err) {
+          const e = err as Error & { backendReported?: boolean; midStream?: boolean };
+          const hasProgress =
+            progress.collectedEvents.length > 0 ||
+            !!progress.finalText ||
+            progress.queuedActions.length > 0;
+          if (e.midStream && !e.backendReported && !hasProgress && attempt < MAX_STREAM_ATTEMPTS) {
+            logger.warn("stream dropped — reconnecting", { attempt, error: e.message });
+            await new Promise((r) => setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          throw err;
         }
       }
 
       const executedActions: ExecutedAction[] = [];
-      for (const act of queuedActions) {
+      for (const act of progress.queuedActions) {
         const result = await executeAndReportAction(act);
         executedActions.push(result);
       }
@@ -710,9 +757,9 @@ const App: React.FC = () => {
       const durationMs = Date.now() - requestStartRef.current;
       const agentMessage: Message = {
         role: "agent",
-        content: finalText || "Done.",
-        toolEvents: collectedEvents.filter((e) => e.type === "tool_end"),
-        draft: extractDraft(finalText),
+        content: progress.finalText || "Done.",
+        toolEvents: progress.collectedEvents.filter((e) => e.type === "tool_end"),
+        draft: extractDraft(progress.finalText),
         sourcePrompt: prompt,
         durationMs,
         executedActions: executedActions.length > 0 ? executedActions : undefined,
@@ -721,16 +768,23 @@ const App: React.FC = () => {
       setMessages((prev) => [...prev, agentMessage]);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+      const backendReported = (error as { backendReported?: boolean } | null)?.backendReported;
       const isNetwork = errMsg.includes("Failed to fetch") || errMsg.includes("NetworkError") || errMsg.includes("ERR_CONNECTION") || errMsg.includes("Load failed");
       const isStall = errMsg.includes("stalled");
       const isColdStart = errMsg.includes("502") || errMsg.includes("503") || errMsg.includes("504");
-      const userMessage = isNetwork || isColdStart
+      // backendReported messages are already user-safe (structured
+      // {code, message} payloads from the backend) — show them as-is.
+      const userMessage = backendReported
+        ? errMsg
+        : isNetwork || isColdStart
         ? "Could not reach the backend — it may still be warming up. Please wait a moment and try again."
         : isStall
         ? "The request timed out — the backend may be overloaded. Please try again."
         : `Something went wrong: ${errMsg}`;
       if (isNetwork || isColdStart) setBackendStatus("unreachable");
-      setMessages((prev) => [...prev, { role: "agent", content: userMessage }]);
+      logger.warn("sendMessage failed", { error: errMsg, backendReported: !!backendReported });
+      // sourcePrompt gives the error bubble a Retry button.
+      setMessages((prev) => [...prev, { role: "agent", content: userMessage, sourcePrompt: prompt }]);
     } finally {
       setLoading(false);
       setLiveEvents([]);
