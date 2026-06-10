@@ -222,7 +222,31 @@ agent runs server-side:
 Limits: 20 MB per file; cloud/OneDrive attachments and legacy `.xls`
 aren't downloadable (clear errors are returned). The fetched index lives
 in session state under `outlook:fetched_attachments`
-(`list_fetched_attachments` shows it).
+(`list_fetched_attachments` shows it, including page/sheet structure and
+a preview).
+
+### Context management
+
+Documents are big; the model's context window is not. Three mechanisms
+keep attachment work from flooding it:
+
+- **Retrieval before loading** — `search_attachment(name, query)`
+  greps the extracted text and returns snippets + offsets; the agent
+  then reads only the relevant window (`read_attachment` defaults to
+  6k chars per call).
+- **`ContextBudgetPlugin`** (wired into both chat Runners) — ADK
+  replays full session history on every model call, so old tool
+  payloads would otherwise be re-sent forever. Before each model call
+  the plugin rewrites the outgoing request: stale heavy tool responses
+  (attachment reads, Outlook snapshots, any tool result > 8k chars)
+  are replaced with a "call the tool again" stub, keeping the most
+  recent results and the current turn intact. The stored session is
+  never mutated. Tunables: `CONTEXT_HEAVY_TOOLS`,
+  `CONTEXT_KEEP_RECENT`, `CONTEXT_HEAVY_MIN_CHARS`,
+  `CONTEXT_ANY_MIN_CHARS`.
+- **`load_artifacts` is pay-per-view** — ADK attaches the original
+  file to a single request when the model asks for it; it is not
+  persisted into history, so viewing a PDF costs once, not forever.
 
 ### Analysis & memory
 

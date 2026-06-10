@@ -40,6 +40,9 @@ class ExtractionResult:
     kind: str  # "text" | "image" | "binary"
     text: str | None = None
     error: str | None = None
+    # Cheap structural metadata (page count, sheet names…) so the agent
+    # can navigate a document without loading it into context.
+    structure: dict | None = None
 
 
 def guess_mime_type(name: str, content_type: str = "") -> str:
@@ -93,6 +96,7 @@ def _extract_pdf(data: bytes) -> ExtractionResult:
                 pages.append(f"--- truncated after page {i} of {len(reader.pages)} ---")
                 break
         text = "\n\n".join(pages)[:MAX_TEXT_CHARS]
+        structure = {"pages": len(reader.pages)}
         if not any(p.strip() for p in pages if not p.startswith("---")):
             # All pages empty — likely a scanned/image-only PDF.
             return ExtractionResult(
@@ -102,8 +106,9 @@ def _extract_pdf(data: bytes) -> ExtractionResult:
                     "No extractable text — this PDF appears to be scanned images. "
                     "View it with the load_artifacts tool instead."
                 ),
+                structure=structure,
             )
-        return ExtractionResult(kind="text", text=text)
+        return ExtractionResult(kind="text", text=text, structure=structure)
     except Exception as exc:
         logger.warning("PDF extraction failed: %s", exc)
         return ExtractionResult(kind="binary", error=f"Could not parse PDF: {type(exc).__name__}")
@@ -120,9 +125,11 @@ def _extract_excel(data: bytes) -> ExtractionResult:
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         sheets: list[str] = []
+        sheet_meta: list[dict] = []
         total = 0
         for ws in wb.worksheets:
             lines = [f"=== sheet: {ws.title} ==="]
+            row_count = 0
             for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
                 if row_idx >= MAX_SHEET_ROWS:
                     lines.append(f"... truncated at {MAX_SHEET_ROWS} rows ...")
@@ -130,6 +137,8 @@ def _extract_excel(data: bytes) -> ExtractionResult:
                 cells = ["" if c is None else str(c) for c in row]
                 if any(c.strip() for c in cells):
                     lines.append("\t".join(cells))
+                    row_count += 1
+            sheet_meta.append({"name": ws.title, "rows": row_count})
             chunk = "\n".join(lines)
             sheets.append(chunk)
             total += len(chunk)
@@ -137,7 +146,11 @@ def _extract_excel(data: bytes) -> ExtractionResult:
                 sheets.append("=== truncated: workbook too large ===")
                 break
         wb.close()
-        return ExtractionResult(kind="text", text="\n\n".join(sheets)[:MAX_TEXT_CHARS])
+        return ExtractionResult(
+            kind="text",
+            text="\n\n".join(sheets)[:MAX_TEXT_CHARS],
+            structure={"sheets": sheet_meta},
+        )
     except Exception as exc:
         logger.warning("Excel extraction failed: %s", exc)
         return ExtractionResult(kind="binary", error=f"Could not parse workbook: {type(exc).__name__}")

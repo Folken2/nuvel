@@ -19,10 +19,12 @@ sys.path.insert(0, str(ROOT))
 from outlook_king.tools.outlook_actions import PENDING_ACTIONS_KEY
 from outlook_king.tools.attachment_tools import (
     FETCHED_ATTACHMENTS_KEY,
-    READ_CHUNK_CHARS,
+    DEFAULT_READ_CHARS,
+    MAX_READ_CHARS,
     fetch_attachment,
     list_fetched_attachments,
     read_attachment,
+    search_attachment,
 )
 from outlook_king.utils.attachment_extract import (
     classify_attachment,
@@ -124,7 +126,7 @@ async def test_read_attachment_returns_text():
 
 
 async def test_read_attachment_pages_long_text():
-    long_text = "x" * (READ_CHUNK_CHARS + 10)
+    long_text = "x" * (DEFAULT_READ_CHARS + 10)
     ctx = FakeCtx(
         {
             FETCHED_ATTACHMENTS_KEY: {
@@ -135,11 +137,85 @@ async def test_read_attachment_pages_long_text():
     )
     first = await read_attachment(ctx, name="big.txt")
     assert first["has_more"] is True
-    assert first["next_offset"] == READ_CHUNK_CHARS
+    assert first["next_offset"] == DEFAULT_READ_CHARS
     second = await read_attachment(ctx, name="big.txt", offset=first["next_offset"])
     assert second["status"] == "ok"
     assert second["text"] == "x" * 10
     assert second["has_more"] is False
+
+
+async def test_read_attachment_limit_is_clamped():
+    ctx = FakeCtx(
+        {
+            FETCHED_ATTACHMENTS_KEY: {
+                "big.txt": {"name": "big.txt", "kind": "text", "text_artifact": "attachment_text:big.txt"}
+            }
+        },
+        artifacts={"attachment_text:big.txt": FakePart("y" * (MAX_READ_CHARS + 500))},
+    )
+    out = await read_attachment(ctx, name="big.txt", limit=10_000_000)
+    assert len(out["text"]) == MAX_READ_CHARS
+    assert out["has_more"] is True
+
+
+async def test_search_attachment_finds_snippets_with_offsets():
+    text = ("filler " * 500) + "The termination clause requires 30 days notice." + (" filler" * 500)
+    ctx = FakeCtx(
+        {
+            FETCHED_ATTACHMENTS_KEY: {
+                "contract.pdf": {
+                    "name": "contract.pdf",
+                    "kind": "text",
+                    "text_artifact": "attachment_text:contract.pdf",
+                }
+            }
+        },
+        artifacts={"attachment_text:contract.pdf": FakePart(text)},
+    )
+    out = await search_attachment(ctx, name="contract.pdf", query="termination clause")
+    assert out["status"] == "ok"
+    assert out["hit_count"] == 1
+    hit = out["hits"][0]
+    assert "30 days notice" in hit["snippet"]
+    assert text[hit["offset"] :].startswith("The termination clause") or text[
+        hit["offset"] :
+    ].lower().startswith("termination clause")
+    # snippets stay small — that's the point
+    assert len(hit["snippet"]) < 1000
+
+
+async def test_search_attachment_invalid_regex_falls_back_to_literal():
+    ctx = FakeCtx(
+        {
+            FETCHED_ATTACHMENTS_KEY: {
+                "n.txt": {"name": "n.txt", "kind": "text", "text_artifact": "attachment_text:n.txt"}
+            }
+        },
+        artifacts={"attachment_text:n.txt": FakePart("price is $10 (net)")},
+    )
+    out = await search_attachment(ctx, name="n.txt", query="$10 (net")
+    assert out["status"] == "ok"
+    assert out["hit_count"] == 1
+
+
+async def test_search_attachment_no_match():
+    ctx = FakeCtx(
+        {
+            FETCHED_ATTACHMENTS_KEY: {
+                "n.txt": {"name": "n.txt", "kind": "text", "text_artifact": "attachment_text:n.txt"}
+            }
+        },
+        artifacts={"attachment_text:n.txt": FakePart("nothing relevant here")},
+    )
+    out = await search_attachment(ctx, name="n.txt", query="zebra")
+    assert out["status"] == "ok"
+    assert out["hit_count"] == 0
+    assert out["hits"] == []
+
+
+async def test_search_attachment_requires_query_and_fetch():
+    assert (await search_attachment(FakeCtx(), name="x.pdf", query=" "))["status"] == "error"
+    assert (await search_attachment(FakeCtx(), name="x.pdf", query="foo"))["status"] == "not_fetched"
 
 
 async def test_read_attachment_no_text_surfaces_extraction_error():

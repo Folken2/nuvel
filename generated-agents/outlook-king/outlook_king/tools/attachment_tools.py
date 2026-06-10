@@ -28,6 +28,8 @@ Attachment ids come from ``get_selected_message`` /
 
 from __future__ import annotations
 
+import re
+
 from google.adk.tools import FunctionTool, ToolContext
 
 from .outlook_actions import _queue
@@ -38,9 +40,14 @@ FETCHED_ATTACHMENTS_KEY = "outlook:fetched_attachments"
 # pre-encoding; we stop earlier to keep upload + artifact sizes sane.
 MAX_FETCH_BYTES = 20 * 1024 * 1024
 
-# Max characters returned per read_attachment call — page through with
-# ``offset`` for longer documents.
-READ_CHUNK_CHARS = 20_000
+# read_attachment paging: small default keeps tool responses cheap in
+# context (search_attachment finds the right offset first); hard max for
+# when the agent explicitly asks for more.
+DEFAULT_READ_CHARS = 6_000
+MAX_READ_CHARS = 20_000
+
+MAX_SEARCH_HITS = 20
+MAX_SNIPPET_CONTEXT = 2_000
 
 
 def fetch_attachment(tool_context: ToolContext, attachment_id: str, name: str) -> dict:
@@ -95,12 +102,117 @@ def list_fetched_attachments(tool_context: ToolContext) -> dict:
     return {"status": "ok", "count": len(fetched), "attachments": list(fetched.values())}
 
 
-async def read_attachment(tool_context: ToolContext, name: str, offset: int = 0) -> dict:
+async def _load_text_entry(tool_context: ToolContext, name: str) -> tuple[dict | None, str | None, dict | None]:
+    """Resolve an index entry + its extracted text, or a structured error.
+
+    Returns ``(entry, text, error_response)`` — exactly one of
+    ``text`` / ``error_response`` is set.
+    """
+    fetched = tool_context.state.get(FETCHED_ATTACHMENTS_KEY) or {}
+    entry = fetched.get(name)
+    if entry is None:
+        available = ", ".join(fetched.keys()) or "(none)"
+        return None, None, {
+            "status": "not_fetched",
+            "message": (
+                f"'{name}' hasn't been downloaded. Call fetch_attachment first "
+                f"(this turn must end before the content arrives). Already fetched: {available}"
+            ),
+        }
+    if entry.get("kind") == "image":
+        return entry, None, {
+            "status": "is_image",
+            "artifact": entry.get("artifact"),
+            "message": (
+                f"'{name}' is an image — use the load_artifacts tool with "
+                f"artifact name '{entry.get('artifact')}' to view it."
+            ),
+        }
+    if not entry.get("text_artifact"):
+        return entry, None, {
+            "status": "no_text",
+            "message": entry.get("extraction_error")
+            or f"No text could be extracted from '{name}'.",
+        }
+    part = await tool_context.load_artifact(entry["text_artifact"])
+    text = getattr(part, "text", None) if part is not None else None
+    if not text:
+        return entry, None, {
+            "status": "error",
+            "message": f"Extracted text for '{name}' is missing — fetch it again.",
+        }
+    return entry, text, None
+
+
+async def search_attachment(
+    tool_context: ToolContext,
+    name: str,
+    query: str,
+    max_hits: int = 5,
+    context_chars: int = 300,
+) -> dict:
+    """Search inside a fetched attachment and return matching snippets.
+
+    ALWAYS prefer this over reading a long document front-to-back — it
+    finds the relevant passage without loading the whole file into
+    context. Each hit comes with its character ``offset``; follow up
+    with ``read_attachment(name, offset=<hit offset>)`` to read more
+    around a hit.
+
+    Args:
+        name: The attachment filename used in ``fetch_attachment``.
+        query: Keywords or a regular expression (case-insensitive). If
+            the regex is invalid it is searched as a literal string.
+        max_hits: Max snippets to return (default 5).
+        context_chars: Characters of context around each match (default 300).
+    """
+    if not query or not query.strip():
+        return {"status": "error", "message": "query is required."}
+    entry, text, error = await _load_text_entry(tool_context, name)
+    if error is not None:
+        return error
+
+    try:
+        pattern = re.compile(query, re.IGNORECASE)
+    except re.error:
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+
+    max_hits = max(1, min(int(max_hits), MAX_SEARCH_HITS))
+    context_chars = max(50, min(int(context_chars), MAX_SNIPPET_CONTEXT))
+
+    hits = []
+    for match in pattern.finditer(text):
+        start = max(0, match.start() - context_chars)
+        end = min(len(text), match.end() + context_chars)
+        hits.append({"offset": match.start(), "snippet": text[start:end]})
+        if len(hits) >= max_hits:
+            break
+
+    return {
+        "status": "ok",
+        "name": name,
+        "query": query,
+        "total_chars": len(text),
+        "hit_count": len(hits),
+        "hits": hits,
+        "note": (
+            "Use read_attachment(name, offset=<hit offset>) to read more around a hit."
+            if hits
+            else "No matches — try different keywords, or read_attachment from offset 0."
+        ),
+    }
+
+
+async def read_attachment(
+    tool_context: ToolContext, name: str, offset: int = 0, limit: int = DEFAULT_READ_CHARS
+) -> dict:
     """Read the extracted plain text of a previously fetched attachment.
 
     Works for PDF, Excel (.xlsx), CSV and plain-text attachments after
-    ``fetch_attachment`` completed. Long documents are paged: if
-    ``has_more`` is true, call again with the returned ``next_offset``.
+    ``fetch_attachment`` completed. For long documents, FIRST call
+    ``search_attachment`` to locate the passage you need, then read from
+    that offset — don't page through the whole file. If ``has_more`` is
+    true, continue from ``next_offset``.
 
     Plain text loses document structure. For PDFs where layout matters
     (tables, charts, forms, scans), prefer the ``load_artifacts`` tool
@@ -110,52 +222,23 @@ async def read_attachment(tool_context: ToolContext, name: str, offset: int = 0)
     Args:
         name: The attachment filename used in ``fetch_attachment``.
         offset: Character offset to continue reading from (default 0).
+        limit: Max characters to return (default 6000, max 20000).
     """
-    fetched = tool_context.state.get(FETCHED_ATTACHMENTS_KEY) or {}
-    entry = fetched.get(name)
-    if entry is None:
-        available = ", ".join(fetched.keys()) or "(none)"
-        return {
-            "status": "not_fetched",
-            "message": (
-                f"'{name}' hasn't been downloaded. Call fetch_attachment first "
-                f"(this turn must end before the content arrives). Already fetched: {available}"
-            ),
-        }
-    if entry.get("kind") == "image":
-        return {
-            "status": "is_image",
-            "artifact": entry.get("artifact"),
-            "message": (
-                f"'{name}' is an image — use the load_artifacts tool with "
-                f"artifact name '{entry.get('artifact')}' to view it."
-            ),
-        }
-    if not entry.get("text_artifact"):
-        return {
-            "status": "no_text",
-            "message": entry.get("extraction_error")
-            or f"No text could be extracted from '{name}'.",
-        }
-
-    part = await tool_context.load_artifact(entry["text_artifact"])
-    text = getattr(part, "text", None) if part is not None else None
-    if not text:
-        return {
-            "status": "error",
-            "message": f"Extracted text for '{name}' is missing — fetch it again.",
-        }
+    entry, text, error = await _load_text_entry(tool_context, name)
+    if error is not None:
+        return error
 
     offset = max(0, int(offset))
-    chunk = text[offset : offset + READ_CHUNK_CHARS]
-    has_more = offset + READ_CHUNK_CHARS < len(text)
+    limit = max(200, min(int(limit), MAX_READ_CHARS))
+    chunk = text[offset : offset + limit]
+    has_more = offset + limit < len(text)
     return {
         "status": "ok",
         "name": name,
         "total_chars": len(text),
         "offset": offset,
         "has_more": has_more,
-        "next_offset": offset + READ_CHUNK_CHARS if has_more else None,
+        "next_offset": offset + limit if has_more else None,
         "raw_artifact": entry.get("artifact"),
         "text": chunk,
     }
@@ -164,5 +247,6 @@ async def read_attachment(tool_context: ToolContext, name: str, offset: int = 0)
 attachment_tool_list = [
     FunctionTool(fetch_attachment),
     FunctionTool(list_fetched_attachments),
+    FunctionTool(search_attachment),
     FunctionTool(read_attachment),
 ]

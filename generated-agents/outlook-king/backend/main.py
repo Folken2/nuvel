@@ -93,6 +93,7 @@ from outlook_king.tools.style_tools import record_sent_fingerprint
 from outlook_king.state.memory_service import NeonMemoryService
 from outlook_king.state.memory_singleton import set_memory_service
 from outlook_king.plugins.memory_plugin import MemoryPlugin
+from outlook_king.plugins.context_budget_plugin import ContextBudgetPlugin
 
 APP_NAME = "outlook_king"
 MAX_RECENT_ACTIONS = 25
@@ -568,7 +569,7 @@ async def _run_agent_once(
         session_service=session_service,
         artifact_service=artifact_service,
         memory_service=_memory_service,
-        plugins=[MemoryPlugin()],
+        plugins=[MemoryPlugin(), ContextBudgetPlugin()],
     )
     content = types.Content(role="user", parts=[types.Part(text=prompt)])
     final_text = ""
@@ -620,7 +621,7 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
                 session_service=session_service,
                 artifact_service=artifact_service,
                 memory_service=_memory_service,
-                plugins=[MemoryPlugin()],
+                plugins=[MemoryPlugin(), ContextBudgetPlugin()],
             )
             content = types.Content(role="user", parts=[types.Part(text=req.prompt)])
             async for event in runner.run_async(
@@ -792,6 +793,10 @@ async def attachment_content(
         "text_artifact": text_artifact,
         "text_chars": len(extraction.text or ""),
         "extraction_error": extraction.error,
+        # Navigation aids so the agent can decide what to read without
+        # pulling the document into context.
+        "structure": extraction.structure,
+        "preview": (extraction.text or "")[:300],
     }
     await _append_state_delta(
         req.session_id, user_id, {FETCHED_ATTACHMENTS_KEY: fetched}
