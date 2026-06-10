@@ -62,6 +62,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("outlook_king.backend")
 
+from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.artifacts import InMemoryArtifactService
@@ -100,6 +101,37 @@ MAX_RECENT_ACTIONS = 25
 
 session_service = InMemorySessionService()
 artifact_service = InMemoryArtifactService()
+
+
+def _build_compaction_config() -> EventsCompactionConfig | None:
+    """Conversation compaction via ADK's built-in sliding window.
+
+    Every COMPACTION_INTERVAL user invocations, older events are
+    summarized into a single compaction event (carrying
+    COMPACTION_OVERLAP previously-compacted invocations for
+    continuity), so plain conversational history stops growing
+    unboundedly. The summarizer defaults to the root agent's own model
+    (works with LiteLLM/OpenRouter). Complements ContextBudgetPlugin,
+    which elides heavy tool payloads immediately rather than every N
+    turns. Set COMPACTION_INTERVAL=0 to disable.
+    """
+    interval = int(os.getenv("COMPACTION_INTERVAL", "10"))
+    if interval <= 0:
+        return None
+    overlap = int(os.getenv("COMPACTION_OVERLAP", "2"))
+    return EventsCompactionConfig(
+        compaction_interval=interval, overlap_size=overlap
+    )
+
+
+# Single App shared by all requests: root agent + plugins + compaction.
+# (Runner's `plugins=` argument is deprecated — they live on the App now.)
+adk_app = App(
+    name=APP_NAME,
+    root_agent=root_agent,
+    plugins=[MemoryPlugin(), ContextBudgetPlugin()],
+    events_compaction_config=_build_compaction_config(),
+)
 
 _known_sessions: set[str] = set()
 _db_pool: AsyncConnectionPool | None = None
@@ -564,12 +596,10 @@ async def _run_agent_once(
     await _write_outlook_state(session_id, user_id, compose, selected, account)
 
     runner = Runner(
-        app_name=APP_NAME,
-        agent=root_agent,
+        app=adk_app,
         session_service=session_service,
         artifact_service=artifact_service,
         memory_service=_memory_service,
-        plugins=[MemoryPlugin(), ContextBudgetPlugin()],
     )
     content = types.Content(role="user", parts=[types.Part(text=prompt)])
     final_text = ""
@@ -616,12 +646,10 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
     async def event_gen():
         try:
             runner = Runner(
-                app_name=APP_NAME,
-                agent=root_agent,
+                app=adk_app,
                 session_service=session_service,
                 artifact_service=artifact_service,
                 memory_service=_memory_service,
-                plugins=[MemoryPlugin(), ContextBudgetPlugin()],
             )
             content = types.Content(role="user", parts=[types.Part(text=req.prompt)])
             async for event in runner.run_async(

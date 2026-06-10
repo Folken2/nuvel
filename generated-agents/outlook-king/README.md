@@ -247,6 +247,13 @@ keep attachment work from flooding it:
 - **`load_artifacts` is pay-per-view** — ADK attaches the original
   file to a single request when the model asks for it; it is not
   persisted into history, so viewing a PDF costs once, not forever.
+- **Conversation compaction (ADK built-in)** — the backend wires an
+  ADK `App` with `EventsCompactionConfig`: every `COMPACTION_INTERVAL`
+  invocations (default 10), older turns are summarized into a single
+  compaction event using the agent's own model, so plain conversational
+  history stops growing unboundedly. `COMPACTION_OVERLAP` (default 2)
+  carries continuity across summaries; `COMPACTION_INTERVAL=0` disables.
+  Note: ADK marks this feature experimental.
 
 ### Analysis & memory
 
