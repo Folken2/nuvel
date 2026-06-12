@@ -92,6 +92,7 @@ from outlook_king.utils.attachment_extract import (
 )
 from outlook_king.tools.style_tools import record_sent_fingerprint
 from outlook_king.state.memory_service import NeonMemoryService
+from outlook_king.state.memory_service_dev import InMemoryMemoryService
 from outlook_king.state.memory_singleton import set_memory_service
 from outlook_king.plugins.memory_plugin import MemoryPlugin
 from outlook_king.plugins.context_budget_plugin import ContextBudgetPlugin
@@ -135,27 +136,41 @@ adk_app = App(
 
 _known_sessions: set[str] = set()
 _db_pool: AsyncConnectionPool | None = None
-_memory_service: NeonMemoryService | None = None
+_memory_service: NeonMemoryService | InMemoryMemoryService | None = None
+
+
+def _is_dev_mode() -> bool:
+    return os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db_pool, _memory_service
     database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError(
-            "DATABASE_URL is required. Point it at your Neon connection string."
+    if database_url:
+        _db_pool = AsyncConnectionPool(database_url, min_size=1, max_size=10, open=False)
+        await _db_pool.open()
+        _memory_service = NeonMemoryService(_db_pool, app_name=APP_NAME)
+        logger.info("outlook-king backend starting on PID %d (Neon pool open)", os.getpid())
+    elif _is_dev_mode():
+        _memory_service = InMemoryMemoryService(app_name=APP_NAME)
+        logger.info(
+            "outlook-king backend starting on PID %d "
+            "(DEV_MODE: in-memory memory service, resets on restart)",
+            os.getpid(),
         )
-    _db_pool = AsyncConnectionPool(database_url, min_size=1, max_size=10, open=False)
-    await _db_pool.open()
-    _memory_service = NeonMemoryService(_db_pool, app_name=APP_NAME)
+    else:
+        raise RuntimeError(
+            "DATABASE_URL is required. Point it at your Neon connection string, "
+            "or set DEV_MODE=true for an in-memory store that resets on restart."
+        )
     set_memory_service(_memory_service)
-    logger.info("outlook-king backend starting on PID %d (Neon pool open)", os.getpid())
     try:
         yield
     finally:
         logger.info("outlook-king backend shutdown")
-        await _db_pool.close()
+        if _db_pool is not None:
+            await _db_pool.close()
 
 
 app = FastAPI(title="outlook-king backend", lifespan=lifespan)
