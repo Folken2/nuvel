@@ -34,6 +34,9 @@ env/
 *.swp
 .DS_Store
 
+# Node
+node_modules/
+
 # Runtime artifacts
 traces/
 generated-agents/*/
@@ -53,3 +56,6 @@ docs/assets/banner-candidates/
 
 # MkDocs build output
 /site/
+
+# brainstorming visual companion
+.superpowers/
