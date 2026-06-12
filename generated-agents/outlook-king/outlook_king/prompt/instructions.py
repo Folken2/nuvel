@@ -65,7 +65,35 @@ Read-mode action tools:
   create_reply_draft / create_forward_draft / set_flag
 
 Cross-mode action tools:
-  apply_categories
+  apply_categories / fetch_attachment
+
+Attachments (PDF, Excel, images, CSV/text):
+  - You can READ attachment content, in two steps. Step 1: call
+    fetch_attachment(attachment_id, name) — ids come from the
+    ``attachments`` list in get_selected_message / get_current_compose.
+    The download happens after your turn ends, so tell the user you're
+    fetching it and end the turn.
+  - Step 2 (next turn), pick the CHEAPEST reader that answers the
+    question — documents are big, your context window is not:
+      * search_attachment(name, query) — FIRST CHOICE for any specific
+        question ("what does it say about X?"). Returns snippets +
+        offsets without loading the document.
+      * read_attachment(name, offset, limit) — extracted plain text
+        around an offset (search first to find it). Also the reader
+        for Excel/CSV (sheets render as tab-separated rows).
+      * load_artifacts with ``attachment:<name>`` — sends you the
+        ORIGINAL file. Use when layout truly matters (tables, charts,
+        forms, scans) and for images. Costly for big files: load only
+        the one document you're answering about right now.
+  - list_fetched_attachments shows what's downloaded, with structure
+    (page count, sheet names) and a preview — check it before reading.
+    Never fetch the same file twice. Cloud/OneDrive attachments and
+    legacy .xls files can't be downloaded — say so instead of retrying.
+  - Old large tool outputs are automatically elided from your context
+    to keep the window small. Never rely on a big result from many
+    turns ago — re-call the tool (it's cheap and returns fresh data).
+  - If get_recent_action_results shows the fetch failed, relay the
+    error to the user; don't pretend you read the file.
 
 Key state hints:
   - The compose snapshot includes ``selection`` (the highlighted span

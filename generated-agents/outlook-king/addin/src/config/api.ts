@@ -72,20 +72,33 @@ function isColdStartResponse(status: number): boolean {
   return status === 502 || status === 503 || status === 504;
 }
 
+function isTimeoutError(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
 /**
  * Fetch with automatic retry for serverless cold starts.
  * Retries on network errors and 502/503/504 with exponential backoff.
+ * When `timeoutMs` is set, each attempt gets its own fresh timeout and
+ * timed-out attempts are retried too.
  */
 export async function fetchWithRetry(
   input: RequestInfo,
   init?: RequestInit,
-  { maxRetries = 3, baseDelayMs = 2000 }: { maxRetries?: number; baseDelayMs?: number } = {},
+  {
+    maxRetries = 3,
+    baseDelayMs = 2000,
+    timeoutMs,
+  }: { maxRetries?: number; baseDelayMs?: number; timeoutMs?: number } = {},
 ): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(input, init);
+      const attemptInit =
+        timeoutMs != null ? { ...init, signal: AbortSignal.timeout(timeoutMs) } : init;
+      const response = await fetch(input, attemptInit);
       if (isColdStartResponse(response.status) && attempt < maxRetries) {
         await delay(baseDelayMs * Math.pow(2, attempt));
         continue;
@@ -93,7 +106,8 @@ export async function fetchWithRetry(
       return response;
     } catch (err) {
       lastError = err;
-      if (isNetworkError(err) && attempt < maxRetries) {
+      const retryable = isNetworkError(err) || (timeoutMs != null && isTimeoutError(err));
+      if (retryable && attempt < maxRetries) {
         await delay(baseDelayMs * Math.pow(2, attempt));
         continue;
       }
@@ -102,6 +116,25 @@ export async function fetchWithRetry(
   }
 
   throw lastError;
+}
+
+/**
+ * Parse a structured error payload (`{detail: {code, message}}`) from a
+ * failed response. Returns a user-safe message, or "" when the body has
+ * no recognizable detail.
+ */
+export async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    const detail = body?.detail;
+    if (detail && typeof detail === "object" && typeof detail.message === "string") {
+      return detail.message;
+    }
+    if (typeof detail === "string") return detail;
+  } catch {
+    /* non-JSON body */
+  }
+  return "";
 }
 
 /**
