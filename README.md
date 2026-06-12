@@ -163,6 +163,9 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs |
 | `nuvel eval score \| report \| worst \| drift` | Score traces (heuristics + LLM judge), surface worst runs, detect drift |
+| `nuvel eval variants [--agent <name>]` | List discovered replay-variant configs (`evals/variants/*.yaml`) for an agent |
+| `nuvel eval replay <name> [--agent <name>] [--since YYYY-MM-DD] [--max-cost-usd N] [--concurrency N] [--force] [--dry-run]` | Replay a config variant against historical traces and score each replay with the judge/rubric |
+| `nuvel eval compare <name> [--agent <name>]` | Diff a variant's replays against baseline `scored.jsonl`; exits 2 on regression (Δ overall < −0.05) |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |
 
