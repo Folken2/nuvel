@@ -17,14 +17,12 @@ import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from google.adk.cli.fast_api import get_fast_api_app
-from {{agent_package}}.plugins import PLUGIN_PATHS
 from {{agent_package}}.config.logging import setup_logging, generate_request_id, request_id_var
 {{gateway_imports}}
 # Optional: load .env automatically if python-dotenv is installed.
@@ -154,8 +152,8 @@ def add_endpoints(app: FastAPI) -> None:
 
 # ── Plugin Chain ─────────────────────────────────────────────────────
 # Plugins are pre-configured instances in {{agent_package}}.plugins.
-# PLUGIN_PATHS contains dotted import paths that ADK's get_fast_api_app
-# resolves via importlib. See plugins/__init__.py for configuration.
+# AgentHarness (harness.py) is the single place that wires them into
+# Runners/Apps and exposes extra_plugins for get_fast_api_app.
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -176,29 +174,16 @@ def main() -> None:
         # ── Streaming mode: build app manually for WebSocket support ──
         from fastapi.staticfiles import StaticFiles
         from google.adk.agents import LlmAgent
-        from google.adk.runners import Runner
-        from google.adk.sessions import InMemorySessionService
+        from {{agent_package}}.harness import AgentHarness
         from {{agent_package}}.streaming import mount_streaming
         from {{agent_package}}.agent import root_agent
         from {{agent_package}}.config.llm import LIVE_MODEL
 
         app = FastAPI(title="{{agent_name}}")
-
-        # Session service
-        if dev_mode:
-            session_service = InMemorySessionService()
-            print("[ADK] STREAMING + DEV mode (in-memory sessions)")
-        else:
-            from google.adk.sessions import DatabaseSessionService
-            session_uri = os.getenv("SESSION_SERVICE_URI")
-            if not session_uri:
-                raise RuntimeError("SESSION_SERVICE_URI required in production.")
-            session_uri = _normalize_to_asyncpg_uri(session_uri)
-            session_service = DatabaseSessionService(
-                db_url=session_uri,
-                connect_args={"ssl": "require"},
-            )
-            print("[ADK] STREAMING + PRODUCTION mode (database)")
+        app_name = "{{agent_name}}"
+        harness = AgentHarness.get(app_name)
+        print(f"[ADK] STREAMING + {'DEV' if dev_mode else 'PRODUCTION'} mode "
+              f"({'in-memory' if dev_mode else 'database'} sessions)")
 
         # Override model to Gemini for live streaming
         live_agent = LlmAgent(
@@ -210,15 +195,10 @@ def main() -> None:
             sub_agents=root_agent.sub_agents,
         )
 
-        app_name = "{{agent_name}}"
-        runner = Runner(
-            app_name=app_name,
-            agent=live_agent,
-            session_service=session_service,
-        )
+        runner = harness.build_runner(agent=live_agent)
 
         # Mount streaming WebSocket
-        mount_streaming(app, runner, session_service, app_name)
+        mount_streaming(app, runner, harness.session_service, app_name)
 
         # Serve test client
         static_dir = Path(__file__).parent / "static"
@@ -227,42 +207,26 @@ def main() -> None:
             print(f"[ADK] Test client: http://0.0.0.0:{port}/static/test_client.html")
 
     else:
-        # ── Standard mode: use get_fast_api_app (unchanged) ──────────
-        if dev_mode:
-            print("[ADK] DEVELOPMENT mode (in-memory sessions)")
-            app = get_fast_api_app(
-                agents_dir=agents_dir,
-                session_service_uri=None,
-                use_local_storage=False,
-                web=False,
-                a2a=False,
-                host="",
-                port=port,
-                url_prefix=None,
-                reload_agents=True,
-                extra_plugins=PLUGIN_PATHS,
-            )
-        else:
-            session_uri = os.getenv("SESSION_SERVICE_URI")
-            if not session_uri:
-                raise RuntimeError("SESSION_SERVICE_URI is required (set it in .env or env vars).")
+        # ── Standard mode: use get_fast_api_app, wired via AgentHarness ──
+        from {{agent_package}}.harness import AgentHarness
 
-            session_uri = _normalize_to_asyncpg_uri(session_uri)
-            connect_args = {"ssl": "require"}
-
-            print("[ADK] PRODUCTION mode (database)")
-            app = get_fast_api_app(
-                agents_dir=agents_dir,
-                session_service_uri=session_uri,
-                session_db_kwargs={"connect_args": connect_args},
-                web=False,
-                a2a=False,
-                host="",
-                port=port,
-                url_prefix=None,
-                reload_agents=True,
-                extra_plugins=PLUGIN_PATHS,
-            )
+        harness = AgentHarness.get("{{agent_name}}")
+        print(f"[ADK] {'DEVELOPMENT' if dev_mode else 'PRODUCTION'} mode "
+              f"({'in-memory' if dev_mode else 'database'} sessions)")
+        app = get_fast_api_app(
+            agents_dir=agents_dir,
+            session_service_uri=harness.session_service_uri,
+            session_db_kwargs={"connect_args": {"ssl": "require"}},
+            artifact_service_uri=harness.artifact_service_uri,
+            use_local_storage=not dev_mode,
+            web=False,
+            a2a=False,
+            host="",
+            port=port,
+            url_prefix=None,
+            reload_agents=True,
+            extra_plugins=harness.extra_plugins,
+        )
 
     app.router.redirect_slashes = False
 
@@ -296,22 +260,14 @@ def main() -> None:
         if not cron_scheduler.is_enabled():
             return
         # Reuse the gateway runner if a gateway already built one. Otherwise
-        # spin up a parallel in-memory runner so the scheduler still works
-        # in headless/no-gateway deployments.
+        # build one via AgentHarness (the singleton) so it shares the same
+        # session/artifact services and plugin chain as everything else.
         if not getattr(app.state, "runner", None):
             try:
                 from {{agent_package}}.agent import root_agent as _cron_root
-                from {{agent_package}}.plugins import PLUGIN_INSTANCES as _cron_plugins
-                from google.adk.runners import Runner as _CronRunner
-                from google.adk.sessions import InMemorySessionService as _CronInMem
-                from google.adk.artifacts import InMemoryArtifactService as _CronArtifactService
+                from {{agent_package}}.harness import AgentHarness
                 app.state.app_name = getattr(app.state, "app_name", "{{agent_name}}")
-                app.state.runner = _CronRunner(
-                    app_name=app.state.app_name, agent=_cron_root,
-                    session_service=_CronInMem(),
-                    artifact_service=_CronArtifactService(),
-                    plugins=list(_cron_plugins),
-                )
+                app.state.runner = AgentHarness.get(app.state.app_name).build_runner(agent=_cron_root)
             except Exception:
                 import logging as _lg
                 _lg.getLogger(__name__).exception(
@@ -329,18 +285,6 @@ def main() -> None:
 
     print(f"[ADK] Server ready: http://0.0.0.0:{port}")
     uvicorn.run(app, host="", port=port)
-
-
-def _normalize_to_asyncpg_uri(uri: str) -> str:
-    """Convert to asyncpg scheme and strip unsupported query args."""
-    if uri.startswith("postgresql://"):
-        uri = uri.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-    parsed = urlsplit(uri)
-    qs = parse_qsl(parsed.query, keep_blank_values=True)
-    filtered = [(k, v) for (k, v) in qs if k.lower() not in {"sslmode", "channel_binding", "channelbinding"}]
-    new_query = urlencode(filtered)
-    return urlunsplit(parsed._replace(query=new_query))
 
 
 if __name__ == "__main__":

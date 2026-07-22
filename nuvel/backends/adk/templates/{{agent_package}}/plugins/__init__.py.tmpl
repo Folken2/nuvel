@@ -78,9 +78,9 @@ PLUGIN_PATHS = [
     "{{agent_package}}.plugins.skill_curator",
 ]
 
-# Same instances as PLUGIN_PATHS, in the same order, for callers that build
-# a Runner/get_fast_api_app in-process and need the objects directly rather
-# than dotted import paths (e.g. gateway runners in run_adk.py).
+# Same plugins as PLUGIN_PATHS, as instances rather than dotted import paths.
+# Used by AgentHarness (harness.py) to build an App(plugins=...) directly,
+# since App requires BasePlugin instances, not importable path strings.
 PLUGIN_INSTANCES = [
     memory,
     cost_guard,
