@@ -66,6 +66,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         with_slack=args.with_slack,
         with_telegram=args.with_telegram,
         with_teams=args.with_teams,
+        workflow=args.workflow,
     )
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
@@ -76,6 +77,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("persona")
         if result.get("with_composio"):
             flags.append("composio")
+        if result.get("workflow"):
+            flags.append("workflow")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
         channels = [
@@ -208,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.add_argument(
         "--with-teams", action="store_true",
         help="(adk only) Add an MS Teams gateway (aiohttp sidecar via Microsoft 365 Agents SDK).",
+    )
+    p_new.add_argument(
+        "--workflow", action="store_true",
+        help="(adk only) Generate a workflow-native agent: the root agent is an "
+             "ADK 2.0 Workflow graph (agent_workflow.py) with task-mode nodes, "
+             "typed contracts, and conditional routing, instead of a single LlmAgent.",
     )
     p_new.set_defaults(func=_cmd_new)
 
