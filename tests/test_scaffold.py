@@ -111,7 +111,8 @@ class TestScaffoldAgent(unittest.TestCase):
         run_adk = agent_dir / "run_adk.py"
         self.assertTrue(run_adk.exists())
         content = run_adk.read_text()
-        self.assertIn("from my_agent.plugins import PLUGIN_PATHS", content)
+        self.assertIn("from my_agent.harness import AgentHarness", content)
+        self.assertIn("extra_plugins=harness.extra_plugins", content)
         self.assertIn("from my_agent.config.logging import", content)
         self.assertNotIn("{{agent_package}}", content)
 

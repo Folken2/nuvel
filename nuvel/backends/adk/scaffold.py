@@ -360,22 +360,12 @@ def _build_replacements(
         state_lines = [
             f'    app.state.app_name = "{name}"',
             f"    from {package}.agent import root_agent as _root",
-            "    from google.adk.runners import Runner as _Runner",
-            "    from google.adk.sessions import InMemorySessionService as _InMem",
-            "    from google.adk.artifacts import InMemoryArtifactService",
-            f"    from {package}.plugins import PLUGIN_INSTANCES as _gw_plugins",
-            "    # Build a parallel session service for in-process gateway invocations.",
-            "    # In dev mode (DEV_MODE=true), use in-memory; in prod, use the same DB URI.",
-            "    if dev_mode:",
-            "        _gw_session_service = _InMem()",
-            "    else:",
-            "        from google.adk.sessions import DatabaseSessionService as _DbSess",
-            "        _gw_session_service = _DbSess(",
-            '            db_url=_normalize_to_asyncpg_uri(os.getenv("SESSION_SERVICE_URI")),',
-            '            connect_args={"ssl": "require"},',
-            "        )",
-            "    _gw_artifact_service = InMemoryArtifactService()",
-            f'    app.state.runner = _Runner(app_name="{name}", agent=_root, session_service=_gw_session_service, artifact_service=_gw_artifact_service, plugins=list(_gw_plugins))',
+            f"    from {package}.harness import AgentHarness",
+            "    # AgentHarness is the one place session/artifact services and",
+            "    # plugins are built; the gateway runner shares it with the",
+            "    # cron fallback runner (see below) since it's a singleton.",
+            "    _harness = AgentHarness.get(app.state.app_name)",
+            "    app.state.runner = _harness.build_runner(agent=_root)",
         ]
         if with_slack:
             state_lines.append(
