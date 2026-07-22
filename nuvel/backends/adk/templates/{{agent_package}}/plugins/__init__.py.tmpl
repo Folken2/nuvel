@@ -78,6 +78,26 @@ PLUGIN_PATHS = [
     "{{agent_package}}.plugins.skill_curator",
 ]
 
+# Same instances as PLUGIN_PATHS, in the same order, for callers that build
+# a Runner/get_fast_api_app in-process and need the objects directly rather
+# than dotted import paths (e.g. gateway runners in run_adk.py).
+PLUGIN_INSTANCES = [
+    memory,
+    cost_guard,
+    context_window,
+    trace,
+    context_filter,
+    console_logger,
+    tool_events,
+    resilience,
+    cache,
+    self_healing,
+    save_files,
+    recordings,
+    replay,
+    skill_curator,
+]
+
 __all__ = [
     "MemoryPlugin",
     "CachePlugin",
@@ -88,4 +108,5 @@ __all__ = [
     "ContextWindowPlugin",
     "SkillCuratorPlugin",
     "PLUGIN_PATHS",
+    "PLUGIN_INSTANCES",
 ]
