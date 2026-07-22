@@ -276,3 +276,28 @@ class TestAllChannelsTogether(unittest.TestCase):
             if path.is_file() and path.suffix in (".py", ".md", ".txt", ".example"):
                 content = path.read_text(errors="ignore")
                 self.assertNotIn("{{", content, f"Unrendered placeholder in {path}")
+
+
+class TestGatewayRunnerWiring(unittest.TestCase):
+    """The gateway-injected Runner must carry artifact_service and plugins,
+    not just a bare session_service (Phase 1 fix)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        result = adk_scaffold("agent-gw", output_dir=self.tmpdir, with_telegram=True)
+        self.assertEqual(result["status"], "ok")
+        self.agent_dir = Path(result["path"])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_run_adk_wires_artifact_service_and_plugins(self):
+        run_adk = (self.agent_dir / "run_adk.py").read_text()
+        self.assertIn("PLUGIN_INSTANCES", run_adk)
+        self.assertIn("InMemoryArtifactService", run_adk)
+        self.assertIn("artifact_service=", run_adk)
+        self.assertIn("plugins=list", run_adk)
+
+    def test_plugins_init_exposes_plugin_instances(self):
+        plugins_init = (self.agent_dir / "agent_gw" / "plugins" / "__init__.py").read_text()
+        self.assertIn("PLUGIN_INSTANCES", plugins_init)

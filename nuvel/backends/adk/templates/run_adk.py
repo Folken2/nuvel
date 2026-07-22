@@ -301,12 +301,16 @@ def main() -> None:
         if not getattr(app.state, "runner", None):
             try:
                 from {{agent_package}}.agent import root_agent as _cron_root
+                from {{agent_package}}.plugins import PLUGIN_INSTANCES as _cron_plugins
                 from google.adk.runners import Runner as _CronRunner
                 from google.adk.sessions import InMemorySessionService as _CronInMem
+                from google.adk.artifacts import InMemoryArtifactService as _CronArtifactService
                 app.state.app_name = getattr(app.state, "app_name", "{{agent_name}}")
                 app.state.runner = _CronRunner(
                     app_name=app.state.app_name, agent=_cron_root,
                     session_service=_CronInMem(),
+                    artifact_service=_CronArtifactService(),
+                    plugins=list(_cron_plugins),
                 )
             except Exception:
                 import logging as _lg
