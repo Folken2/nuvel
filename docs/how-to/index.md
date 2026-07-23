@@ -11,6 +11,7 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 - [Add skills to an agent](add-skills.md) — listing, searching, and bundling skills.
 - [Wire 1000+ tools with Composio](add-composio-tools.md) — `--with-composio`.
 - [Activate the persona overlay](activate-persona.md) — `--persona`, for agents that live for months.
+- [Build a workflow-native agent](build-workflow-agent.md) — `--workflow`, for agents that are genuinely multi-step with branching.
 
 ## Reaching humans on chat platforms
 
