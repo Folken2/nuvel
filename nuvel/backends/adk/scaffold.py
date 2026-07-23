@@ -37,6 +37,29 @@ OVERLAYS_DIR = Path(__file__).parent / "templates_overlays"
 
 PLACEHOLDER_TAG = "{{agent_package}}"
 
+# Template files that only get stamped when a specific flag is set. Keyed by
+# template file name (pre-substitution); see _stamp_tree(skip_files=...).
+WORKFLOW_TEMPLATE = "agent_workflow.py.tmpl"
+
+# When --workflow is set, agent.py becomes a shim so that every existing
+# importer of `<package>.agent` (run_adk.py, adk web, the gateway overlays,
+# the cron fallback runner) keeps working against the Workflow root.
+_WORKFLOW_AGENT_SHIM = '''"""
+{{agent_name}} — root agent.
+
+The real root agent is a `Workflow` graph; see agent_workflow.py. This
+module stays the canonical import path (`{{agent_package}}.agent`) so the
+server, the ADK dev UI, and any gateways don't need to know which shape
+the root agent has.
+"""
+
+from __future__ import annotations
+
+from .agent_workflow import root_agent
+
+__all__ = ["root_agent"]
+'''
+
 # Extensions considered text (placeholder substitution applied)
 TEXT_EXTENSIONS = frozenset({
     ".py", ".md", ".txt", ".yaml", ".yml", ".toml",
@@ -426,11 +449,15 @@ def _stamp_tree(
     target: Path,
     replacements: dict[str, str],
     files_created: list[str],
+    skip_files: frozenset[str] = frozenset(),
 ) -> None:
     """Walk a template tree and stamp it into target, with placeholder substitution.
 
     Files in src_root with the same relative path as files already in target
     will be **overwritten** — overlays use this to replace base files.
+
+    Template file names in `skip_files` are not stamped at all — used for
+    flag-gated templates that live in the base tree (e.g. agent_workflow.py.tmpl).
     """
     if not src_root.is_dir():
         return
@@ -442,7 +469,7 @@ def _stamp_tree(
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         for fname in filenames:
-            if fname == ".gitkeep":
+            if fname == ".gitkeep" or fname in skip_files:
                 continue
 
             src_file = Path(dirpath) / fname
@@ -478,6 +505,7 @@ def scaffold_agent(
     with_slack: bool = False,
     with_telegram: bool = False,
     with_teams: bool = False,
+    workflow: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -494,6 +522,10 @@ def scaffold_agent(
         with_telegram: Activate the Telegram messaging-gateway overlay.
         with_teams: Activate the MS Teams messaging-gateway overlay
                     (sidecar process; runs separately from the agent server).
+        workflow: Generate a workflow-native agent — the root agent is an
+                  ADK 2.0 `Workflow` graph (agent_workflow.py) with task-mode
+                  nodes and typed contracts, and agent.py becomes a shim
+                  re-exporting it. Default is a single LlmAgent root.
 
     Returns:
         A dict with status and metadata.
@@ -529,8 +561,20 @@ def scaffold_agent(
     files_created: list[str] = []
 
     try:
-        # 1. Base template
-        _stamp_tree(TEMPLATES_DIR, target, replacements, files_created)
+        # 1. Base template. agent_workflow.py.tmpl is flag-gated: it lives in
+        #    the base tree but only lands when --workflow is set.
+        _stamp_tree(
+            TEMPLATES_DIR, target, replacements, files_created,
+            skip_files=frozenset() if workflow else frozenset({WORKFLOW_TEMPLATE}),
+        )
+
+        # 1b. Workflow root: agent.py becomes a shim over agent_workflow.py so
+        #     `<package>.agent:root_agent` stays the one import path.
+        if workflow:
+            agent_py = target / package / "agent.py"
+            agent_py.write_text(
+                _substitute(_WORKFLOW_AGENT_SHIM, replacements), encoding="utf-8"
+            )
 
         # 2. Overlays — order matters: later overlays override earlier ones
         if persona:
@@ -558,6 +602,7 @@ def scaffold_agent(
             "with_slack": with_slack,
             "with_telegram": with_telegram,
             "with_teams": with_teams,
+            "workflow": workflow,
         }
 
     except Exception as exc:
@@ -586,6 +631,11 @@ def main() -> None:
         "--with-composio", action="store_true",
         help="Wire the Composio Tool Router MCP (~1000 toolkits via one hosted endpoint).",
     )
+    parser.add_argument(
+        "--workflow", action="store_true",
+        help="Generate a workflow-native agent: the root agent is an ADK 2.0 "
+             "Workflow graph with task-mode nodes and typed contracts.",
+    )
     args = parser.parse_args()
 
     result = scaffold_agent(
@@ -594,6 +644,7 @@ def main() -> None:
         description=args.description,
         persona=args.persona,
         with_composio=args.with_composio,
+        workflow=args.workflow,
     )
 
     if result["status"] == "ok":

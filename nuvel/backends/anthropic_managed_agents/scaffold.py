@@ -121,6 +121,7 @@ def scaffold_agent(
     with_slack: bool = False,
     with_telegram: bool = False,
     with_teams: bool = False,
+    workflow: bool = False,
 ) -> dict:
     """Scaffold a Managed Agents project from the template skeleton."""
     if persona:
@@ -132,6 +133,11 @@ def scaffold_agent(
         return {
             "status": "error",
             "message": "--with-composio is an ADK-only bundle; use --framework adk if you want it.",
+        }
+    if workflow:
+        return {
+            "status": "error",
+            "message": "--workflow is an ADK-only bundle (ADK 2.0 Workflow graphs); use --framework adk if you want it.",
         }
     for flag_name, flag_set in (("with-slack", with_slack), ("with-telegram", with_telegram), ("with-teams", with_teams)):
         if flag_set:

@@ -185,15 +185,24 @@ def main() -> None:
         print(f"[ADK] STREAMING + {'DEV' if dev_mode else 'PRODUCTION'} mode "
               f"({'in-memory' if dev_mode else 'database'} sessions)")
 
-        # Override model to Gemini for live streaming
-        live_agent = LlmAgent(
-            model=LIVE_MODEL,
-            name=root_agent.name,
-            description=root_agent.description,
-            instruction=root_agent.instruction,
-            tools=root_agent.tools,
-            sub_agents=root_agent.sub_agents,
-        )
+        # Override model to Gemini for live streaming. Only an LlmAgent root
+        # can be rebuilt this way — a Workflow (or any other BaseAgent) has no
+        # .instruction/.tools/.sub_agents, and its per-node models are set on
+        # the nodes themselves. Stream those roots as-is.
+        if isinstance(root_agent, LlmAgent):
+            live_agent = LlmAgent(
+                model=LIVE_MODEL,
+                name=root_agent.name,
+                description=root_agent.description,
+                instruction=root_agent.instruction,
+                tools=root_agent.tools,
+                sub_agents=root_agent.sub_agents,
+            )
+        else:
+            print(f"[ADK] Root agent is {type(root_agent).__name__}, not LlmAgent — "
+                  f"streaming it as-is (LIVE_MODEL override skipped; set the live "
+                  f"model on the individual nodes if you need it).")
+            live_agent = root_agent
 
         runner = harness.build_runner(agent=live_agent)
 
