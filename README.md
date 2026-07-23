@@ -39,7 +39,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 
 | Framework | Flag | Knowledge skills | Where the agent runs |
 | --- | --- | --- | --- |
-| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 8 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router) | Your server (OpenRouter + LiteLLM) |
+| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 10 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router, workflow graphs, task delegation) | Your server (OpenRouter + LiteLLM) |
 | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | `--framework claude-agent-sdk` | 6 skills (tool creation, MCP integration, permissions, hooks, system prompts, deployment) | Your server (Anthropic API direct) |
 | [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | `--framework anthropic-managed-agents` | 5 skills (overview, tools, events, deployment, skills + memory) | Anthropic's infrastructure (your server is a thin proxy) |
 
@@ -47,7 +47,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 
 - **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
 - **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (11-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
-- **Portable knowledge skills** — 13 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
+- **Portable knowledge skills** — 21 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
 - **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character. Inspired by OpenClaw. *(ADK only.)*
 - **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more. *(ADK only.)*
 - **Messaging gateways** — scaffold an agent reachable from Slack, Telegram, or MS Teams with one flag (`--with-slack`, `--with-telegram`, `--with-teams`). See [docs/superpowers/specs/2026-05-09-messaging-gateways-design.md](docs/superpowers/specs/2026-05-09-messaging-gateways-design.md). *(ADK only.)*
@@ -200,7 +200,7 @@ nuvel/
 │       ├── adk/               # Google ADK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # Production skeleton for ADK agents
-│       │   └── skills/        # 7 ADK knowledge skills
+│       │   └── skills/        # 10 ADK knowledge skills
 │       ├── claude_agent_sdk/  # Claude Agent SDK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # FastAPI + SDK skeleton

@@ -35,6 +35,7 @@ Three backends, three different sweet spots.
 | `--persona` | ✅ | ❌ | ❌ |
 | `--with-composio` | ✅ | ❌ | ❌ |
 | `--with-slack` / `--with-telegram` / `--with-teams` | ✅ | ❌ | ❌ |
+| `--workflow` | ✅ | ❌ | ❌ |
 | Bundled skills | ✅ | ✅ | ✅ |
 | Generated FastAPI server | ✅ | ✅ | ✅ |
 | Production Postgres sessions | ✅ | manual | server-side |
