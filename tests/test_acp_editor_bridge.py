@@ -96,6 +96,16 @@ def _load_overlay_package():
 _jsonrpc, _fs, _mcp, _server = _load_overlay_package()
 
 
+def _adk_function_tool_available() -> bool:
+    """Whether ADK's FunctionTool can be imported (installed in CI, absent in the lightweight lane)."""
+    try:
+        import google.adk.tools.function_tool  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
 class _FakeTransport:
     """Captures writes; never yields a client message on its own."""
 
@@ -166,12 +176,14 @@ class TestMcpServerParsing(unittest.TestCase):
         self.assertEqual(_mcp._pairs_to_dict({"A": "1"}), {"A": "1"})
         self.assertEqual(_mcp._pairs_to_dict(None), {})
 
-    def test_build_toolsets_degrades_without_adk(self):
-        # No google-adk here → no toolsets, but never raises.
+    def test_build_toolsets_returns_list_and_never_raises(self):
+        # Without ADK/mcp installed → []; with them → one toolset. Either way a
+        # list, and a malformed entry never crashes the build.
         out = _mcp.build_mcp_toolsets(
-            [{"name": "fs", "command": "npx", "args": []}], cwd="/proj"
+            [{"name": "fs", "command": "npx", "args": []}, {"bad": True}], cwd="/proj"
         )
-        self.assertEqual(out, [])
+        self.assertIsInstance(out, list)
+        self.assertLessEqual(len(out), 1)  # the malformed entry is dropped
 
 
 # ── fs bridge ────────────────────────────────────────────────────────
@@ -227,9 +239,19 @@ class TestFsBridge(unittest.TestCase):
 
         self.assertEqual(asyncio.run(go()), "")
 
-    def test_function_tools_degrades_without_adk(self):
-        # No ADK FunctionTool available here → empty, but never raises.
-        self.assertEqual(_fs.FsBridge("s", None).function_tools(), [])
+    def test_function_tools_shape(self):
+        # With ADK: one tool per enabled capability. Without it: empty, never raises.
+        both = _fs.FsBridge("s", None).function_tools()
+        self.assertIsInstance(both, list)
+        if _adk_function_tool_available():
+            self.assertEqual(len(both), 2)  # read + write
+            # Capabilities gate which tools are exposed.
+            self.assertEqual(len(_fs.FsBridge("s", None, can_write=False).function_tools()), 1)
+            self.assertEqual(
+                _fs.FsBridge("s", None, can_read=False, can_write=False).function_tools(), []
+            )
+        else:
+            self.assertEqual(both, [])
 
 
 # ── server: initialize + request correlation + session wiring ────────
