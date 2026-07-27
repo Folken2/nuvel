@@ -125,6 +125,7 @@ class TestAcpOverlay(unittest.TestCase):
             "acp/server.py",
             "acp/mcp.py",
             "acp/fs.py",
+            "acp/permission.py",
             "cli.py",
         ):
             self.assertTrue((self.pkg_dir / rel).is_file(), f"missing {rel}")

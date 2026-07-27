@@ -18,7 +18,9 @@ and ``tool_call`` / ``tool_call_update`` for tool activity.
 The agent also makes *agent→client* requests when a session enables them:
 ``fs/read_text_file`` / ``fs/write_text_file`` (when the client advertises
 ``clientCapabilities.fs``) let the agent operate on the editor's filesystem
-view. :meth:`ACPAgent.request` sends these and correlates the response.
+view, and ``session/request_permission`` asks the user to approve sensitive
+tool calls (see ``acp/permission.py``). :meth:`ACPAgent.request` sends these
+and correlates the response.
 """
 
 from __future__ import annotations
@@ -220,7 +222,10 @@ class ACPAgent:
         session_id = uuid.uuid4().hex
         extra_tools = self._session_tools(session_id, params)
         await self._runtime.ensure_session(
-            DEFAULT_USER_ID, session_id, extra_tools=extra_tools
+            DEFAULT_USER_ID,
+            session_id,
+            extra_tools=extra_tools,
+            permission_requester=self.request,
         )
         return {"sessionId": session_id}
 

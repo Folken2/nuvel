@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator
 
 from ..agent import root_agent
 from ..harness import AgentHarness
+from .permission import permission_callback_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -111,38 +112,64 @@ class AgentRuntime:
     def _runner_for(self, session_id: str):
         return self._runners.get(session_id, self._default_runner)
 
-    def _configure_runner(self, session_id: str, extra_tools: list) -> None:
-        """Build a per-session Runner whose agent has ``extra_tools`` appended.
+    def _configure_runner(
+        self, session_id: str, extra_tools: list, before_tool_callback
+    ) -> None:
+        """Build a per-session Runner for this session's extra tools / gate.
 
-        On any failure the session falls back to the shared default runner
-        (MCP/fs tools simply won't be available) rather than aborting.
+        Copies ``root_agent`` with ``extra_tools`` appended and/or a
+        ``before_tool_callback`` (the ACP permission gate) applied. On any
+        failure the session falls back to the shared default runner rather
+        than aborting.
         """
-        if session_id in self._runners or not extra_tools:
+        if session_id in self._runners:
+            return
+        if not extra_tools and before_tool_callback is None:
             return
         try:
-            base_tools = list(getattr(root_agent, "tools", None) or [])
-            agent = root_agent.model_copy(update={"tools": base_tools + list(extra_tools)})
+            update: dict = {}
+            if extra_tools:
+                base_tools = list(getattr(root_agent, "tools", None) or [])
+                update["tools"] = base_tools + list(extra_tools)
+            if before_tool_callback is not None:
+                update["before_tool_callback"] = before_tool_callback
+            agent = root_agent.model_copy(update=update)
             self._runners[session_id] = self._harness.build_runner(agent=agent)
-            self._session_tools[session_id] = list(extra_tools)
+            if extra_tools:
+                self._session_tools[session_id] = list(extra_tools)
         except Exception as exc:  # noqa: BLE001 — degrade to the default runner
             logger.warning(
                 "Could not build a per-session runner for %s (%s); "
-                "falling back to the default toolset.",
+                "falling back to the default agent.",
                 session_id,
                 exc,
             )
 
     async def ensure_session(
-        self, user_id: str, session_id: str, *, extra_tools: list | None = None
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        extra_tools: list | None = None,
+        permission_requester=None,
     ) -> None:
-        """Create the session if it doesn't exist; wire ``extra_tools`` once.
+        """Create the session if it doesn't exist; wire per-session extras once.
 
-        ``extra_tools`` (MCP toolsets + fs bridge) is honored on the first call
-        for a session; later calls (e.g. the defensive re-ensure before a
-        prompt) leave the already-configured runner in place.
+        ``extra_tools`` (MCP toolsets + fs bridge) and, when
+        ``permission_requester`` is given, the ACP HITL gate (built from
+        ``ACP_PERMISSION_*`` env, chaining any existing ``before_tool_callback``)
+        are honored on the first call for a session; later calls (e.g. the
+        defensive re-ensure before a prompt) leave the runner in place.
         """
-        if extra_tools:
-            self._configure_runner(session_id, extra_tools)
+        callback = None
+        if permission_requester is not None:
+            callback = permission_callback_from_env(
+                session_id,
+                permission_requester,
+                chained=getattr(root_agent, "before_tool_callback", None),
+            )
+        if extra_tools or callback is not None:
+            self._configure_runner(session_id, extra_tools or [], callback)
         svc = self._runner_for(session_id).session_service
         existing = await svc.get_session(
             app_name=self.app_name, user_id=user_id, session_id=session_id
