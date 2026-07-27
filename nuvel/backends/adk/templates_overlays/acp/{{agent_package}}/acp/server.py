@@ -26,6 +26,8 @@ and correlates the response.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 import os
 import uuid
@@ -52,22 +54,58 @@ logger = logging.getLogger(__name__)
 DEFAULT_USER_ID = os.getenv("ACP_USER_ID", "acp-user")
 
 
-def _blocks_to_text(blocks: Any) -> str:
-    """Flatten an ACP prompt (list of content blocks) into plain text."""
+def _decode_b64(data: Any) -> Any:
+    """Best-effort base64 → bytes; ``None`` if it isn't decodable."""
+    if not isinstance(data, str):
+        return None
+    try:
+        return base64.b64decode(data, validate=False)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _prompt_parts(blocks: Any) -> list[dict]:
+    """Turn an ACP prompt (content blocks) into transport-neutral parts.
+
+    Each part is ``{"kind": "text", "text": str}`` or
+    ``{"kind": "image", "mime_type": str, "data": bytes}``. Images arrive
+    base64-encoded and are decoded here; :func:`runtime.to_genai_parts` maps
+    these into genai ``Part``s. Handles ``text`` and ``image`` blocks plus
+    embedded ``resource`` / ``resource_link`` context (text or image blob).
+    """
+    parts: list[dict] = []
     if not isinstance(blocks, list):
-        return ""
-    out: list[str] = []
+        return parts
+
+    def _add_image(data: Any, mime: Any) -> None:
+        raw = _decode_b64(data)
+        if raw is not None:
+            parts.append(
+                {"kind": "image", "mime_type": str(mime or "image/png"), "data": raw}
+            )
+
     for block in blocks:
         if not isinstance(block, dict):
             continue
         btype = block.get("type")
         if btype == "text":
-            out.append(block.get("text", ""))
+            text = block.get("text", "")
+            if text:
+                parts.append({"kind": "text", "text": text})
+        elif btype == "image":
+            _add_image(block.get("data"), block.get("mimeType"))
         elif btype in ("resource", "resource_link"):
             resource = block.get("resource")
-            if isinstance(resource, dict) and isinstance(resource.get("text"), str):
-                out.append(resource["text"])
-    return "\n".join(t for t in out if t)
+            if not isinstance(resource, dict):
+                continue
+            text = resource.get("text")
+            if isinstance(text, str) and text:
+                parts.append({"kind": "text", "text": text})
+                continue
+            mime = resource.get("mimeType", "")
+            if isinstance(mime, str) and mime.startswith("image/"):
+                _add_image(resource.get("blob"), mime)
+    return parts
 
 
 class ACPAgent:
@@ -186,7 +224,7 @@ class ACPAgent:
                 "loadSession": False,
                 "mcpCapabilities": {"http": True, "sse": True},
                 "promptCapabilities": {
-                    "image": False,
+                    "image": True,
                     "audio": False,
                     "embeddedContext": True,
                 },
@@ -242,11 +280,11 @@ class ACPAgent:
         task.add_done_callback(lambda _t, sid=session_id: self._active.pop(sid, None))
 
     async def _run_prompt(self, msg_id: Any, session_id: str, params: dict) -> None:
-        text = _blocks_to_text(params.get("prompt"))
+        prompt = _prompt_parts(params.get("prompt"))
         try:
             await self._runtime.ensure_session(DEFAULT_USER_ID, session_id)
             async for update in self._runtime.run_turn(
-                DEFAULT_USER_ID, session_id, text
+                DEFAULT_USER_ID, session_id, prompt
             ):
                 await self._emit_update(session_id, update)
         except asyncio.CancelledError:

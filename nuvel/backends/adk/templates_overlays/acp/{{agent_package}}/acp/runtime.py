@@ -44,6 +44,37 @@ def jsonable(value: Any) -> Any:
         return str(value)
 
 
+def to_genai_parts(prompt: "str | list[dict]") -> list:
+    """Map a text string or neutral prompt parts into genai ``Part``s.
+
+    Neutral parts come from the ACP server: ``{"kind": "text", "text": str}``
+    or ``{"kind": "image", "mime_type": str, "data": bytes}``. Always returns
+    at least one part so the model receives a well-formed turn.
+    """
+    from google.genai import types
+
+    if isinstance(prompt, str):
+        return [types.Part(text=prompt)]
+
+    parts: list = []
+    for part in prompt or []:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("kind")
+        if kind == "text" and part.get("text"):
+            parts.append(types.Part(text=part["text"]))
+        elif kind == "image" and part.get("data") is not None:
+            parts.append(
+                types.Part(
+                    inline_data=types.Blob(
+                        mime_type=part.get("mime_type") or "application/octet-stream",
+                        data=part["data"],
+                    )
+                )
+            )
+    return parts or [types.Part(text="")]
+
+
 def _translate_event(event: Any) -> list[AgentUpdate]:
     """Map one ADK ``Event`` into zero or more :class:`AgentUpdate`."""
     updates: list[AgentUpdate] = []
@@ -180,12 +211,17 @@ class AgentRuntime:
             )
 
     async def run_turn(
-        self, user_id: str, session_id: str, text: str
+        self, user_id: str, session_id: str, prompt: "str | list[dict]"
     ) -> AsyncIterator[AgentUpdate]:
-        """Run one prompt turn, yielding updates as the agent produces them."""
+        """Run one prompt turn, yielding updates as the agent produces them.
+
+        ``prompt`` is either plain text (the CLI path) or a list of neutral
+        prompt parts from the ACP server (text + decoded images); see
+        :func:`to_genai_parts`.
+        """
         from google.genai import types
 
-        message = types.Content(role="user", parts=[types.Part(text=text)])
+        message = types.Content(role="user", parts=to_genai_parts(prompt))
         async for event in self._runner_for(session_id).run_async(
             user_id=user_id, session_id=session_id, new_message=message
         ):

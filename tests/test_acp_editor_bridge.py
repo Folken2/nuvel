@@ -277,6 +277,8 @@ class TestACPServer(unittest.TestCase):
         self.assertEqual(agent._client_fs, {"read": True, "write": False})
         caps = res["agentCapabilities"]
         self.assertEqual(caps["mcpCapabilities"], {"http": True, "sse": True})
+        self.assertTrue(caps["promptCapabilities"]["image"])  # multimodal prompts
+        self.assertTrue(caps["promptCapabilities"]["embeddedContext"])
         self.assertFalse(caps["loadSession"])
         self.assertEqual(res["protocolVersion"], 1)
 
@@ -353,6 +355,71 @@ class TestACPServer(unittest.TestCase):
         agent = self._agent()  # FakeTransport.read() returns None → EOF immediately
         asyncio.run(agent.serve())
         self.assertTrue(agent._runtime.closed)
+
+
+# ── prompt content blocks (text + image + embedded context) ──────────
+
+
+class TestPromptParts(unittest.TestCase):
+    @staticmethod
+    def _b64(raw: bytes) -> str:
+        import base64
+
+        return base64.b64encode(raw).decode()
+
+    def test_text_block(self):
+        parts = _server._prompt_parts([{"type": "text", "text": "hello"}])
+        self.assertEqual(parts, [{"kind": "text", "text": "hello"}])
+
+    def test_image_block_is_base64_decoded(self):
+        blob = b"\x89PNG\r\n\x1a\n"
+        parts = _server._prompt_parts(
+            [{"type": "image", "mimeType": "image/png", "data": self._b64(blob)}]
+        )
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0]["kind"], "image")
+        self.assertEqual(parts[0]["mime_type"], "image/png")
+        self.assertEqual(parts[0]["data"], blob)  # decoded to raw bytes
+
+    def test_embedded_text_resource(self):
+        parts = _server._prompt_parts(
+            [{"type": "resource", "resource": {"text": "file contents"}}]
+        )
+        self.assertEqual(parts, [{"kind": "text", "text": "file contents"}])
+
+    def test_embedded_image_blob_resource(self):
+        blob = b"\xff\xd8\xff"  # jpeg magic
+        parts = _server._prompt_parts(
+            [
+                {
+                    "type": "resource",
+                    "resource": {"mimeType": "image/jpeg", "blob": self._b64(blob)},
+                }
+            ]
+        )
+        self.assertEqual(parts[0]["kind"], "image")
+        self.assertEqual(parts[0]["mime_type"], "image/jpeg")
+        self.assertEqual(parts[0]["data"], blob)
+
+    def test_mixed_and_ordered(self):
+        blob = b"abc"
+        parts = _server._prompt_parts(
+            [
+                {"type": "text", "text": "look:"},
+                {"type": "image", "mimeType": "image/gif", "data": self._b64(blob)},
+            ]
+        )
+        self.assertEqual([p["kind"] for p in parts], ["text", "image"])
+
+    def test_undecodable_image_is_dropped(self):
+        parts = _server._prompt_parts(
+            [{"type": "image", "mimeType": "image/png", "data": 12345}]
+        )
+        self.assertEqual(parts, [])
+
+    def test_non_list_prompt(self):
+        self.assertEqual(_server._prompt_parts(None), [])
+        self.assertEqual(_server._prompt_parts("nope"), [])
 
 
 # ── permission gate (session/request_permission HITL) ────────────────
