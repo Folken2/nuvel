@@ -123,6 +123,9 @@ class TestAcpOverlay(unittest.TestCase):
             "acp/jsonrpc.py",
             "acp/runtime.py",
             "acp/server.py",
+            "acp/mcp.py",
+            "acp/fs.py",
+            "acp/permission.py",
             "cli.py",
         ):
             self.assertTrue((self.pkg_dir / rel).is_file(), f"missing {rel}")
