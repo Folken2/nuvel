@@ -67,6 +67,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         with_telegram=args.with_telegram,
         with_teams=args.with_teams,
         workflow=args.workflow,
+        with_acp=args.with_acp,
     )
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
@@ -79,6 +80,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("composio")
         if result.get("workflow"):
             flags.append("workflow")
+        if result.get("with_acp"):
+            flags.append("acp")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
         channels = [
@@ -217,6 +220,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="(adk only) Generate a workflow-native agent: the root agent is an "
              "ADK 2.0 Workflow graph (agent_workflow.py) with task-mode nodes, "
              "typed contracts, and conditional routing, instead of a single LlmAgent.",
+    )
+    p_new.add_argument(
+        "--with-acp", action="store_true",
+        help="(adk only) Make the agent ACP-compatible and CLI-runnable: add an "
+             "Agent Client Protocol adapter (stdio JSON-RPC, python -m <pkg>.acp) "
+             "plus a local terminal CLI (python -m <pkg>.cli).",
     )
     p_new.set_defaults(func=_cmd_new)
 
