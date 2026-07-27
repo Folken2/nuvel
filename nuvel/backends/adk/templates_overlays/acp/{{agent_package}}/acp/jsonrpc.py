@@ -41,6 +41,11 @@ def make_notification(method: str, params: Any) -> dict:
     return {"jsonrpc": "2.0", "method": method, "params": params}
 
 
+def make_request(msg_id: Any, method: str, params: Any) -> dict:
+    """An agent→client request (e.g. ``fs/read_text_file``) awaiting a response."""
+    return {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params}
+
+
 class StdioTransport:
     """Newline-delimited JSON-RPC transport over a pair of text streams.
 

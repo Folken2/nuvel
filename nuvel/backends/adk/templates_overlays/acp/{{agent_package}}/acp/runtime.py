@@ -10,11 +10,14 @@ terminal CLI (``cli.py``) stay thin and behave identically to the server.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 from ..agent import root_agent
 from ..harness import AgentHarness
+
+logger = logging.getLogger(__name__)
 
 APP_NAME = "{{agent_name}}"
 
@@ -80,25 +83,67 @@ def _translate_event(event: Any) -> list[AgentUpdate]:
 
 
 class AgentRuntime:
-    """Owns the Runner and exposes session + turn helpers.
+    """Owns the Runner(s) and exposes session + turn helpers.
 
-    Construct once and reuse across turns/sessions. The Runner is built via
-    ``AgentHarness`` so it shares the process-wide session/artifact services
+    Construct once and reuse across turns/sessions. Runners are built via
+    ``AgentHarness`` so they share the process-wide session/artifact services
     and the full plugin chain with the FastAPI server.
+
+    Most sessions run against a single shared ``_default_runner``. A session
+    that supplies *extra tools* (editor-injected MCP servers, or the fs
+    bridge) gets its own Runner wrapping a copy of ``root_agent`` with those
+    tools appended — see :meth:`ensure_session`.
     """
 
     def __init__(self) -> None:
         self.app_name = APP_NAME
         self._harness = AgentHarness.get(APP_NAME)
-        self._runner = self._harness.build_runner(agent=root_agent)
+        self._default_runner = self._harness.build_runner(agent=root_agent)
+        # session_id -> a per-session Runner (only when the session added tools).
+        self._runners: dict[str, Any] = {}
+        # session_id -> the extra toolsets/tools to close on shutdown.
+        self._session_tools: dict[str, list] = {}
 
     @property
     def runner(self):
-        return self._runner
+        return self._default_runner
 
-    async def ensure_session(self, user_id: str, session_id: str) -> None:
-        """Create the session if it doesn't already exist."""
-        svc = self._runner.session_service
+    def _runner_for(self, session_id: str):
+        return self._runners.get(session_id, self._default_runner)
+
+    def _configure_runner(self, session_id: str, extra_tools: list) -> None:
+        """Build a per-session Runner whose agent has ``extra_tools`` appended.
+
+        On any failure the session falls back to the shared default runner
+        (MCP/fs tools simply won't be available) rather than aborting.
+        """
+        if session_id in self._runners or not extra_tools:
+            return
+        try:
+            base_tools = list(getattr(root_agent, "tools", None) or [])
+            agent = root_agent.model_copy(update={"tools": base_tools + list(extra_tools)})
+            self._runners[session_id] = self._harness.build_runner(agent=agent)
+            self._session_tools[session_id] = list(extra_tools)
+        except Exception as exc:  # noqa: BLE001 — degrade to the default runner
+            logger.warning(
+                "Could not build a per-session runner for %s (%s); "
+                "falling back to the default toolset.",
+                session_id,
+                exc,
+            )
+
+    async def ensure_session(
+        self, user_id: str, session_id: str, *, extra_tools: list | None = None
+    ) -> None:
+        """Create the session if it doesn't exist; wire ``extra_tools`` once.
+
+        ``extra_tools`` (MCP toolsets + fs bridge) is honored on the first call
+        for a session; later calls (e.g. the defensive re-ensure before a
+        prompt) leave the already-configured runner in place.
+        """
+        if extra_tools:
+            self._configure_runner(session_id, extra_tools)
+        svc = self._runner_for(session_id).session_service
         existing = await svc.get_session(
             app_name=self.app_name, user_id=user_id, session_id=session_id
         )
@@ -114,8 +159,24 @@ class AgentRuntime:
         from google.genai import types
 
         message = types.Content(role="user", parts=[types.Part(text=text)])
-        async for event in self._runner.run_async(
+        async for event in self._runner_for(session_id).run_async(
             user_id=user_id, session_id=session_id, new_message=message
         ):
             for update in _translate_event(event):
                 yield update
+
+    async def aclose(self) -> None:
+        """Close any per-session toolsets (e.g. MCP subprocesses)."""
+        for tools in self._session_tools.values():
+            for tool in tools:
+                close = getattr(tool, "close", None)
+                if close is None:
+                    continue
+                try:
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+                    logger.warning("Error closing session tool %r: %s", tool, exc)
+        self._session_tools.clear()
+        self._runners.clear()
