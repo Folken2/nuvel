@@ -16,9 +16,14 @@ overlays from nuvel/backends/adk/templates_overlays/<bundle>/:
                       a single hosted MCP endpoint). Independent of
                       --persona.
 
+    --with-acp        Agent Client Protocol adapter (stdio JSON-RPC, per
+                      agentclientprotocol.com) plus a local terminal CLI,
+                      so the agent is runnable as an editor subprocess and
+                      from the command line. Independent of the others.
+
 Usage:
     python scaffold.py <agent-name> [--output-dir DIR] [--description DESC]
-                                    [--persona] [--with-composio]
+                                    [--persona] [--with-composio] [--with-acp]
 """
 
 from __future__ import annotations
@@ -321,6 +326,54 @@ _TEAMS_README_BLOCK = (
 )
 
 
+_ACP_ENV_BLOCK = (
+    "# ── ACP adapter / local CLI ──────────────────────────────────────\n"
+    "# Both entrypoints run the agent outside the HTTP server:\n"
+    "#   python -m {{agent_package}}.acp     ACP subprocess (stdio JSON-RPC)\n"
+    "#   python -m {{agent_package}}.cli      terminal one-shot / REPL\n"
+    "# Set DEV_MODE=true above for in-memory sessions (no Postgres needed).\n"
+    "# Optional: user id these entrypoints attribute sessions to.\n"
+    "# ACP_USER_ID=acp-user\n"
+    "\n"
+)
+
+_ACP_README_BLOCK = (
+    "\n## ACP adapter & local CLI\n"
+    "\n"
+    "This agent is runnable outside the FastAPI server two ways. Both reuse\n"
+    "the same `AgentHarness`-wired Runner, so tools, plugins, memory, and\n"
+    "cost tracking behave identically to the server. Use `DEV_MODE=true` for\n"
+    "in-memory sessions locally.\n"
+    "\n"
+    "### Agent Client Protocol (editor integration)\n"
+    "\n"
+    "[ACP](https://agentclientprotocol.com) is the JSON-RPC-over-stdio protocol\n"
+    "code editors (e.g. Zed) use to talk to agents. Launch the adapter with:\n"
+    "\n"
+    "```\n"
+    "python -m {{agent_package}}.acp\n"
+    "```\n"
+    "\n"
+    "The client drives it over the pipe: `initialize` → `session/new` →\n"
+    "`session/prompt`. The agent streams `session/update` notifications\n"
+    "(`agent_message_chunk`, `agent_thought_chunk`, `tool_call`,\n"
+    "`tool_call_update`) and returns a `stopReason` per turn; `session/cancel`\n"
+    "interrupts an in-flight turn. stdout is reserved for protocol traffic —\n"
+    "all logging goes to stderr.\n"
+    "\n"
+    "To register it in Zed, add an entry under `agent_servers` in your Zed\n"
+    "settings pointing `command` at `python` and `args` at\n"
+    "`[\"-m\", \"{{agent_package}}.acp\"]` (with `cwd` set to this project).\n"
+    "\n"
+    "### Terminal CLI\n"
+    "\n"
+    "```\n"
+    "python -m {{agent_package}}.cli \"summarize today's incidents\"   # one-shot\n"
+    "python -m {{agent_package}}.cli                                  # interactive REPL\n"
+    "```\n"
+)
+
+
 # ── Placeholder replacement ─────────────────────────────────────────
 
 
@@ -334,6 +387,7 @@ def _build_replacements(
     with_slack: bool = False,
     with_telegram: bool = False,
     with_teams: bool = False,
+    with_acp: bool = False,
 ) -> dict[str, str]:
     # Frame priority: user's --system-prompt wins, else persona-aware default.
     if system_prompt:
@@ -432,6 +486,14 @@ def _build_replacements(
         "{{gateway_requirements}}": gateway_requirements,
         "{{gateway_env_block}}": gateway_env_block,
         "{{gateway_readme_section}}": gateway_readme_section,
+        # ACP adapter / local CLI. The blocks embed "{{agent_package}}", which
+        # _substitute won't re-expand once injected, so pre-substitute here.
+        "{{acp_env_block}}": (
+            _ACP_ENV_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
+        ),
+        "{{acp_readme_section}}": (
+            _ACP_README_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
+        ),
     }
 
 
@@ -506,6 +568,7 @@ def scaffold_agent(
     with_telegram: bool = False,
     with_teams: bool = False,
     workflow: bool = False,
+    with_acp: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -526,6 +589,10 @@ def scaffold_agent(
                   ADK 2.0 `Workflow` graph (agent_workflow.py) with task-mode
                   nodes and typed contracts, and agent.py becomes a shim
                   re-exporting it. Default is a single LlmAgent root.
+        with_acp: Add the Agent Client Protocol adapter (stdio JSON-RPC) plus
+                  a local terminal CLI, so the agent is runnable as an editor
+                  subprocess (`python -m <pkg>.acp`) and from the command line
+                  (`python -m <pkg>.cli`). Independent of the other flags.
 
     Returns:
         A dict with status and metadata.
@@ -556,7 +623,7 @@ def scaffold_agent(
 
     replacements = _build_replacements(
         name, package, description, system_prompt, persona, with_composio,
-        with_slack, with_telegram, with_teams,
+        with_slack, with_telegram, with_teams, with_acp,
     )
     files_created: list[str] = []
 
@@ -589,6 +656,8 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "gateway-slack", target, replacements, files_created)
         if with_teams:
             _stamp_tree(OVERLAYS_DIR / "gateway-teams", target, replacements, files_created)
+        if with_acp:
+            _stamp_tree(OVERLAYS_DIR / "acp", target, replacements, files_created)
 
         return {
             "status": "ok",
@@ -603,6 +672,7 @@ def scaffold_agent(
             "with_telegram": with_telegram,
             "with_teams": with_teams,
             "workflow": workflow,
+            "with_acp": with_acp,
         }
 
     except Exception as exc:
@@ -636,6 +706,12 @@ def main() -> None:
         help="Generate a workflow-native agent: the root agent is an ADK 2.0 "
              "Workflow graph with task-mode nodes and typed contracts.",
     )
+    parser.add_argument(
+        "--with-acp", action="store_true",
+        help="Add the Agent Client Protocol adapter (stdio JSON-RPC) plus a "
+             "local terminal CLI, so the agent is runnable as an editor "
+             "subprocess and from the command line.",
+    )
     args = parser.parse_args()
 
     result = scaffold_agent(
@@ -645,6 +721,7 @@ def main() -> None:
         persona=args.persona,
         with_composio=args.with_composio,
         workflow=args.workflow,
+        with_acp=args.with_acp,
     )
 
     if result["status"] == "ok":
@@ -655,6 +732,8 @@ def main() -> None:
             flags.append("persona")
         if result.get("with_composio"):
             flags.append("composio")
+        if result.get("with_acp"):
+            flags.append("acp")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
     else:

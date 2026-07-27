@@ -39,7 +39,7 @@ Every framework has the same shape under `nuvel/backends/<framework>/`:
 
 When adding cross-cutting features (e.g. a new `--with-<channel>` flag), you almost always need to touch **all three** scaffolders: the ADK one to implement it, the other two to add it to their rejection lists. See [CONTRIBUTING.md](CONTRIBUTING.md) "Adding a new messaging-app channel" for the canonical recipe.
 
-ADK has an additional `templates_overlays/` directory (e.g. `gateway-slack/`, `gateway-telegram/`, `gateway-teams/`) merged onto the base templates when the corresponding flag is set.
+ADK has an additional `templates_overlays/` directory (e.g. `gateway-slack/`, `gateway-telegram/`, `gateway-teams/`, `acp/`) merged onto the base templates when the corresponding flag is set. The `acp/` overlay (`--with-acp`) adds an Agent Client Protocol adapter (`<pkg>/acp/`, stdio JSON-RPC per agentclientprotocol.com) plus a local terminal CLI (`<pkg>/cli.py`), both reusing the same `AgentHarness` Runner — so the agent is runnable as an editor subprocess and from the shell, not only as the FastAPI server.
 
 ### Two plugin chains — don't confuse them
 
