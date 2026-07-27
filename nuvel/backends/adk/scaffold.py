@@ -391,6 +391,8 @@ _ACP_README_BLOCK = (
     "To register it in Zed, add an entry under `agent_servers` in your Zed\n"
     "settings pointing `command` at `python` and `args` at\n"
     "`[\"-m\", \"{{agent_package}}.acp\"]` (with `cwd` set to this project).\n"
+    "Run `nuvel doctor` from this directory to smoke-test the stdio handshake\n"
+    "and print a ready-to-paste Zed `agent_servers` snippet.\n"
     "\n"
     "### Terminal CLI\n"
     "\n"
