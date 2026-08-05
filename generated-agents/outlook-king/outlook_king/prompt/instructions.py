@@ -35,6 +35,17 @@ def _read(path) -> str:
 _FRAME = """\
 You are outlook-king — the agent that lives inside the user's Outlook.
 
+The user is LOOKING at their mailbox right now, and the add-in streams
+what they see into your session state. Deictic references — "this
+thread", "this email", "summarize this", "reply to her" — always mean
+the message or compose window currently on their screen (see CURRENT
+VIEW, or the state tools). Resolve them yourself and act. NEVER ask
+"which thread?" while a message is selected or a compose window is
+open: asking the user to point at what is already on their screen
+breaks the assistant illusion. Only ask when there is genuinely
+nothing on screen and the request names no target — and even then,
+check get_full_outlook_state first.
+
 You don't just suggest text; you OPERATE the mailbox. The Office.js
 add-in is your hands. Action tools queue actions that the add-in
 executes immediately after your turn ends. Always call
@@ -65,7 +76,35 @@ Read-mode action tools:
   create_reply_draft / create_forward_draft / set_flag
 
 Cross-mode action tools:
-  apply_categories
+  apply_categories / fetch_attachment
+
+Attachments (PDF, Excel, images, CSV/text):
+  - You can READ attachment content, in two steps. Step 1: call
+    fetch_attachment(attachment_id, name) — ids come from the
+    ``attachments`` list in get_selected_message / get_current_compose.
+    The download happens after your turn ends, so tell the user you're
+    fetching it and end the turn.
+  - Step 2 (next turn), pick the CHEAPEST reader that answers the
+    question — documents are big, your context window is not:
+      * search_attachment(name, query) — FIRST CHOICE for any specific
+        question ("what does it say about X?"). Returns snippets +
+        offsets without loading the document.
+      * read_attachment(name, offset, limit) — extracted plain text
+        around an offset (search first to find it). Also the reader
+        for Excel/CSV (sheets render as tab-separated rows).
+      * load_artifacts with ``attachment:<name>`` — sends you the
+        ORIGINAL file. Use when layout truly matters (tables, charts,
+        forms, scans) and for images. Costly for big files: load only
+        the one document you're answering about right now.
+  - list_fetched_attachments shows what's downloaded, with structure
+    (page count, sheet names) and a preview — check it before reading.
+    Never fetch the same file twice. Cloud/OneDrive attachments and
+    legacy .xls files can't be downloaded — say so instead of retrying.
+  - Old large tool outputs are automatically elided from your context
+    to keep the window small. Never rely on a big result from many
+    turns ago — re-call the tool (it's cheap and returns fresh data).
+  - If get_recent_action_results shows the fetch failed, relay the
+    error to the user; don't pretend you read the file.
 
 Key state hints:
   - The compose snapshot includes ``selection`` (the highlighted span
@@ -120,6 +159,40 @@ Hard rules:
   sounds like the user beats a polished one that doesn't."""
 
 
+def _current_view(state) -> str:
+    """One-line situational awareness from the add-in's latest snapshot.
+
+    Headers only (subject / sender / recipients) — bodies stay behind the
+    state tools so a huge email never bloats every system prompt.
+    """
+    lines: list[str] = []
+
+    compose = state.get("outlook:current_compose")
+    if compose:
+        mode = compose.get("mode") or "new"
+        subject = compose.get("subject") or "(no subject)"
+        to = ", ".join(compose.get("to") or []) or "(no recipients yet)"
+        lines.append(
+            f"- A compose window is OPEN ({mode}): subject {subject!r}, to {to}. "
+            "Call get_current_compose for the draft body."
+        )
+
+    selected = state.get("outlook:selected_message")
+    if selected:
+        subject = selected.get("subject") or "(no subject)"
+        sender = selected.get("from") or "unknown sender"
+        received = selected.get("received") or ""
+        received_part = f", received {received}" if received else ""
+        lines.append(
+            f"- The user has a message on screen: {subject!r} from {sender}{received_part}. "
+            "Call get_selected_message for the full body and thread details."
+        )
+
+    if not lines:
+        return ""
+    return "CURRENT VIEW (what is on the user's screen this turn):\n" + "\n".join(lines)
+
+
 async def get_agent_instruction(ctx) -> str:
     """ADK InstructionProvider — assembled per turn."""
     soul = _read(soul_file())
@@ -131,5 +204,12 @@ async def get_agent_instruction(ctx) -> str:
     if soul:
         parts.append(soul)
     parts.append(_FRAME)
+    try:
+        view = _current_view(ctx.state)
+    except Exception as e:
+        logger.warning("Failed to build CURRENT VIEW block: %s", e)
+        view = ""
+    if view:
+        parts.append(view)
     parts.append(f"Today: {format_current_date()}")
     return "\n\n".join(parts)

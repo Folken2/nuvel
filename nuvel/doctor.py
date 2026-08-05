@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
@@ -336,6 +338,124 @@ def run_agent_checks(cwd: Path, info: AgentInfo) -> list[Check]:
     return checks
 
 
+# ── ACP adapter (--with-acp) ────────────────────────────────────────
+
+
+def detect_acp_package(cwd: Path) -> Optional[str]:
+    """Return the package name of a --with-acp agent (has ``<pkg>/acp/__main__.py``)."""
+    if not cwd.is_dir():
+        return None
+    for sub in sorted(cwd.iterdir()):
+        if sub.is_dir() and (sub / "acp" / "__main__.py").is_file():
+            return sub.name
+    return None
+
+
+def zed_config_snippet(cwd: Path, pkg: str, *, python: str | None = None) -> str:
+    """A ready-to-paste Zed ``agent_servers`` entry for this ACP agent."""
+    snippet = {
+        "agent_servers": {
+            pkg.replace("_", "-"): {
+                "command": python or sys.executable,
+                "args": ["-m", f"{pkg}.acp"],
+                "cwd": str(cwd),
+            }
+        }
+    }
+    return json.dumps(snippet, indent=2)
+
+
+def check_acp_handshake(cwd: Path, pkg: str, timeout: float = 20.0) -> Check:
+    """Smoke-test the ACP stdio protocol: send ``initialize``, expect a reply.
+
+    Runs the adapter with ``DEV_MODE=true`` so it uses in-memory services and
+    doesn't need a database — this checks the JSON-RPC handshake, not config.
+    """
+    name = "ACP stdio handshake"
+    cmd = [sys.executable, "-m", f"{pkg}.acp"]
+    env = {**os.environ, "DEV_MODE": "true", "LOG_LEVEL": "ERROR"}
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+    except OSError as exc:
+        return Check(name, FAIL, f"could not launch: {exc}")
+
+    request = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}},
+        }
+    )
+    holder: dict[str, str] = {}
+
+    def _read_line() -> None:
+        try:
+            holder["line"] = proc.stdout.readline() if proc.stdout else ""
+        except Exception as exc:  # noqa: BLE001
+            holder["error"] = str(exc)
+
+    try:
+        if proc.stdin:
+            proc.stdin.write(request + "\n")
+            proc.stdin.flush()
+    except OSError:
+        pass  # process may have died on import; handled via readline/EOF below
+
+    reader = threading.Thread(target=_read_line, daemon=True)
+    reader.start()
+    reader.join(timeout)
+
+    def _stop() -> None:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+    if reader.is_alive():
+        _stop()
+        return Check(name, WARN, f"no response within {timeout:.0f}s (are agent deps installed?)")
+
+    line = holder.get("line", "")
+    stderr_tail = ""
+    if not line and proc.stderr:
+        try:
+            stderr_tail = (proc.stderr.read() or "")[-300:]
+        except Exception:  # noqa: BLE001
+            stderr_tail = ""
+    _stop()
+
+    if not line:
+        low = stderr_tail.lower()
+        if "modulenotfound" in low or "importerror" in low or "no module named" in low:
+            return Check(name, WARN, "agent deps not installed (pip install -r requirements.txt)")
+        detail = stderr_tail.strip().replace("\n", " ")[:120] or "no output"
+        return Check(name, FAIL, f"no initialize response — {detail}")
+
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        return Check(name, FAIL, f"invalid JSON-RPC line: {line.strip()[:80]}")
+
+    result = msg.get("result") or {}
+    if "protocolVersion" in result and "agentCapabilities" in result:
+        return Check(name, OK, f"initialize → protocolVersion {result['protocolVersion']}")
+    return Check(name, FAIL, f"unexpected initialize response: {line.strip()[:80]}")
+
+
+def run_acp_checks(cwd: Path, pkg: str) -> list[Check]:
+    return [_safe(check_acp_handshake, "ACP stdio handshake", cwd, pkg)]
+
+
 # ── orchestration ───────────────────────────────────────────────────
 
 
@@ -373,9 +493,18 @@ def run_doctor(cwd: Path | None = None) -> int:
         print("No generated agent detected in cwd (skipping agent checks).")
         print()
 
-    total_ok = ok1 + ok2
-    total_warn = warn1 + warn2
-    total_fail = fail1 + fail2
+    ok3 = warn3 = fail3 = 0
+    acp_pkg = detect_acp_package(cwd)
+    if acp_pkg:
+        ok3, warn3, fail3 = _print_section("ACP adapter", run_acp_checks(cwd, acp_pkg))
+        print("  Zed — add to settings.json (agent_servers):")
+        for line in zed_config_snippet(cwd, acp_pkg).splitlines():
+            print(f"    {line}")
+        print()
+
+    total_ok = ok1 + ok2 + ok3
+    total_warn = warn1 + warn2 + warn3
+    total_fail = fail1 + fail2 + fail3
     print("Summary")
     print(f"  {total_ok} ok, {total_warn} warn, {total_fail} fail")
     return 1 if total_fail else 0

@@ -234,6 +234,63 @@ class TestTeamsOverlay(unittest.TestCase):
         self.assertIn('os.getenv("AGENT_APP_NAME", "agent-tm")', bridge)
 
 
+class TestGatewayRunnerWiring(unittest.TestCase):
+    """Gateway state-injection must build Runners via AgentHarness, not inline."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _run_adk_for(self, name, **flags):
+        result = adk_scaffold(name, output_dir=self.tmpdir, **flags)
+        self.assertEqual(result["status"], "ok")
+        return (Path(result["path"]) / "run_adk.py").read_text()
+
+    def test_telegram_gateway_uses_agent_harness(self):
+        run_adk = self._run_adk_for("agent-w1", with_telegram=True)
+        self.assertIn("from agent_w1.harness import AgentHarness", run_adk)
+        self.assertIn("_harness = AgentHarness.get(app.state.app_name)", run_adk)
+        self.assertIn("app.state.runner = _harness.build_runner(agent=_root)", run_adk)
+
+    def test_slack_gateway_uses_agent_harness(self):
+        run_adk = self._run_adk_for("agent-w2", with_slack=True)
+        self.assertIn("from agent_w2.harness import AgentHarness", run_adk)
+        self.assertIn("_harness = AgentHarness.get(app.state.app_name)", run_adk)
+        self.assertIn("app.state.runner = _harness.build_runner(agent=_root)", run_adk)
+
+    def test_teams_gateway_uses_agent_harness(self):
+        # Teams is a sidecar with no run_adk.py mount, but the shared
+        # state-injection block is still emitted when with_teams is set.
+        run_adk = self._run_adk_for("agent-w3", with_teams=True)
+        self.assertIn("from agent_w3.harness import AgentHarness", run_adk)
+        self.assertIn("_harness = AgentHarness.get(app.state.app_name)", run_adk)
+
+    def test_all_channels_together_use_agent_harness_once(self):
+        run_adk = self._run_adk_for(
+            "agent-w4", with_slack=True, with_telegram=True, with_teams=True,
+        )
+        # Scope to the gateway state-injection block only — AgentHarness is
+        # legitimately imported elsewhere too (streaming, standard mode, cron).
+        state_start = run_adk.index('app.state.app_name = "agent-w4"')
+        state_end = run_adk.index("app.include_router")
+        state_block = run_adk[state_start:state_end]
+        self.assertEqual(
+            state_block.count("from agent_w4.harness import AgentHarness"), 1,
+            "AgentHarness should be imported exactly once in the state-injection block",
+        )
+        self.assertIn("_harness = AgentHarness.get(app.state.app_name)", state_block)
+
+    def test_gateway_wiring_does_not_construct_runner_directly(self):
+        run_adk = self._run_adk_for("agent-w5", with_telegram=True)
+        # Runner() must not be instantiated by hand in the gateway/state
+        # injection block — only AgentHarness.build_runner() may do so.
+        state_start = run_adk.index('app.state.app_name = "agent-w5"')
+        state_end = run_adk.index("app.include_router")
+        self.assertNotIn("Runner(", run_adk[state_start:state_end])
+
+
 class TestAllChannelsTogether(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -276,3 +333,27 @@ class TestAllChannelsTogether(unittest.TestCase):
             if path.is_file() and path.suffix in (".py", ".md", ".txt", ".example"):
                 content = path.read_text(errors="ignore")
                 self.assertNotIn("{{", content, f"Unrendered placeholder in {path}")
+
+
+class TestGatewayRunnerWiring(unittest.TestCase):
+    """The gateway-injected Runner must carry artifact_service and plugins,
+    not just a bare session_service (Phase 1 fix)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        result = adk_scaffold("agent-gw", output_dir=self.tmpdir, with_telegram=True)
+        self.assertEqual(result["status"], "ok")
+        self.agent_dir = Path(result["path"])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_run_adk_wires_artifact_service_and_plugins(self):
+        run_adk = (self.agent_dir / "run_adk.py").read_text()
+        # Phase 2 routes through AgentHarness instead of inline wiring
+        self.assertIn("AgentHarness", run_adk)
+        self.assertIn("build_runner", run_adk)
+
+    def test_plugins_init_exposes_plugin_instances(self):
+        plugins_init = (self.agent_dir / "agent_gw" / "plugins" / "__init__.py").read_text()
+        self.assertIn("PLUGIN_INSTANCES", plugins_init)

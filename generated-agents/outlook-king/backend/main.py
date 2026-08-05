@@ -32,6 +32,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -61,6 +62,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("outlook_king.backend")
 
+from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.artifacts import InMemoryArtifactService
@@ -80,10 +82,20 @@ from outlook_king.tools.outlook_actions import (
     PENDING_ACTIONS_KEY,
     ACTION_RESULTS_KEY,
 )
+from outlook_king.tools.attachment_tools import (
+    FETCHED_ATTACHMENTS_KEY,
+    MAX_FETCH_BYTES,
+)
+from outlook_king.utils.attachment_extract import (
+    extract_attachment_text,
+    guess_mime_type,
+)
 from outlook_king.tools.style_tools import record_sent_fingerprint
 from outlook_king.state.memory_service import NeonMemoryService
+from outlook_king.state.memory_service_dev import InMemoryMemoryService
 from outlook_king.state.memory_singleton import set_memory_service
 from outlook_king.plugins.memory_plugin import MemoryPlugin
+from outlook_king.plugins.context_budget_plugin import ContextBudgetPlugin
 
 APP_NAME = "outlook_king"
 MAX_RECENT_ACTIONS = 25
@@ -91,29 +103,74 @@ MAX_RECENT_ACTIONS = 25
 session_service = InMemorySessionService()
 artifact_service = InMemoryArtifactService()
 
+
+def _build_compaction_config() -> EventsCompactionConfig | None:
+    """Conversation compaction via ADK's built-in sliding window.
+
+    Every COMPACTION_INTERVAL user invocations, older events are
+    summarized into a single compaction event (carrying
+    COMPACTION_OVERLAP previously-compacted invocations for
+    continuity), so plain conversational history stops growing
+    unboundedly. The summarizer defaults to the root agent's own model
+    (works with LiteLLM/OpenRouter). Complements ContextBudgetPlugin,
+    which elides heavy tool payloads immediately rather than every N
+    turns. Set COMPACTION_INTERVAL=0 to disable.
+    """
+    interval = int(os.getenv("COMPACTION_INTERVAL", "10"))
+    if interval <= 0:
+        return None
+    overlap = int(os.getenv("COMPACTION_OVERLAP", "2"))
+    return EventsCompactionConfig(
+        compaction_interval=interval, overlap_size=overlap
+    )
+
+
+# Single App shared by all requests: root agent + plugins + compaction.
+# (Runner's `plugins=` argument is deprecated — they live on the App now.)
+adk_app = App(
+    name=APP_NAME,
+    root_agent=root_agent,
+    plugins=[MemoryPlugin(), ContextBudgetPlugin()],
+    events_compaction_config=_build_compaction_config(),
+)
+
 _known_sessions: set[str] = set()
 _db_pool: AsyncConnectionPool | None = None
-_memory_service: NeonMemoryService | None = None
+_memory_service: NeonMemoryService | InMemoryMemoryService | None = None
+
+
+def _is_dev_mode() -> bool:
+    return os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db_pool, _memory_service
     database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError(
-            "DATABASE_URL is required. Point it at your Neon connection string."
+    if database_url:
+        _db_pool = AsyncConnectionPool(database_url, min_size=1, max_size=10, open=False)
+        await _db_pool.open()
+        _memory_service = NeonMemoryService(_db_pool, app_name=APP_NAME)
+        logger.info("outlook-king backend starting on PID %d (Neon pool open)", os.getpid())
+    elif _is_dev_mode():
+        _memory_service = InMemoryMemoryService(app_name=APP_NAME)
+        logger.info(
+            "outlook-king backend starting on PID %d "
+            "(DEV_MODE: in-memory memory service, resets on restart)",
+            os.getpid(),
         )
-    _db_pool = AsyncConnectionPool(database_url, min_size=1, max_size=10, open=False)
-    await _db_pool.open()
-    _memory_service = NeonMemoryService(_db_pool, app_name=APP_NAME)
+    else:
+        raise RuntimeError(
+            "DATABASE_URL is required. Point it at your Neon connection string, "
+            "or set DEV_MODE=true for an in-memory store that resets on restart."
+        )
     set_memory_service(_memory_service)
-    logger.info("outlook-king backend starting on PID %d (Neon pool open)", os.getpid())
     try:
         yield
     finally:
         logger.info("outlook-king backend shutdown")
-        await _db_pool.close()
+        if _db_pool is not None:
+            await _db_pool.close()
 
 
 app = FastAPI(title="outlook-king backend", lifespan=lifespan)
@@ -254,6 +311,120 @@ class ActionResultRequest(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
+class AttachmentContentRequest(BaseModel):
+    session_id: str
+    user_id: str | None = None  # deprecated, ignored; resolved from X-User-Email header
+    attachment_id: str
+    name: str
+    content_type: str = ""
+    # Office.js AttachmentContentFormat: "base64" for files, "eml" /
+    # "iCalendar" arrive as plain text. "url" (cloud attachments) is
+    # rejected client-side — there are no bytes to upload.
+    format: str = "base64"
+    content: str
+
+
+class FrontendLogEntry(BaseModel):
+    level: str = "info"
+    message: str = ""
+    data: dict | None = None
+    timestamp: str = ""
+    source: str = "frontend"
+
+
+class FrontendLogBatch(BaseModel):
+    entries: list[FrontendLogEntry] = Field(default_factory=list)
+
+
+# ── Error classification ────────────────────────────────────────────
+#
+# Raw exception strings must never reach the add-in — they can contain
+# connection strings, provider payloads, or tracebacks. Every agent-run
+# failure is mapped to a stable code + a message safe to show the user;
+# the raw exception only goes to the server log.
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def classify_agent_error(exc: BaseException) -> tuple[int, str, str]:
+    """Map an exception to ``(http_status, error_code, user_message)``."""
+    chain = _exception_chain(exc)
+    names = {type(e).__name__ for e in chain}
+    modules = {type(e).__module__ or "" for e in chain}
+    text = " ".join(str(e) for e in chain).lower()
+
+    if any(m.startswith("psycopg") for m in modules) or "PoolTimeout" in names:
+        return (
+            503,
+            "memory_unavailable",
+            "The assistant's memory store is temporarily unavailable. "
+            "Please try again in a moment.",
+        )
+    if "RateLimitError" in names or "rate limit" in text or "quota exceeded" in text:
+        return (
+            503,
+            "llm_rate_limited",
+            "The AI service is handling too many requests right now. "
+            "Please try again in a few seconds.",
+        )
+    if (
+        any(n in names for n in ("AuthenticationError", "PermissionDeniedError"))
+        or "invalid api key" in text
+        or "authentication" in text
+    ):
+        return (
+            502,
+            "llm_auth_failed",
+            "The AI service rejected this deployment's credentials. "
+            "Please contact your administrator.",
+        )
+    if (
+        any("Timeout" in n or n == "TimeoutError" for n in names)
+        or "timed out" in text
+        or "timeout" in text
+    ):
+        return (
+            504,
+            "upstream_timeout",
+            "The request took too long to complete. Please try again.",
+        )
+    if any(n in names for n in ("APIConnectionError", "ConnectionError", "ServiceUnavailableError")) or (
+        "connection" in text and any(w in text for w in ("refused", "reset", "closed", "failed"))
+    ):
+        return (
+            503,
+            "upstream_unavailable",
+            "A service the assistant depends on is temporarily unreachable. "
+            "Please try again in a moment.",
+        )
+    return (
+        500,
+        "internal_error",
+        "Something went wrong while processing your request. Please try "
+        "again — if it keeps happening, contact support.",
+    )
+
+
+def _agent_error_detail(exc: BaseException) -> tuple[int, dict]:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, dict) else {
+            "code": "internal_error",
+            "message": str(exc.detail),
+        }
+        return exc.status_code, detail
+    status, code, message = classify_agent_error(exc)
+    return status, {"code": code, "message": message}
+
+
 # ── Session helpers ─────────────────────────────────────────────────
 
 
@@ -262,11 +433,22 @@ async def _ensure_session(session_id: str, user_id: str) -> None:
     if cache_key in _known_sessions:
         return
     try:
-        await session_service.create_session(
+        existing = await session_service.get_session(
             app_name=APP_NAME, user_id=user_id, session_id=session_id
         )
-    except Exception:
-        pass
+        if existing is None:
+            await session_service.create_session(
+                app_name=APP_NAME, user_id=user_id, session_id=session_id
+            )
+    except Exception as exc:
+        logger.exception("Failed to ensure session %s for user %s", session_id, user_id)
+        raise HTTPException(
+            503,
+            {
+                "code": "session_unavailable",
+                "message": "Could not initialize the conversation session. Please try again.",
+            },
+        ) from exc
     _known_sessions.add(cache_key)
 
 
@@ -286,7 +468,13 @@ async def _append_state_delta(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
     if session is None:
-        raise HTTPException(500, "Failed to load session after creation")
+        raise HTTPException(
+            503,
+            {
+                "code": "session_unavailable",
+                "message": "Could not load the conversation session. Please try again.",
+            },
+        )
     event = Event(
         invocation_id=f"sys-{uuid.uuid4().hex[:8]}",
         author=author,
@@ -351,7 +539,51 @@ async def get_user_id(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "app": APP_NAME}
+    """Liveness + dependency probe.
+
+    Returns 200 when fully healthy, 503 with per-check detail when a
+    dependency is down — so load balancers and the add-in's warm-up
+    banner can tell "booting" apart from "up but degraded".
+    """
+    checks: dict[str, str] = {}
+    healthy = True
+    if _db_pool is not None:
+        try:
+            async with _db_pool.connection(timeout=2) as conn:
+                await conn.execute("SELECT 1")
+            checks["database"] = "ok"
+        except Exception as exc:
+            logger.warning("Health check: database unreachable: %s", exc)
+            checks["database"] = "error"
+            healthy = False
+    body = {"status": "ok" if healthy else "degraded", "app": APP_NAME, "checks": checks}
+    if not healthy:
+        return JSONResponse(status_code=503, content=body)
+    return body
+
+
+_frontend_logger = logging.getLogger("outlook_king.frontend")
+_FRONTEND_LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+
+@app.post("/api/logs")
+async def ingest_frontend_logs(batch: FrontendLogBatch):
+    """Sink for the add-in's batched remote logger (src/config/logger.ts).
+
+    Without this route every frontend log line 404s silently and add-in
+    failures are invisible in server logs.
+    """
+    for entry in batch.entries[:100]:
+        level = _FRONTEND_LOG_LEVELS.get(entry.level, logging.INFO)
+        _frontend_logger.log(
+            level, "%s | %s | %s", entry.source, entry.message, entry.data or {}
+        )
+    return {"status": "ok"}
 
 
 @app.post("/api/outlook/context")
@@ -379,12 +611,10 @@ async def _run_agent_once(
     await _write_outlook_state(session_id, user_id, compose, selected, account)
 
     runner = Runner(
-        app_name=APP_NAME,
-        agent=root_agent,
+        app=adk_app,
         session_service=session_service,
         artifact_service=artifact_service,
         memory_service=_memory_service,
-        plugins=[MemoryPlugin()],
     )
     content = types.Content(role="user", parts=[types.Part(text=prompt)])
     final_text = ""
@@ -409,9 +639,12 @@ async def chat(req: ChatRequest, user_id: str = Depends(get_user_id)):
         text, actions = await _run_agent_once(
             req.session_id, user_id, req.prompt, req.compose, req.selected, req.account
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Agent run failed")
-        raise HTTPException(500, f"Agent error: {exc}") from exc
+        status, detail = _agent_error_detail(exc)
+        logger.exception("Agent run failed (code=%s)", detail.get("code"))
+        raise HTTPException(status, detail) from exc
     return {"status": "ok", "message": text, "actions": actions}
 
 
@@ -428,12 +661,10 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
     async def event_gen():
         try:
             runner = Runner(
-                app_name=APP_NAME,
-                agent=root_agent,
+                app=adk_app,
                 session_service=session_service,
                 artifact_service=artifact_service,
                 memory_service=_memory_service,
-                plugins=[MemoryPlugin()],
             )
             content = types.Content(role="user", parts=[types.Part(text=req.prompt)])
             async for event in runner.run_async(
@@ -456,8 +687,9 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_user_id)):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Stream failed")
-            yield f"event: error\ndata: {json.dumps({'message': str(exc)})}\n\n"
+            _, detail = _agent_error_detail(exc)
+            logger.exception("Stream failed (code=%s)", detail.get("code"))
+            yield f"event: error\ndata: {json.dumps(detail)}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -492,7 +724,10 @@ async def action_result(req: ActionResultRequest, user_id: str = Depends(get_use
         app_name=APP_NAME, user_id=user_id, session_id=req.session_id
     )
     if session is None:
-        raise HTTPException(500, "Session not found")
+        raise HTTPException(
+            404,
+            {"code": "session_not_found", "message": "Conversation session not found."},
+        )
 
     existing_results = list(session.state.get(ACTION_RESULTS_KEY) or [])
     existing_results.append(
@@ -516,6 +751,113 @@ async def action_result(req: ActionResultRequest, user_id: str = Depends(get_use
         {ACTION_RESULTS_KEY: existing_results, RECENT_ACTIONS_KEY: recent},
     )
     return {"status": "ok"}
+
+
+@app.post("/api/outlook/attachment-content")
+async def attachment_content(
+    req: AttachmentContentRequest, user_id: str = Depends(get_user_id)
+):
+    """Receive attachment bytes from the add-in (``fetch_attachment`` action).
+
+    Raw content is stored as an ADK artifact (``attachment:<name>``); for
+    PDF / Excel / CSV / text files the extracted text lands in a companion
+    artifact (``attachment_text:<name>``). An index entry is written to
+    session state under ``outlook:fetched_attachments`` so the agent's
+    ``read_attachment`` / ``load_artifacts`` tools can find it next turn.
+    """
+    fmt = (req.format or "base64").lower()
+    if fmt == "url":
+        raise HTTPException(
+            422,
+            {
+                "code": "cloud_attachment",
+                "message": "Cloud attachments only expose a link — their "
+                "content can't be downloaded via Office.js.",
+            },
+        )
+    if fmt == "base64":
+        try:
+            data = base64.b64decode(req.content, validate=True)
+        except Exception:
+            raise HTTPException(
+                400, {"code": "bad_content", "message": "content is not valid base64."}
+            )
+    else:
+        # eml / iCalendar item attachments arrive as plain text.
+        data = req.content.encode("utf-8", errors="replace")
+    if not data:
+        raise HTTPException(
+            400, {"code": "bad_content", "message": "Attachment content is empty."}
+        )
+    if len(data) > MAX_FETCH_BYTES:
+        raise HTTPException(
+            413,
+            {
+                "code": "attachment_too_large",
+                "message": f"Attachment exceeds the "
+                f"{MAX_FETCH_BYTES // (1024 * 1024)} MB limit.",
+            },
+        )
+
+    mime = guess_mime_type(req.name, req.content_type)
+    raw_artifact = f"attachment:{req.name}"
+    await _ensure_session(req.session_id, user_id)
+    await artifact_service.save_artifact(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=req.session_id,
+        filename=raw_artifact,
+        artifact=types.Part.from_bytes(data=data, mime_type=mime),
+    )
+
+    extraction = extract_attachment_text(data, req.name, mime)
+    text_artifact = None
+    if extraction.text:
+        text_artifact = f"attachment_text:{req.name}"
+        await artifact_service.save_artifact(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=req.session_id,
+            filename=text_artifact,
+            artifact=types.Part.from_text(text=extraction.text),
+        )
+
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=req.session_id
+    )
+    fetched = dict((session.state.get(FETCHED_ATTACHMENTS_KEY) if session else None) or {})
+    fetched[req.name] = {
+        "name": req.name,
+        "attachment_id": req.attachment_id,
+        "content_type": mime,
+        "size_bytes": len(data),
+        "kind": extraction.kind,
+        "artifact": raw_artifact,
+        "text_artifact": text_artifact,
+        "text_chars": len(extraction.text or ""),
+        "extraction_error": extraction.error,
+        # Navigation aids so the agent can decide what to read without
+        # pulling the document into context.
+        "structure": extraction.structure,
+        "preview": (extraction.text or "")[:300],
+    }
+    await _append_state_delta(
+        req.session_id, user_id, {FETCHED_ATTACHMENTS_KEY: fetched}
+    )
+    logger.info(
+        "attachment stored: %s (%d bytes, kind=%s, text_chars=%d)",
+        req.name,
+        len(data),
+        extraction.kind,
+        len(extraction.text or ""),
+    )
+    return {
+        "status": "ok",
+        "name": req.name,
+        "kind": extraction.kind,
+        "text_chars": len(extraction.text or ""),
+        "extraction_error": extraction.error,
+    }
 
 
 # ── JSON-manifest-only event hooks ──────────────────────────────────

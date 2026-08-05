@@ -21,6 +21,24 @@ pip install -r requirements.txt
 uvicorn backend.main:app --reload --port 8000
 ```
 
+Memory store: with `DATABASE_URL` set, memories persist in Neon Postgres.
+In `DEV_MODE=true` it may be omitted — the backend falls back to an
+in-memory store that resets on restart (same semantics as the in-memory
+session service).
+
+### Serving the Outlook add-in locally (macOS)
+
+The taskpane is an HTTPS page, and Outlook's webview (WKWebView) blocks
+HTTPS→HTTP mixed content — including localhost. Serve the bridge over
+HTTPS with the office-addin dev certs and point the add-in at it:
+
+```bash
+uvicorn backend.main:app --port 8000 \
+  --ssl-certfile ~/.office-addin-dev-certs/localhost.crt \
+  --ssl-keyfile  ~/.office-addin-dev-certs/localhost.key
+cd addin && BACKEND_URL=https://localhost:8000 npm start
+```
+
 If `BACKEND_API_KEY` is set in `.env`, the taskpane must send it as
 `X-API-Key` on every `/api/*` call.
 

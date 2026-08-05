@@ -132,6 +132,7 @@ class ConversationTraceWriter:
         usage: Optional[dict],
         latency_ms: Optional[int],
         cost_usd: Optional[float] = None,
+        context_window: Optional[dict] = None,
     ) -> None:
         if self._current_turn is None:
             return
@@ -142,6 +143,7 @@ class ConversationTraceWriter:
             "usage": usage,
             "latency_ms": latency_ms,
             "cost_usd": cost_usd,
+            "context_window": context_window,
         })
 
     def close_turn(self) -> None:
@@ -166,6 +168,8 @@ class ConversationTraceWriter:
         total_tool_calls = sum(len(t["tool_calls"]) for t in self._turns)
         total_tokens = 0
         total_cost = 0.0
+        peak_context: Optional[dict] = None
+        peak_context_used = 0
         for t in self._turns:
             for lc in t["llm_calls"]:
                 usage = lc.get("usage") or {}
@@ -175,6 +179,11 @@ class ConversationTraceWriter:
                 cost = lc.get("cost_usd")
                 if cost is not None:
                     total_cost += cost
+                cw = lc.get("context_window") or {}
+                used = cw.get("used_tokens") or 0
+                if used > peak_context_used:
+                    peak_context_used = used
+                    peak_context = cw
 
         trace = {
             "meta": {
@@ -195,6 +204,10 @@ class ConversationTraceWriter:
                 "total_tool_calls": total_tool_calls,
                 "total_tokens": total_tokens,
                 "total_cost_usd": round(total_cost, 8) if total_cost > 0 else None,
+                "peak_context_tokens": peak_context_used or None,
+                "peak_context_pct": (
+                    peak_context.get("used_pct") if peak_context else None
+                ),
                 "total_duration_ms": round(
                     (time.monotonic() - self._run_start) * 1000
                 ),

@@ -22,11 +22,16 @@ nuvel new <name> [options]
 | `--with-slack` | off | *(adk only)* Add a Slack gateway via Composio Slackbot. **Implies `--with-composio`.** |
 | `--with-telegram` | off | *(adk only)* Add a Telegram gateway (webhook + Bot API outbound). |
 | `--with-teams` | off | *(adk only)* Add an MS Teams gateway as a separate aiohttp sidecar. |
+| `--workflow` | off | *(adk only)* Make the root agent an ADK 2.0 `Workflow` graph (`agent_workflow.py`) instead of a single `LlmAgent`: plan → execute nodes in `mode='task'` with typed contracts and deterministic routing. `agent.py` becomes a shim re-exporting `root_agent`, so all import paths stay unchanged. |
 
 ### Validation
 
 - `<name>` must match `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. Underscores, spaces, leading digits, double hyphens, trailing hyphens, and any uppercase character all fail.
-- `--with-slack`, `--with-telegram`, `--with-teams` are accepted on non-ADK backends but exit with a clear "not yet supported on this backend" error message.
+- `--with-slack`, `--with-telegram`, `--with-teams`, `--workflow` are accepted on non-ADK backends but exit with a clear "not yet supported on this backend" error message.
+
+### When to use `--workflow`
+
+Use it when the agent's work is **genuinely multi-step with branching** — plan-then-execute, triage-then-route, draft-then-review. Skip it for a single-purpose tool-using agent; a graph you don't need is just indirection. See [Build a workflow-native agent](../how-to/build-workflow-agent.md) for a worked example, and the bundled `adk-workflow-graphs` + `adk-task-delegation` skills for the underlying patterns.
 
 ### Examples
 
@@ -36,6 +41,9 @@ nuvel new my-agent
 
 # ADK agent with Composio tools and a Slack channel
 nuvel new my-agent --with-slack
+
+# Workflow-native agent: plan → execute graph with task-mode nodes
+nuvel new triage-bot --workflow --description "triage issues, route to the right team"
 
 # Claude Agent SDK agent
 nuvel new my-agent --framework claude-agent-sdk
@@ -222,6 +230,39 @@ Rolling-window comparison per agent. Computes mean `overall` for the last `--win
 | `--window-days` | `7` | Length of each rolling window. |
 | `--threshold` | `0.1` | Flag drift when `|delta| >= threshold`. |
 
+### `variants`
+
+```bash
+nuvel eval variants [--agent <q>]
+```
+
+Lists discovered replay-variant configs. Variants live in `generated-agents/<agent>/evals/variants/*.yaml` and describe an alternate system prompt (or other model parameters) to replay against historical traces. Each entry shows the variant name, version, and which agent it belongs to.
+
+### `replay`
+
+```bash
+nuvel eval replay <variant_name> [--agent <q>] [--since YYYY-MM-DD] [--max-cost-usd N] [--concurrency N] [--force] [--dry-run]
+```
+
+Replays a variant against historical traces and scores each replay with the same judge/rubric used by `score`. v1 replays the single LLM call (variant system prompt + historical user input + tool history) — not the full multi-turn loop. Results land in a `replays/<variant>.jsonl` sibling inside each trace directory.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--agent / -a` | *(all)* | Filter to one agent by substring. |
+| `--since` | *(all)* | Only traces at/after this date (`YYYY-MM-DD` or ISO). |
+| `--max-cost-usd` | `1.00` | Hard cap on replay + judge spend. |
+| `--concurrency` | `5` | Max simultaneous replays. |
+| `--force` | off | Re-replay even if already at this variant version. |
+| `--dry-run` | off | Replay + score but write nothing. |
+
+### `compare`
+
+```bash
+nuvel eval compare <variant_name> [--agent <q>]
+```
+
+Diffs a variant's replays against the baseline `scored.jsonl`. Exits with code `2` on regression — defined as `Δ overall < −0.05` for any agent — so CI can catch prompt regressions before they ship.
+
 ## `nuvel run`
 
 Launch the meta-agent — an interactive ADK agent that helps you scaffold, configure, and ship other agents.
@@ -252,6 +293,7 @@ result = scaffold_agent(
     with_slack=True,    # implies with_composio
     with_telegram=False,
     with_teams=False,
+    workflow=False,     # adk only — Workflow graph instead of a single LlmAgent
 )
 # result["status"] == "ok" | "error"
 # on success: result["path"], result["files_created"], etc.

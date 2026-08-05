@@ -6,7 +6,8 @@
  * unfreezes the ribbon.
  */
 
-import { BACKEND_URL, apiHeaders, getSessionId } from "../config/api";
+import { BACKEND_URL, apiHeaders, fetchWithRetry, readErrorMessage, getSessionId } from "../config/api";
+import logger from "../config/logger";
 
 /* global Office */
 
@@ -69,7 +70,7 @@ async function coachCurrentDraft(event: Office.AddinCommands.Event) {
       return;
     }
 
-    const res = await fetch(`${BACKEND_URL}/api/outlook/chat`, {
+    const res = await fetchWithRetry(`${BACKEND_URL}/api/outlook/chat`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({
@@ -85,10 +86,11 @@ async function coachCurrentDraft(event: Office.AddinCommands.Event) {
           conversation_id: (Office.context.mailbox.item as any)?.conversationId || null,
         },
       }),
-    });
+    }, { maxRetries: 2, baseDelayMs: 1000 });
 
     if (!res.ok) {
-      notify("error", `Coach failed: HTTP ${res.status}`);
+      const detailMsg = await readErrorMessage(res);
+      notify("error", `Coach failed: ${detailMsg || `HTTP ${res.status}`}`);
     } else {
       const data = await res.json();
       const headline = (data.message || "").split("\n").find((l: string) => l.trim()) || "Open the taskpane for details.";
@@ -137,17 +139,16 @@ const sessionUserId = (): string | undefined =>
 
 async function postJson(path: string, body: unknown, timeoutMs = 4000): Promise<Response | null> {
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetch(`${BACKEND_URL}${path}`, {
+    return await fetchWithRetry(`${BACKEND_URL}${path}`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify(body),
-      signal: ctrl.signal,
+    }, { maxRetries: 2, baseDelayMs: 500, timeoutMs });
+  } catch (e) {
+    logger.warn(`postJson ${path} failed after retries`, {
+      error: e instanceof Error ? e.message : String(e),
     });
-    clearTimeout(t);
-    return res;
-  } catch {
+    void logger.flush();
     return null;
   }
 }
@@ -200,8 +201,13 @@ async function pushComposeOpened(composeType: string, event: Office.AddinCommand
         conversation_id: (Office.context.mailbox.item as any)?.conversationId || null,
       },
     });
-  } catch {
-    /* fire-and-forget */
+  } catch (e) {
+    // Fire-and-forget for UX, but never silent — the agent loses track of
+    // open drafts when these pushes vanish without a trace.
+    logger.warn("compose-opened push failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    void logger.flush();
   } finally {
     event.completed();
   }
@@ -237,6 +243,10 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event) {
     });
 
     if (!res || !res.ok) {
+      logger.warn("pre-send check unavailable — allowing send unchecked", {
+        status: res ? res.status : "network-error",
+      });
+      void logger.flush();
       (event as any).completed({ allowEvent: true });
       return;
     }
@@ -249,7 +259,11 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event) {
       return;
     }
     (event as any).completed({ allowEvent: true });
-  } catch {
+  } catch (e) {
+    logger.warn("pre-send check failed — allowing send unchecked", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    void logger.flush();
     (event as any).completed({ allowEvent: true });
   }
 }
@@ -270,8 +284,12 @@ async function onSpamReportHandler(event: any) {
       free_text: (event as any)?.freeText || "",
     };
     await postJson("/api/outlook/report-spam", meta);
-  } catch {
-    /* swallow — never let a network blip break the report flow */
+  } catch (e) {
+    // Never let a network blip break the report flow — but leave a trace.
+    logger.warn("spam-report push failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    void logger.flush();
   } finally {
     try {
       event.completed({

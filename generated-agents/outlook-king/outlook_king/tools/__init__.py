@@ -14,6 +14,7 @@ grounding draft coaching, and shaping search queries.
 """
 
 from google.adk.tools import load_memory  # built-in tool instance; calls NeonMemoryService.search_memory
+from google.adk.tools.load_artifacts_tool import LoadArtifactsTool  # built-in; lets the model view stored artifacts (images, PDFs)
 
 from .memory_tools import memory_tool_list
 from ..cron.tools import cronjob_tool_list
@@ -24,6 +25,7 @@ from .composio_mcp import build_composio_mcp_toolset
 
 from .outlook_context import outlook_context_tool_list
 from .outlook_actions import outlook_action_tool_list
+from .attachment_tools import attachment_tool_list
 from .style_tools import style_tool_list
 from .coach_tools import coach_tool_list
 from .search_hints import search_hint_tool_list
@@ -41,6 +43,8 @@ def get_tools() -> list:
 
     tools.extend(outlook_context_tool_list)
     tools.extend(outlook_action_tool_list)
+    tools.extend(attachment_tool_list)
+    tools.append(LoadArtifactsTool())
     tools.extend(style_tool_list)
     tools.extend(coach_tool_list)
     tools.extend(search_hint_tool_list)

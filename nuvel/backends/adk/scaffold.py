@@ -16,9 +16,14 @@ overlays from nuvel/backends/adk/templates_overlays/<bundle>/:
                       a single hosted MCP endpoint). Independent of
                       --persona.
 
+    --with-acp        Agent Client Protocol adapter (stdio JSON-RPC, per
+                      agentclientprotocol.com) plus a local terminal CLI,
+                      so the agent is runnable as an editor subprocess and
+                      from the command line. Independent of the others.
+
 Usage:
     python scaffold.py <agent-name> [--output-dir DIR] [--description DESC]
-                                    [--persona] [--with-composio]
+                                    [--persona] [--with-composio] [--with-acp]
 """
 
 from __future__ import annotations
@@ -36,6 +41,29 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 OVERLAYS_DIR = Path(__file__).parent / "templates_overlays"
 
 PLACEHOLDER_TAG = "{{agent_package}}"
+
+# Template files that only get stamped when a specific flag is set. Keyed by
+# template file name (pre-substitution); see _stamp_tree(skip_files=...).
+WORKFLOW_TEMPLATE = "agent_workflow.py.tmpl"
+
+# When --workflow is set, agent.py becomes a shim so that every existing
+# importer of `<package>.agent` (run_adk.py, adk web, the gateway overlays,
+# the cron fallback runner) keeps working against the Workflow root.
+_WORKFLOW_AGENT_SHIM = '''"""
+{{agent_name}} — root agent.
+
+The real root agent is a `Workflow` graph; see agent_workflow.py. This
+module stays the canonical import path (`{{agent_package}}.agent`) so the
+server, the ADK dev UI, and any gateways don't need to know which shape
+the root agent has.
+"""
+
+from __future__ import annotations
+
+from .agent_workflow import root_agent
+
+__all__ = ["root_agent"]
+'''
 
 # Extensions considered text (placeholder substitution applied)
 TEXT_EXTENSIONS = frozenset({
@@ -298,6 +326,83 @@ _TEAMS_README_BLOCK = (
 )
 
 
+_ACP_ENV_BLOCK = (
+    "# ── ACP adapter / local CLI ──────────────────────────────────────\n"
+    "# Both entrypoints run the agent outside the HTTP server:\n"
+    "#   python -m {{agent_package}}.acp     ACP subprocess (stdio JSON-RPC)\n"
+    "#   python -m {{agent_package}}.cli      terminal one-shot / REPL\n"
+    "# Set DEV_MODE=true above for in-memory sessions (no Postgres needed).\n"
+    "# Optional: user id these entrypoints attribute sessions to.\n"
+    "# ACP_USER_ID=acp-user\n"
+    "# ACP tool-approval (HITL) — the agent asks the editor to approve tool\n"
+    "# calls via session/request_permission. Mode: off | sensitive | all\n"
+    "# (default: sensitive — gates destructive tools + filesystem writes).\n"
+    "# ACP_PERMISSION_MODE=sensitive\n"
+    "# Comma-separated tool names to gate (overrides the built-in sensitive set).\n"
+    "# ACP_PERMISSION_TOOLS=delete_record,send_email\n"
+    "\n"
+)
+
+_ACP_README_BLOCK = (
+    "\n## ACP adapter & local CLI\n"
+    "\n"
+    "This agent is runnable outside the FastAPI server two ways. Both reuse\n"
+    "the same `AgentHarness`-wired Runner, so tools, plugins, memory, and\n"
+    "cost tracking behave identically to the server. Use `DEV_MODE=true` for\n"
+    "in-memory sessions locally.\n"
+    "\n"
+    "### Agent Client Protocol (editor integration)\n"
+    "\n"
+    "[ACP](https://agentclientprotocol.com) is the JSON-RPC-over-stdio protocol\n"
+    "code editors (e.g. Zed) use to talk to agents. Launch the adapter with:\n"
+    "\n"
+    "```\n"
+    "python -m {{agent_package}}.acp\n"
+    "```\n"
+    "\n"
+    "The client drives it over the pipe: `initialize` → `session/new` →\n"
+    "`session/prompt`. The agent streams `session/update` notifications\n"
+    "(`agent_message_chunk`, `agent_thought_chunk`, `tool_call`,\n"
+    "`tool_call_update`) and returns a `stopReason` per turn; `session/cancel`\n"
+    "interrupts an in-flight turn. stdout is reserved for protocol traffic —\n"
+    "all logging goes to stderr.\n"
+    "\n"
+    "**Editor integration.** The adapter honors the capabilities an editor\n"
+    "brings to the session:\n"
+    "\n"
+    "- **MCP servers** — any `mcpServers` the client passes in `session/new`\n"
+    "  (stdio, plus Streamable HTTP / SSE) are wired into that session's agent\n"
+    "  as tools, so the editor can inject filesystem, git, etc. at connect time.\n"
+    "- **Filesystem bridge** — when the client advertises `fs.readTextFile` /\n"
+    "  `fs.writeTextFile`, the agent gets `read_text_file` / `write_text_file`\n"
+    "  tools that operate on the editor's view of the workspace (unsaved\n"
+    "  buffers included) instead of its own copy on disk.\n"
+    "- **Tool approval (HITL)** — before running a sensitive tool the agent\n"
+    "  asks the editor via `session/request_permission`, giving the user an\n"
+    "  Allow / Reject (once or always) gate. Tune with `ACP_PERMISSION_MODE`\n"
+    "  (`off` / `sensitive` / `all`, default `sensitive`) and\n"
+    "  `ACP_PERMISSION_TOOLS`; a rejected call never runs and the agent is\n"
+    "  told to ask how to proceed.\n"
+    "- **Multimodal prompts** — `image` blocks and embedded `resource` context\n"
+    "  (text or image blob) in `session/prompt` are decoded and passed to the\n"
+    "  agent alongside text, so an editor can attach screenshots or file\n"
+    "  context to a turn.\n"
+    "\n"
+    "To register it in Zed, add an entry under `agent_servers` in your Zed\n"
+    "settings pointing `command` at `python` and `args` at\n"
+    "`[\"-m\", \"{{agent_package}}.acp\"]` (with `cwd` set to this project).\n"
+    "Run `nuvel doctor` from this directory to smoke-test the stdio handshake\n"
+    "and print a ready-to-paste Zed `agent_servers` snippet.\n"
+    "\n"
+    "### Terminal CLI\n"
+    "\n"
+    "```\n"
+    "python -m {{agent_package}}.cli \"summarize today's incidents\"   # one-shot\n"
+    "python -m {{agent_package}}.cli                                  # interactive REPL\n"
+    "```\n"
+)
+
+
 # ── Placeholder replacement ─────────────────────────────────────────
 
 
@@ -311,6 +416,7 @@ def _build_replacements(
     with_slack: bool = False,
     with_telegram: bool = False,
     with_teams: bool = False,
+    with_acp: bool = False,
 ) -> dict[str, str]:
     # Frame priority: user's --system-prompt wins, else persona-aware default.
     if system_prompt:
@@ -360,19 +466,12 @@ def _build_replacements(
         state_lines = [
             f'    app.state.app_name = "{name}"',
             f"    from {package}.agent import root_agent as _root",
-            "    from google.adk.runners import Runner as _Runner",
-            "    from google.adk.sessions import InMemorySessionService as _InMem",
-            "    # Build a parallel session service for in-process gateway invocations.",
-            "    # In dev mode (DEV_MODE=true), use in-memory; in prod, use the same DB URI.",
-            "    if dev_mode:",
-            "        _gw_session_service = _InMem()",
-            "    else:",
-            "        from google.adk.sessions import DatabaseSessionService as _DbSess",
-            "        _gw_session_service = _DbSess(",
-            '            db_url=_normalize_to_asyncpg_uri(os.getenv("SESSION_SERVICE_URI")),',
-            '            connect_args={"ssl": "require"},',
-            "        )",
-            f'    app.state.runner = _Runner(app_name="{name}", agent=_root, session_service=_gw_session_service)',
+            f"    from {package}.harness import AgentHarness",
+            "    # AgentHarness is the one place session/artifact services and",
+            "    # plugins are built; the gateway runner shares it with the",
+            "    # cron fallback runner (see below) since it's a singleton.",
+            "    _harness = AgentHarness.get(app.state.app_name)",
+            "    app.state.runner = _harness.build_runner(agent=_root)",
         ]
         if with_slack:
             state_lines.append(
@@ -416,6 +515,14 @@ def _build_replacements(
         "{{gateway_requirements}}": gateway_requirements,
         "{{gateway_env_block}}": gateway_env_block,
         "{{gateway_readme_section}}": gateway_readme_section,
+        # ACP adapter / local CLI. The blocks embed "{{agent_package}}", which
+        # _substitute won't re-expand once injected, so pre-substitute here.
+        "{{acp_env_block}}": (
+            _ACP_ENV_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
+        ),
+        "{{acp_readme_section}}": (
+            _ACP_README_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
+        ),
     }
 
 
@@ -433,11 +540,15 @@ def _stamp_tree(
     target: Path,
     replacements: dict[str, str],
     files_created: list[str],
+    skip_files: frozenset[str] = frozenset(),
 ) -> None:
     """Walk a template tree and stamp it into target, with placeholder substitution.
 
     Files in src_root with the same relative path as files already in target
     will be **overwritten** — overlays use this to replace base files.
+
+    Template file names in `skip_files` are not stamped at all — used for
+    flag-gated templates that live in the base tree (e.g. agent_workflow.py.tmpl).
     """
     if not src_root.is_dir():
         return
@@ -449,7 +560,7 @@ def _stamp_tree(
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         for fname in filenames:
-            if fname == ".gitkeep":
+            if fname == ".gitkeep" or fname in skip_files:
                 continue
 
             src_file = Path(dirpath) / fname
@@ -485,6 +596,8 @@ def scaffold_agent(
     with_slack: bool = False,
     with_telegram: bool = False,
     with_teams: bool = False,
+    workflow: bool = False,
+    with_acp: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -501,6 +614,14 @@ def scaffold_agent(
         with_telegram: Activate the Telegram messaging-gateway overlay.
         with_teams: Activate the MS Teams messaging-gateway overlay
                     (sidecar process; runs separately from the agent server).
+        workflow: Generate a workflow-native agent — the root agent is an
+                  ADK 2.0 `Workflow` graph (agent_workflow.py) with task-mode
+                  nodes and typed contracts, and agent.py becomes a shim
+                  re-exporting it. Default is a single LlmAgent root.
+        with_acp: Add the Agent Client Protocol adapter (stdio JSON-RPC) plus
+                  a local terminal CLI, so the agent is runnable as an editor
+                  subprocess (`python -m <pkg>.acp`) and from the command line
+                  (`python -m <pkg>.cli`). Independent of the other flags.
 
     Returns:
         A dict with status and metadata.
@@ -531,13 +652,25 @@ def scaffold_agent(
 
     replacements = _build_replacements(
         name, package, description, system_prompt, persona, with_composio,
-        with_slack, with_telegram, with_teams,
+        with_slack, with_telegram, with_teams, with_acp,
     )
     files_created: list[str] = []
 
     try:
-        # 1. Base template
-        _stamp_tree(TEMPLATES_DIR, target, replacements, files_created)
+        # 1. Base template. agent_workflow.py.tmpl is flag-gated: it lives in
+        #    the base tree but only lands when --workflow is set.
+        _stamp_tree(
+            TEMPLATES_DIR, target, replacements, files_created,
+            skip_files=frozenset() if workflow else frozenset({WORKFLOW_TEMPLATE}),
+        )
+
+        # 1b. Workflow root: agent.py becomes a shim over agent_workflow.py so
+        #     `<package>.agent:root_agent` stays the one import path.
+        if workflow:
+            agent_py = target / package / "agent.py"
+            agent_py.write_text(
+                _substitute(_WORKFLOW_AGENT_SHIM, replacements), encoding="utf-8"
+            )
 
         # 2. Overlays — order matters: later overlays override earlier ones
         if persona:
@@ -552,6 +685,8 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "gateway-slack", target, replacements, files_created)
         if with_teams:
             _stamp_tree(OVERLAYS_DIR / "gateway-teams", target, replacements, files_created)
+        if with_acp:
+            _stamp_tree(OVERLAYS_DIR / "acp", target, replacements, files_created)
 
         return {
             "status": "ok",
@@ -565,6 +700,8 @@ def scaffold_agent(
             "with_slack": with_slack,
             "with_telegram": with_telegram,
             "with_teams": with_teams,
+            "workflow": workflow,
+            "with_acp": with_acp,
         }
 
     except Exception as exc:
@@ -593,6 +730,17 @@ def main() -> None:
         "--with-composio", action="store_true",
         help="Wire the Composio Tool Router MCP (~1000 toolkits via one hosted endpoint).",
     )
+    parser.add_argument(
+        "--workflow", action="store_true",
+        help="Generate a workflow-native agent: the root agent is an ADK 2.0 "
+             "Workflow graph with task-mode nodes and typed contracts.",
+    )
+    parser.add_argument(
+        "--with-acp", action="store_true",
+        help="Add the Agent Client Protocol adapter (stdio JSON-RPC) plus a "
+             "local terminal CLI, so the agent is runnable as an editor "
+             "subprocess and from the command line.",
+    )
     args = parser.parse_args()
 
     result = scaffold_agent(
@@ -601,6 +749,8 @@ def main() -> None:
         description=args.description,
         persona=args.persona,
         with_composio=args.with_composio,
+        workflow=args.workflow,
+        with_acp=args.with_acp,
     )
 
     if result["status"] == "ok":
@@ -611,6 +761,8 @@ def main() -> None:
             flags.append("persona")
         if result.get("with_composio"):
             flags.append("composio")
+        if result.get("with_acp"):
+            flags.append("acp")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
     else:

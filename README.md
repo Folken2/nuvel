@@ -33,23 +33,24 @@ Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Age
 
 nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, the Claude Agent SDK, and Anthropic Managed Agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 10-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 11-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
 
 ## Frameworks
 
 | Framework | Flag | Knowledge skills | Where the agent runs |
 | --- | --- | --- | --- |
-| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 8 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router) | Your server (OpenRouter + LiteLLM) |
+| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 10 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router, workflow graphs, task delegation) | Your server (OpenRouter + LiteLLM) |
 | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | `--framework claude-agent-sdk` | 6 skills (tool creation, MCP integration, permissions, hooks, system prompts, deployment) | Your server (Anthropic API direct) |
 | [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | `--framework anthropic-managed-agents` | 5 skills (overview, tools, events, deployment, skills + memory) | Anthropic's infrastructure (your server is a thin proxy) |
 
 ## Features
 
 - **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
-- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (10-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
-- **Portable knowledge skills** — 13 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
+- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (11-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
+- **Portable knowledge skills** — 21 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
 - **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character. Inspired by OpenClaw. *(ADK only.)*
 - **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more. *(ADK only.)*
+- **ACP-compatible & CLI-runnable** — `--with-acp` adds an [Agent Client Protocol](https://agentclientprotocol.com) adapter (JSON-RPC over stdio, the protocol editors like Zed use to drive an agent as a subprocess) plus a local terminal CLI. Run it as an editor subprocess (`python -m <pkg>.acp`) or straight from the shell (`python -m <pkg>.cli "…"` one-shot, or a REPL). The adapter honors the editor's session: `mcpServers` passed in `session/new` (stdio / HTTP / SSE) are wired in as tools, the agent reads/writes through the editor's filesystem view (unsaved buffers included) when the client supports it, and sensitive tool calls are gated by an editor approve/deny prompt (`session/request_permission`, tunable via `ACP_PERMISSION_MODE`). Both entrypoints reuse the same plugin-wired Runner as the FastAPI server. *(ADK only.)*
 - **Messaging gateways** — scaffold an agent reachable from Slack, Telegram, or MS Teams with one flag (`--with-slack`, `--with-telegram`, `--with-teams`). See [docs/superpowers/specs/2026-05-09-messaging-gateways-design.md](docs/superpowers/specs/2026-05-09-messaging-gateways-design.md). *(ADK only.)*
   - **Slack:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and uploads agent artifacts back to chat. See the per-channel README for details.
   - **Telegram:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and uploads agent artifacts back to chat. See the per-channel README for details.
@@ -155,6 +156,8 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel new <name> --with-slack` | *(adk only)* Add a Slack Events API gateway (auto-enables `--with-composio`) |
 | `nuvel new <name> --with-telegram` | *(adk only)* Add a Telegram Bot webhook gateway |
 | `nuvel new <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
+| `nuvel new <name> --workflow` | *(adk only)* Workflow-native root agent — an ADK 2.0 `Workflow` graph with task-mode nodes, typed contracts, and conditional routing |
+| `nuvel new <name> --with-acp` | *(adk only)* Make the agent ACP-compatible (Agent Client Protocol over stdio, `python -m <pkg>.acp`) and CLI-runnable (`python -m <pkg>.cli`) |
 | `nuvel new <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
@@ -163,6 +166,9 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs |
 | `nuvel eval score \| report \| worst \| drift` | Score traces (heuristics + LLM judge), surface worst runs, detect drift |
+| `nuvel eval variants [--agent <name>]` | List discovered replay-variant configs (`evals/variants/*.yaml`) for an agent |
+| `nuvel eval replay <name> [--agent <name>] [--since YYYY-MM-DD] [--max-cost-usd N] [--concurrency N] [--force] [--dry-run]` | Replay a config variant against historical traces and score each replay with the judge/rubric |
+| `nuvel eval compare <name> [--agent <name>]` | Diff a variant's replays against baseline `scored.jsonl`; exits 2 on regression (Δ overall < −0.05) |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |
 
@@ -190,13 +196,13 @@ nuvel/
 │   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── plugins/               # 10 plugins (see Plugin Chain below)
+│   ├── plugins/               # 11 plugins (see Plugin Chain below)
 │   ├── config/                # LiteLLM/OpenRouter config
 │   └── backends/              # Per-framework scaffolders + skills
 │       ├── adk/               # Google ADK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # Production skeleton for ADK agents
-│       │   └── skills/        # 7 ADK knowledge skills
+│       │   └── skills/        # 10 ADK knowledge skills
 │       ├── claude_agent_sdk/  # Claude Agent SDK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # FastAPI + SDK skeleton
@@ -250,6 +256,7 @@ Every generated agent ships with a full plugin chain — cross-cutting concerns 
 | Plugin | Type | What it does |
 |--------|------|-------------|
 | **CostGuardPlugin** | Budget | Calculates USD cost per LLM call, enforces per-session budget limits |
+| **ContextWindowPlugin** | Observability | Tracks context-window occupancy per response (tokens used / max / %) for live UI indicators |
 | **TracePlugin** | Observability | Raw event JSONL + consolidated conversation JSON for eval pipelines |
 | **ConsoleLoggerPlugin** | Observability | Color-coded terminal output for all lifecycle events |
 | **ToolEventsPlugin** | Observability | Structured tool execution events for SSE streaming |
@@ -290,6 +297,44 @@ Keys are model IDs (matching what your LLM provider returns). The plugin auto-st
 
 To find current prices: check [OpenRouter models](https://openrouter.ai/models) or your provider's pricing page.
 
+### Context Window Tracking
+
+The ContextWindowPlugin knows the total context window of the selected model and reports how full it is after every response — the same "context used" signal Claude Code shows. It's read-only: it never mutates the request and never blocks.
+
+After each LLM call it publishes a `context_window` snapshot into session state, so a frontend consuming the SSE stream can render a live indicator on every agent response:
+
+```json
+{
+  "model": "anthropic/claude-sonnet-4",
+  "used_tokens": 12345,
+  "prompt_tokens": 12000,
+  "completion_tokens": 345,
+  "max_tokens": 200000,
+  "remaining_tokens": 187655,
+  "used_pct": 6.17,
+  "remaining_pct": 93.83
+}
+```
+
+`used_tokens` prefers the provider's `total_token_count` (so reasoning/thinking tokens are included) and falls back to `prompt + completion`. When the model isn't in the config, percentages are omitted (`max_tokens: null`) unless `CONTEXT_WINDOW_DEFAULT` is set.
+
+**Maintaining `context_windows.json`:**
+
+Window sizes live at `nuvel/plugins/context_windows.json` (or `<agent>/plugins/context_windows.json` for generated agents) and use the same keys as `pricing.json`, so provider prefixes are auto-stripped (`openrouter/anthropic/claude-sonnet-4` matches `anthropic/claude-sonnet-4`):
+
+```json
+{
+  "anthropic/claude-sonnet-4": 200000,
+  "google/gemini-2.5-pro": 1048576
+}
+```
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `CONTEXT_WINDOW_CONFIG` | auto-detected | Path to a custom `context_windows.json` |
+| `CONTEXT_WINDOW_DEFAULT` | `0` (unknown) | Fallback window size for models not in the config |
+| `CONTEXT_WINDOW_WARN_PCT` | `0` (off) | Log a one-time warning once usage crosses this percent |
+
 ### Traces for Self-Improvement Evals
 
 The trace system captures two layers:
@@ -301,7 +346,7 @@ traces/
     2026-04-06_<session>.json         # Consolidated record (per-conversation, for evals)
 ```
 
-The consolidated JSON includes: full system prompt, user input, LLM thinking/reasoning, response, tool calls with args/results, token usage, cost, and timing — everything an eval agent needs to score quality and drive improvements.
+The consolidated JSON includes: full system prompt, user input, LLM thinking/reasoning, response, tool calls with args/results, token usage, cost, context-window occupancy (per call, plus a `peak_context_tokens` / `peak_context_pct` in the summary), and timing — everything an eval agent needs to score quality and drive improvements.
 
 ## Configuration
 
