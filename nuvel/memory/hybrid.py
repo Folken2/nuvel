@@ -28,6 +28,12 @@ RRF_K = 60
 RRF_WEIGHT = 0.7
 COSINE_WEIGHT = 0.3
 
+# Relational-recall arm weight in the fusion. The graph arm is high-precision /
+# low-recall — a resolved typed edge is a strong signal but rare — so it's fused
+# UNDER the keyword+vector arms (which carry weight 1.0): it can surface a new
+# candidate and reinforce a shared one, but not leapfrog a strong dual-arm hit.
+RELATIONAL_WEIGHT = 0.5
+
 # Post-fusion boost bounds. Each metadata factor is clamped so no single signal
 # can catastrophically flip rankings (gbrain keeps factors in ~[1.0, 1.6]).
 RECENCY_HALFLIFE_DAYS = 30.0
@@ -58,17 +64,23 @@ def _content_hash(content: str) -> str:
 
 
 def reciprocal_rank_fusion(
-    arms: Iterable[list[MemoryRow]], rrf_k: int = RRF_K
+    arms: Iterable[list[MemoryRow]],
+    rrf_k: int = RRF_K,
+    weights: list[float] | None = None,
 ) -> dict[str, float]:
     """Fuse ranked arms via RRF and normalize to [0, 1] by the observed max.
 
     Each arm is a list ordered best-first (rank 0 = top). A result's raw score
-    is ``sum(1 / (rrf_k + rank))`` across every arm it appears in.
+    is ``sum(weight_arm / (rrf_k + rank))`` across every arm it appears in.
+    ``weights`` (one per arm, default all 1.0) lets a lower-precision arm — e.g.
+    relational recall — contribute less per rank than the keyword/vector arms.
     """
+    arms = list(arms)
     raw: dict[str, float] = {}
-    for arm in arms:
+    for i, arm in enumerate(arms):
+        w = weights[i] if weights is not None else 1.0
         for rank, row in enumerate(arm):
-            raw[_key(row)] = raw.get(_key(row), 0.0) + 1.0 / (rrf_k + rank)
+            raw[_key(row)] = raw.get(_key(row), 0.0) + w / (rrf_k + rank)
     if not raw:
         return {}
     top = max(raw.values())
@@ -234,6 +246,8 @@ def fuse_and_rank(
     query: str,
     tier_boost: dict[str, float],
     k: int,
+    relational_arm: list[MemoryRow] | None = None,
+    relational_weight: float = RELATIONAL_WEIGHT,
     now: datetime | None = None,
     floor_ratio: float = FLOOR_RATIO,
     autocut_jump: float = AUTOCUT_JUMP,
@@ -244,18 +258,26 @@ def fuse_and_rank(
 
     ``vector_arm`` and ``keyword_arm`` are ranked (best-first) candidate lists.
     Each row carries its cosine similarity in ``row.score`` (0.0 when the row
-    has no embedding). Rows may appear in both arms; they are unified by id (or
-    content hash). Returns MemoryRow objects with the final blended+boosted
-    score in ``.score``, highest first, capped at ``k``.
+    has no embedding). Rows may appear in multiple arms; they are unified by id
+    (or content hash). ``relational_arm`` is the optional knowledge-graph arm
+    (typed-edge recall) — fused at ``relational_weight`` (< 1.0) so it adds
+    high-precision candidates without overriding strong keyword/vector hits.
+    Returns MemoryRow objects with the final blended+boosted score in ``.score``,
+    highest first, capped at ``k``.
     """
     now = now or datetime.now(timezone.utc)
+    relational_arm = relational_arm or []
 
-    rrf = reciprocal_rank_fusion([vector_arm, keyword_arm], rrf_k)
+    rrf = reciprocal_rank_fusion(
+        [vector_arm, keyword_arm, relational_arm],
+        rrf_k,
+        weights=[1.0, 1.0, relational_weight],
+    )
 
-    # Unify candidates; keep the best cosine seen for a row across both arms.
+    # Unify candidates; keep the best cosine seen for a row across all arms.
     unified: dict[str, MemoryRow] = {}
     cosine: dict[str, float] = {}
-    for row in [*vector_arm, *keyword_arm]:
+    for row in [*vector_arm, *keyword_arm, *relational_arm]:
         key = _key(row)
         cos = row.score if row.score is not None and math.isfinite(row.score) else 0.0
         cosine[key] = max(cosine.get(key, 0.0), cos)

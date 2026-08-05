@@ -36,4 +36,11 @@ async def build_default_service(
     if migrate:
         await store.migrate()
     resolver = ConfigScopeResolver.from_yaml(org_graph_path)
-    return OrgMemoryService(store=store, resolver=resolver, embedder=_pick_embedder())
+    # PostgresStore is also the GraphWriter — self-wiring knowledge-graph
+    # extraction runs fire-and-forget on every write.
+    return OrgMemoryService(
+        store=store,
+        resolver=resolver,
+        embedder=_pick_embedder(),
+        graph_writer=store,
+    )
