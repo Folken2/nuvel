@@ -77,6 +77,8 @@ class AgentHarness:
         self.dev_mode = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
         self._session_service: Optional[BaseSessionService] = None
         self._artifact_service: Optional[BaseArtifactService] = None
+        self._memory_service: Optional[Any] = None
+        self._memory_service_built = False
 
     @classmethod
     def get(cls, app_name: str) -> "AgentHarness":
@@ -179,6 +181,22 @@ class AgentHarness:
     def plugins(self) -> list:
         """Pre-configured BasePlugin instances, ordered as PLUGIN_PATHS."""
         return PLUGIN_INSTANCES
+
+    async def memory_service(self) -> Optional[Any]:
+        """The default memory backend (OrgMemoryService) when a DB is configured.
+
+        Returns ``None`` when no org-memory DSN is set or the org-memory extra
+        isn't installed — the agent then relies on the markdown memory store.
+        Cached after the first build. Async because building the store may run
+        a migration. Pass the result to ``build_runner(memory_service=...)`` so
+        relevance-conditioned recall retrieves through it.
+        """
+        if not self._memory_service_built:
+            from {{agent_package}}.memory.org_backend import build_memory_service
+
+            self._memory_service = await build_memory_service()
+            self._memory_service_built = True
+        return self._memory_service
 
     # ── Long-horizon resilience config ───────────────────────────────
 

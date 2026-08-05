@@ -33,6 +33,7 @@ from .trace_plugin import TracePlugin
 from .skill_curator_plugin import SkillCuratorPlugin
 
 from nuvel.guardrails import GuardrailsPlugin
+from nuvel.memory import SIBLING_RUNNER
 
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
@@ -58,6 +59,9 @@ save_files = SaveFilesAsArtifactsPlugin()
 recordings = RecordingsPlugin()
 replay = ReplayPlugin()
 skill_curator = SkillCuratorPlugin()
+# Owns the fire-and-forget lifecycle for the memory review fork and drains
+# in-flight forks at shutdown. No-op when nothing has been spawned.
+sibling_runner = SIBLING_RUNNER
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...)
 # skill_curator is intentionally last — it observes the trajectory built by
@@ -78,6 +82,7 @@ PLUGIN_PATHS = [
     "nuvel.plugins.recordings",
     "nuvel.plugins.replay",
     "nuvel.plugins.skill_curator",
+    "nuvel.plugins.sibling_runner",
 ]
 
 __all__ = [
