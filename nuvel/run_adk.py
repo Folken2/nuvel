@@ -92,26 +92,18 @@ def main() -> None:
 
     print(f"[ADK] Meta-Agent starting: PORT={port}, DEV_MODE={dev_mode}")
 
-    if os.getenv("NUVEL_ORG_MEMORY_DSN"):
-        # OrgMemoryService DB pre-flight: import-only sanity + log.
-        # Note: ADK 2.x get_fast_api_app accepts only memory_service_uri (string)
-        # not a constructed instance, so OrgMemoryService is not auto-wired here.
-        # Custom runners can call nuvel.memory.factory.build_default_service().
-        try:
-            import asyncio
-            from nuvel.memory.factory import build_default_service
-            asyncio.run(build_default_service())  # migrates DB, then drops the service
-            print("[ADK] DB migration OK (NUVEL_ORG_MEMORY_DSN set).")
-            print("[ADK] WARNING: OrgMemoryService is NOT wired into get_fast_api_app in this ADK "
-                  "version — the running agent has no memory. See docs/memory/org-memory-service.md "
-                  "to consume the service from a custom Runner.")
-        except Exception as exc:
-            print(f"[ADK] OrgMemoryService init failed: {exc}")
+    memory_uri = os.getenv("NUVEL_ORG_MEMORY_URI")
+    if memory_uri:
+        from nuvel.memory.adk_registry import register_org_memory_scheme
+        register_org_memory_scheme()
+        scheme_prefix = memory_uri.split("://", 1)[0]
+        print(f"[ADK] OrgMemoryService registered (scheme: {scheme_prefix}://...)")
 
     if dev_mode:
         print("[ADK] DEVELOPMENT mode (in-memory sessions)")
         app = get_fast_api_app(
             agents_dir=agents_dir,
+            memory_service_uri=memory_uri,
             session_service_uri=None,
             use_local_storage=False,
             web=False,
@@ -131,6 +123,7 @@ def main() -> None:
         print("[ADK] PRODUCTION mode")
         app = get_fast_api_app(
             agents_dir=agents_dir,
+            memory_service_uri=memory_uri,
             session_service_uri=session_uri,
             session_db_kwargs={"connect_args": connect_args},
             web=False,
