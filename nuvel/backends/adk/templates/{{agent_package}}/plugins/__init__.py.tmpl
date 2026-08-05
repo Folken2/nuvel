@@ -29,6 +29,7 @@ from .cost_guard_plugin import CostGuardPlugin
 from .context_window_plugin import ContextWindowPlugin
 from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
+from .cron_isolation_plugin import CronIsolationPlugin
 from .memory_plugin import MemoryPlugin
 from .trace_plugin import TracePlugin
 from .skill_curator_plugin import SkillCuratorPlugin
@@ -51,6 +52,7 @@ resilience = ResiliencePlugin()
 # Long-horizon safety: halts runaway model/tool loops via a shared latch.
 # Sits right after resilience so it observes tool outcomes retries produce.
 guardrails = GuardrailsPlugin()
+cron_isolation = CronIsolationPlugin()
 cache = CachePlugin()
 self_healing = ReflectAndRetryToolPlugin(
     name="self_healing",
@@ -80,6 +82,7 @@ PLUGIN_PATHS = [
     "{{agent_package}}.plugins.tool_events",
     "{{agent_package}}.plugins.resilience",
     "{{agent_package}}.plugins.guardrails",
+    "{{agent_package}}.plugins.cron_isolation",
     "{{agent_package}}.plugins.cache",
     "{{agent_package}}.plugins.self_healing",
     "{{agent_package}}.plugins.save_files",
@@ -102,6 +105,7 @@ PLUGIN_INSTANCES = [
     tool_events,
     resilience,
     guardrails,
+    cron_isolation,
     cache,
     self_healing,
     save_files,
@@ -117,6 +121,7 @@ __all__ = [
     "ConsoleLoggerPlugin",
     "ToolEventsPlugin",
     "ResiliencePlugin",
+    "CronIsolationPlugin",
     "TracePlugin",
     "ContextWindowPlugin",
     "SkillCuratorPlugin",

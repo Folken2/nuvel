@@ -8,6 +8,7 @@ the same code path the API uses (no HTTP round-trip from inside the agent).
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +21,17 @@ logger = logging.getLogger(__name__)
 # Recursion guard: when the scheduler invokes a cron job, it sets this env
 # var so the ``cronjob`` tool refuses to mutate state during the run.
 NUVEL_CRON_RUNNING_ENV = "NUVEL_CRON_RUNNING"
+
+# HITL-gated creation: when enabled, new jobs land as ``pending`` and only
+# start ticking once a human calls ``confirm_job``. Opt-in (default off) so
+# existing generated agents keep firing jobs immediately on create; set
+# ``NUVEL_CRON_HITL_CREATE=1`` to require confirmation, or ``0`` to disable.
+ENV_HITL_CREATE = "NUVEL_CRON_HITL_CREATE"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def hitl_create_enabled() -> bool:
+    return (os.environ.get(ENV_HITL_CREATE, "") or "").strip().lower() in _TRUTHY
 
 
 _VALID_DELIVERIES_PREFIX = ("slack:", "telegram:")
@@ -36,6 +48,22 @@ def _validate_delivery(value: str) -> str:
         f"Invalid delivery {value!r}. Use 'local', 'origin', "
         "'slack:<channel>', or 'telegram:<chat_id>'."
     )
+
+
+def _clean_secrets(secrets: list[str] | None) -> list[str] | None:
+    """Normalize a declared ``secrets`` list, or ``None`` when unset.
+
+    ``None`` means the job did not declare a scope and (for back-compat) sees
+    the full environment. A provided list is de-duplicated, order-preserving,
+    and stripped of blanks — an explicit empty list stays empty (no secrets).
+    """
+    if secrets is None:
+        return None
+    seen: dict[str, None] = {}
+    for name in secrets:
+        if isinstance(name, str) and name.strip():
+            seen.setdefault(name.strip(), None)
+    return list(seen)
 
 
 class CronService:
@@ -61,6 +89,7 @@ class CronService:
         schedule: str,
         delivery: str = "local",
         origin: dict[str, Any] | None = None,
+        secrets: list[str] | None = None,
     ) -> dict[str, Any]:
         if not name or not name.strip():
             raise ValueError("name must not be empty")
@@ -74,14 +103,19 @@ class CronService:
         if next_run is None:
             raise ValueError("schedule resolves to no future run")
 
+        # HITL gate: a confirmation-required job lands as ``pending`` and does
+        # not tick until ``confirm_job`` promotes it to ``active``.
+        status = "pending" if hitl_create_enabled() else "active"
+
         job = {
             "id": storage.new_job_id(),
             "name": name.strip(),
             "prompt": prompt,
             "schedule": parsed.raw,
-            "status": "active",
+            "status": status,
             "delivery": delivery,
             "origin": origin or None,
+            "secrets": _clean_secrets(secrets),
             "created_at": now.isoformat(),
             "next_run_at": next_run.isoformat(),
             "last_run_at": None,
@@ -93,6 +127,21 @@ class CronService:
             jobs.append(job)
             storage.save_jobs(jobs)
         return job
+
+    def confirm_job(self, job_id: str) -> dict[str, Any]:
+        """Promote a ``pending`` (HITL-gated) job to ``active`` so it can tick.
+
+        Idempotent: confirming an already-active job returns it unchanged.
+        """
+        with storage.transaction():
+            jobs = storage.load_jobs()
+            for j in jobs:
+                if j.get("id") == job_id:
+                    if j.get("status") == "pending":
+                        j["status"] = "active"
+                        storage.save_jobs(jobs)
+                    return j
+        raise KeyError(job_id)
 
     def update_job(self, job_id: str, **fields: Any) -> dict[str, Any]:
         mutable = {"name", "prompt", "schedule", "delivery", "status"}
