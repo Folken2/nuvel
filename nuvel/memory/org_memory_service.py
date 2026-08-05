@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Iterable, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Protocol, Sequence
 
 # SearchMemoryResponse lives in base_memory_service in ADK 2.x, not a separate module
 from google.adk.memory import BaseMemoryService
@@ -18,6 +18,9 @@ from nuvel.memory.extraction import EntityLink, extract_entity_links
 from nuvel.memory.resolver import ScopeResolver
 from nuvel.memory.scope import Scope, ScopeChain
 from nuvel.memory.store import MemoryRow, MemoryStore, ScopeAuthorizationError
+
+if TYPE_CHECKING:
+    from nuvel.memory.synthesis import SearchResult, SynthesisLLM
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +51,7 @@ class OrgMemoryService(BaseMemoryService):
         tier_boost: dict[str, float] | None = None,
         top_k: int = 10,
         graph_writer: GraphWriter | None = None,
+        synthesis_llm: "SynthesisLLM | None" = None,
     ) -> None:
         self._store = store
         self._resolver = resolver
@@ -55,6 +59,7 @@ class OrgMemoryService(BaseMemoryService):
         self._tier_boost = tier_boost or DEFAULT_TIER_BOOST
         self._top_k = top_k
         self._graph_writer = graph_writer
+        self._synthesis_llm = synthesis_llm
         # Background extraction tasks — fire-and-forget so the write path never
         # blocks on entity extraction / graph persistence. Kept referenced so
         # they aren't GC'd mid-flight (asyncio only holds a weak ref).
@@ -118,8 +123,19 @@ class OrgMemoryService(BaseMemoryService):
     # ── reads ─────────────────────────────────────────────────
 
     async def search_memory(
-        self, *, app_name: str, user_id: str, query: str
-    ) -> SearchMemoryResponse:
+        self, *, app_name: str, user_id: str, query: str, synthesize: bool = False
+    ) -> SearchMemoryResponse | "SearchResult":
+        """Hybrid search over the caller's scope chain.
+
+        Default (``synthesize=False``) returns the ADK ``SearchMemoryResponse``
+        of ranked rows — the backward-compatible shape every existing caller
+        expects. With ``synthesize=True`` the ranked rows are passed through the
+        answer-synthesis layer (:func:`nuvel.memory.synthesis.synthesize`) and a
+        :class:`~nuvel.memory.synthesis.SearchResult` is returned instead: a
+        cited prose answer, confidence, and an explicit gap analysis, plus the
+        raw ``rows`` for programmatic use. Prose synthesis uses the injected
+        ``synthesis_llm`` when present and degrades to a ranked list otherwise.
+        """
         chain = self._resolver.resolve(user_id)
         q_embedding = await self._embedder.embed(query)
         rows = await self._store.search(
@@ -130,6 +146,10 @@ class OrgMemoryService(BaseMemoryService):
             k=self._top_k,
             tier_boost=self._tier_boost,
         )
+        if synthesize:
+            from nuvel.memory.synthesis import synthesize as synthesize_rows
+
+            return await synthesize_rows(query, rows, llm=self._synthesis_llm)
         return SearchMemoryResponse(
             memories=[self._row_to_entry(r) for r in rows]
         )
