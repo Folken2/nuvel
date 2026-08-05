@@ -33,6 +33,8 @@ from .memory_plugin import MemoryPlugin
 from .trace_plugin import TracePlugin
 from .skill_curator_plugin import SkillCuratorPlugin
 
+from {{agent_package}}.guardrails import GuardrailsPlugin
+
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
 memory = MemoryPlugin()
@@ -45,6 +47,9 @@ context_filter = ContextFilterPlugin(
 console_logger = ConsoleLoggerPlugin()
 tool_events = ToolEventsPlugin()
 resilience = ResiliencePlugin()
+# Long-horizon safety: halts runaway model/tool loops via a shared latch.
+# Sits right after resilience so it observes tool outcomes retries produce.
+guardrails = GuardrailsPlugin()
 cache = CachePlugin()
 self_healing = ReflectAndRetryToolPlugin(
     name="self_healing",
@@ -70,6 +75,7 @@ PLUGIN_PATHS = [
     "{{agent_package}}.plugins.console_logger",
     "{{agent_package}}.plugins.tool_events",
     "{{agent_package}}.plugins.resilience",
+    "{{agent_package}}.plugins.guardrails",
     "{{agent_package}}.plugins.cache",
     "{{agent_package}}.plugins.self_healing",
     "{{agent_package}}.plugins.save_files",
@@ -90,6 +96,7 @@ PLUGIN_INSTANCES = [
     console_logger,
     tool_events,
     resilience,
+    guardrails,
     cache,
     self_healing,
     save_files,
@@ -107,6 +114,7 @@ __all__ = [
     "TracePlugin",
     "ContextWindowPlugin",
     "SkillCuratorPlugin",
+    "GuardrailsPlugin",
     "PLUGIN_PATHS",
     "PLUGIN_INSTANCES",
 ]

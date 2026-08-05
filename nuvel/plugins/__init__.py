@@ -32,6 +32,8 @@ from .context_window_plugin import ContextWindowPlugin
 from .trace_plugin import TracePlugin
 from .skill_curator_plugin import SkillCuratorPlugin
 
+from nuvel.guardrails import GuardrailsPlugin
+
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
 cost_guard = CostGuardPlugin()
@@ -43,6 +45,8 @@ context_filter = ContextFilterPlugin(
 console_logger = ConsoleLoggerPlugin()
 tool_events = ToolEventsPlugin()
 resilience = ResiliencePlugin()
+# Long-horizon safety: halts runaway model/tool loops via a shared latch.
+guardrails = GuardrailsPlugin()
 cache = CachePlugin()
 self_healing = ReflectAndRetryToolPlugin(
     name="self_healing",
@@ -67,6 +71,7 @@ PLUGIN_PATHS = [
     "nuvel.plugins.console_logger",
     "nuvel.plugins.tool_events",
     "nuvel.plugins.resilience",
+    "nuvel.plugins.guardrails",
     "nuvel.plugins.cache",
     "nuvel.plugins.self_healing",
     "nuvel.plugins.save_files",
@@ -83,5 +88,6 @@ __all__ = [
     "TracePlugin",
     "ContextWindowPlugin",
     "SkillCuratorPlugin",
+    "GuardrailsPlugin",
     "PLUGIN_PATHS",
 ]

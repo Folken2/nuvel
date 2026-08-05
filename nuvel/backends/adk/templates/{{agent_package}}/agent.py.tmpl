@@ -16,6 +16,7 @@ from google.adk.tools.skill_toolset import SkillToolset
 from .config.llm import FAST_MODEL
 from .config.paths import skills_dir
 from .config.seed import seed_volume_if_empty
+from .guardrails.exfil_guard import exfil_guard
 from .tools import get_tools
 from .prompt.instructions import get_agent_instruction
 
@@ -94,4 +95,5 @@ root_agent = LlmAgent(
     description="{{agent_description}}",
     instruction=get_agent_instruction,
     tools=_build_tools(),
+    before_tool_callback=[exfil_guard],
 )
