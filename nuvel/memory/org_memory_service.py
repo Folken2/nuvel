@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Protocol, Sequence
 
 # SearchMemoryResponse lives in base_memory_service in ADK 2.x, not a separate module
 from google.adk.memory import BaseMemoryService
@@ -13,11 +14,22 @@ from google.adk.sessions import Session
 from google.adk.events import Event
 
 from nuvel.memory.embedder import Embedder, NullEmbedder
+from nuvel.memory.extraction import EntityLink, extract_entity_links
 from nuvel.memory.resolver import ScopeResolver
 from nuvel.memory.scope import Scope, ScopeChain
 from nuvel.memory.store import MemoryRow, MemoryStore, ScopeAuthorizationError
 
+if TYPE_CHECKING:
+    from nuvel.memory.synthesis import SearchResult, SynthesisLLM
+
 log = logging.getLogger(__name__)
+
+
+class GraphWriter(Protocol):
+    """Persist extracted knowledge-graph edges for a memory. Implemented by the
+    Postgres store; write is fire-and-forget from the memory write path."""
+
+    async def write_links(self, memory_id: str, links: list[EntityLink]) -> None: ...
 
 DEFAULT_TIER_BOOST: dict[str, float] = {
     "user": 1.0,
@@ -38,12 +50,20 @@ class OrgMemoryService(BaseMemoryService):
         embedder: Embedder | None = None,
         tier_boost: dict[str, float] | None = None,
         top_k: int = 10,
+        graph_writer: GraphWriter | None = None,
+        synthesis_llm: "SynthesisLLM | None" = None,
     ) -> None:
         self._store = store
         self._resolver = resolver
         self._embedder = embedder or NullEmbedder()
         self._tier_boost = tier_boost or DEFAULT_TIER_BOOST
         self._top_k = top_k
+        self._graph_writer = graph_writer
+        self._synthesis_llm = synthesis_llm
+        # Background extraction tasks — fire-and-forget so the write path never
+        # blocks on entity extraction / graph persistence. Kept referenced so
+        # they aren't GC'd mid-flight (asyncio only holds a weak ref).
+        self._extraction_tasks: set[asyncio.Task[None]] = set()
 
     # ── writes ────────────────────────────────────────────────
 
@@ -103,8 +123,19 @@ class OrgMemoryService(BaseMemoryService):
     # ── reads ─────────────────────────────────────────────────
 
     async def search_memory(
-        self, *, app_name: str, user_id: str, query: str
-    ) -> SearchMemoryResponse:
+        self, *, app_name: str, user_id: str, query: str, synthesize: bool = False
+    ) -> SearchMemoryResponse | "SearchResult":
+        """Hybrid search over the caller's scope chain.
+
+        Default (``synthesize=False``) returns the ADK ``SearchMemoryResponse``
+        of ranked rows — the backward-compatible shape every existing caller
+        expects. With ``synthesize=True`` the ranked rows are passed through the
+        answer-synthesis layer (:func:`nuvel.memory.synthesis.synthesize`) and a
+        :class:`~nuvel.memory.synthesis.SearchResult` is returned instead: a
+        cited prose answer, confidence, and an explicit gap analysis, plus the
+        raw ``rows`` for programmatic use. Prose synthesis uses the injected
+        ``synthesis_llm`` when present and degrades to a ranked list otherwise.
+        """
         chain = self._resolver.resolve(user_id)
         q_embedding = await self._embedder.embed(query)
         rows = await self._store.search(
@@ -115,6 +146,10 @@ class OrgMemoryService(BaseMemoryService):
             k=self._top_k,
             tier_boost=self._tier_boost,
         )
+        if synthesize:
+            from nuvel.memory.synthesis import synthesize as synthesize_rows
+
+            return await synthesize_rows(query, rows, llm=self._synthesis_llm)
         return SearchMemoryResponse(
             memories=[self._row_to_entry(r) for r in rows]
         )
@@ -175,7 +210,34 @@ class OrgMemoryService(BaseMemoryService):
             source_session=session_id,
             custom_metadata={k: v for k, v in (custom_metadata or {}).items() if k != "scope"},
         )
-        await self._store.insert(row)
+        memory_id = await self._store.insert(row)
+        self._schedule_extraction(memory_id, content)
+
+    # ── knowledge-graph extraction (fire-and-forget) ───────────
+
+    def _schedule_extraction(self, memory_id: str, content: str) -> None:
+        """Run zero-LLM entity extraction and persist edges in the background so
+        the graph self-wires without blocking the write response. No-ops when no
+        graph writer is configured."""
+        if self._graph_writer is None:
+            return
+        task = asyncio.create_task(self._extract_and_persist(memory_id, content))
+        self._extraction_tasks.add(task)
+        task.add_done_callback(self._extraction_tasks.discard)
+
+    async def _extract_and_persist(self, memory_id: str, content: str) -> None:
+        try:
+            links = extract_entity_links(content)
+            if links and self._graph_writer is not None:
+                await self._graph_writer.write_links(memory_id, links)
+        except Exception:  # never surface into the write path
+            log.exception("knowledge-graph extraction failed for memory %s", memory_id)
+
+    async def drain_extraction(self) -> None:
+        """Await all in-flight background extraction tasks. For tests and for
+        graceful shutdown — the normal write path never awaits these."""
+        while self._extraction_tasks:
+            await asyncio.gather(*list(self._extraction_tasks), return_exceptions=True)
 
 
 def _extract_content(m: dict[str, Any] | MemoryEntry) -> str:
