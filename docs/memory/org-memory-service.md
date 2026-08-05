@@ -15,24 +15,31 @@ A scope-aware, hierarchical memory service. ADK 2.x drop-in: subclass of `BaseMe
 
 ## Enable
 
-Set:
-- `NUVEL_ORG_MEMORY_DSN` — Postgres DSN (Neon recommended; pgvector + pg_trgm required).
-- `NUVEL_ORG_GRAPH_PATH` — path to `org_graph.yaml` (see `tests/fixtures/org_graph.yaml` for the format).
-- `GOOGLE_API_KEY` — optional. Without it, the service falls back to `NullEmbedder` and reads via `pg_trgm` lexical similarity only.
+Set three env vars and `nuvel run-adk` auto-wires `OrgMemoryService` through ADK's service registry — no custom runner required:
 
-`run_adk.py` will run the migration at startup when `NUVEL_ORG_MEMORY_DSN` is set. **Note:** ADK 2.x `get_fast_api_app` does not accept a constructed `memory_service` — so the service is not auto-injected into the FastAPI app. To consume it, build a custom Runner:
+- `NUVEL_ORG_MEMORY_DSN` — Postgres DSN (Neon recommended; pgvector + pg_trgm required).
+- `NUVEL_ORG_GRAPH_PATH` — path to `org_graph.yaml` (see `tests/fixtures/org_graph.yaml`).
+- `NUVEL_ORG_MEMORY_URI=nuvel-org-memory://default` — opt-in. ADK's `get_fast_api_app` reads this scheme via the registry and constructs the service.
+- `GOOGLE_API_KEY` — optional. Without it, embeddings fall back to NULL and reads use `pg_trgm` lexical similarity only.
+
+```bash
+export NUVEL_ORG_MEMORY_DSN=postgresql://...
+export NUVEL_ORG_GRAPH_PATH=/etc/nuvel/org_graph.yaml
+export NUVEL_ORG_MEMORY_URI=nuvel-org-memory://default
+nuvel run-adk
+```
+
+DB migration runs idempotently on first service instantiation.
+
+### Standalone use (scripts, batch jobs, evals)
+
+If you need `OrgMemoryService` outside the `run-adk` runner, call the factory directly:
 
 ```python
-import asyncio
-from google.adk.runners import Runner
 from nuvel.memory.factory import build_default_service
 
-async def main():
-    memory_service = await build_default_service()
-    runner = Runner(..., memory_service=memory_service)
-    # ...
-
-asyncio.run(main())
+svc = await build_default_service()   # reads the same env vars
+await svc.add_memory(app_name="x", user_id="alice", memories=[{"content": "..."}])
 ```
 
 ## Write semantics
@@ -109,4 +116,3 @@ NUVEL_MEMORY_TEST_DSN="postgresql://..." pytest tests/test_memory_postgres_store
 - Skill promotion (separate system; reuses Scope).
 - Multi-tenant orgs in a single deployment.
 - Memory expiration / decay.
-- ADK `get_fast_api_app` auto-wiring (waiting on upstream ADK to accept a `memory_service` instance kwarg).
