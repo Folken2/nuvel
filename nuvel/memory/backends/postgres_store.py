@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
 
 import asyncpg
 
+from nuvel.memory import hybrid
 from nuvel.memory.backends._pool import get_pool
 from nuvel.memory.scope import Scope
 from nuvel.memory.store import MemoryRow
 
 MIGRATION = Path(__file__).parent / "migrations" / "0001_init.sql"
+
+# Candidate-pool depth per arm before fusion. Wider than k so RRF has ranks to
+# fuse and the boost cascade has a tail to re-rank; capped to bound the scan.
+_ARM_POOL_MULTIPLIER = 5
+_ARM_POOL_MIN = 30
 
 
 class PostgresStore:
@@ -56,46 +63,107 @@ class PostgresStore:
         k: int,
         tier_boost: dict[str, float],
     ) -> list[MemoryRow]:
-        boost_case = _render_boost_case(tier_boost)
+        """Hybrid RRF search: concurrent keyword (FTS) + vector (cosine) arms,
+        fused via reciprocal rank fusion, then a bounded floor-gated boost
+        cascade (tier → recency → access → title), autocut and dedup.
+
+        The two arms scan the same scope-isolated candidate pool concurrently;
+        the ranking math lives in :mod:`nuvel.memory.hybrid` so it is testable
+        without a database. Falls back to keyword-only when no query embedding
+        is available (NullEmbedder / embed failure).
+        """
+        pool_size = max(_ARM_POOL_MIN, k * _ARM_POOL_MULTIPLIER)
+        vector_arm, keyword_arm = await self._run_arms(
+            org_id=org_id,
+            user_chain_tags=user_chain_tags,
+            q_embedding=q_embedding,
+            query_text=query_text,
+            pool_size=pool_size,
+        )
+        return hybrid.fuse_and_rank(
+            vector_arm=vector_arm,
+            keyword_arm=keyword_arm,
+            query=query_text,
+            tier_boost=tier_boost,
+            k=k,
+        )
+
+    async def _run_arms(
+        self,
+        *,
+        org_id: str,
+        user_chain_tags: list[str],
+        q_embedding: list[float] | None,
+        query_text: str,
+        pool_size: int,
+    ) -> tuple[list[MemoryRow], list[MemoryRow]]:
+        """Run the vector + keyword arms concurrently, each scope-isolated.
+
+        Both arms return the same columns; ``score`` carries the cosine
+        similarity (``1 - cosine_distance``) so the fusion stage can blend it,
+        and is 0.0 for rows without an embedding.
+        """
         pool = await get_pool(self._dsn)
-        async with pool.acquire() as conn:
+
+        async def vector() -> list[MemoryRow]:
+            if q_embedding is None:
+                return []
+            async with pool.acquire() as conn:
+                records = await conn.fetch(
+                    f"""
+                    select {_SELECT_COLS},
+                           (1 - (embedding <=> $1)) as score
+                    from org_memories
+                    where org_id = $2
+                      and (scope_level || ':' || scope_id) = any($3)
+                      and embedding is not null
+                    order by embedding <=> $1
+                    limit $4
+                    """,
+                    q_embedding, org_id, user_chain_tags, pool_size,
+                )
+            return [_row_from_record(r) for r in records]
+
+        async def keyword() -> list[MemoryRow]:
+            # FTS arm (ts_rank) with a trigram-similarity tiebreak so short or
+            # fuzzy queries still rank. The score column carries cosine (or 0.0
+            # when there's no query embedding) for the downstream blend, NOT the
+            # keyword rank — RRF fuses the rank ordering itself. The cosine
+            # expression is only spliced in when q_embedding is present so
+            # asyncpg never sees an untyped NULL vector parameter.
             if q_embedding is not None:
-                sql = f"""
-                select id::text, org_id, scope_level, scope_id, scope_chain,
-                       content, embedding, source_app, source_session,
-                       custom_metadata, created_at,
-                       (1 - (embedding <=> $1)) * ({boost_case}) as score
-                from org_memories
-                where org_id = $2
-                  and (scope_level || ':' || scope_id) = any($3)
-                  and embedding is not null
-                union all
-                select id::text, org_id, scope_level, scope_id, scope_chain,
-                       content, embedding, source_app, source_session,
-                       custom_metadata, created_at,
-                       similarity(content, $4) * 0.5 * ({boost_case}) as score
-                from org_memories
-                where org_id = $2
-                  and (scope_level || ':' || scope_id) = any($3)
-                  and embedding is null
-                order by score desc nulls last
-                limit $5
-                """
-                records = await conn.fetch(sql, q_embedding, org_id, user_chain_tags, query_text, k)
+                score_expr = (
+                    "case when embedding is not null "
+                    "then (1 - (embedding <=> $5)) else 0.0 end as score"
+                )
+                fts_args = (org_id, user_chain_tags, query_text, pool_size, q_embedding)
             else:
-                sql = f"""
-                select id::text, org_id, scope_level, scope_id, scope_chain,
-                       content, embedding, source_app, source_session,
-                       custom_metadata, created_at,
-                       similarity(content, $1) * ({boost_case}) as score
-                from org_memories
-                where org_id = $2
-                  and (scope_level || ':' || scope_id) = any($3)
-                order by score desc nulls last
-                limit $4
-                """
-                records = await conn.fetch(sql, query_text, org_id, user_chain_tags, k)
-        return [_row_from_record(r) for r in records]
+                score_expr = "0.0 as score"
+                fts_args = (org_id, user_chain_tags, query_text, pool_size)
+            async with pool.acquire() as conn:
+                records = await conn.fetch(
+                    f"""
+                    select {_SELECT_COLS},
+                           {score_expr}
+                    from org_memories
+                    where org_id = $1
+                      and (scope_level || ':' || scope_id) = any($2)
+                      and (
+                        to_tsvector('english', content)
+                          @@ websearch_to_tsquery('english', $3)
+                        or similarity(content, $3) > 0.1
+                      )
+                    order by
+                      ts_rank(to_tsvector('english', content),
+                              websearch_to_tsquery('english', $3)) desc,
+                      similarity(content, $3) desc
+                    limit $4
+                    """,
+                    *fts_args,
+                )
+            return [_row_from_record(r) for r in records]
+
+        return await asyncio.gather(vector(), keyword())
 
     async def move(self, memory_id: str, new_scope: Scope, new_chain: list[str]) -> None:
         pool = await get_pool(self._dsn)
@@ -132,9 +200,11 @@ class PostgresStore:
         return [_row_from_record(r) for r in records]
 
 
-def _render_boost_case(tier_boost: dict[str, float]) -> str:
-    parts = " ".join(f"when '{lvl}' then {val}" for lvl, val in tier_boost.items())
-    return f"case scope_level {parts} else 0.5 end"
+_SELECT_COLS = (
+    "id::text, org_id, scope_level, scope_id, scope_chain, "
+    "content, embedding, source_app, source_session, "
+    "custom_metadata, created_at"
+)
 
 
 def _row_from_record(rec: Any) -> MemoryRow:

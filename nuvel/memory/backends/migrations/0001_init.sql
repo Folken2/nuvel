@@ -27,3 +27,8 @@ create index if not exists org_memories_scope
 
 create index if not exists org_memories_content_trgm
   on org_memories using gin (content gin_trgm_ops);
+
+-- Full-text arm for hybrid RRF search (keyword arm; the vector arm uses the
+-- ivfflat index above). Functional index over to_tsvector so no extra column.
+create index if not exists org_memories_content_fts
+  on org_memories using gin (to_tsvector('english', content));
