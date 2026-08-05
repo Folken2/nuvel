@@ -11,9 +11,10 @@ Schema (per job, all timestamps are ISO-8601 UTC):
         "name": "...",
         "prompt": "...",
         "schedule": "every 1h",
-        "status": "active" | "paused" | "completed",
+        "status": "active" | "paused" | "completed" | "pending",
         "delivery": "local" | "origin" | "slack:<chan>" | "telegram:<chat>",
         "origin": {"platform": "slack", "channel": "C123", "thread_ts": "..."},
+        "secrets": ["SLACK_TOKEN", ...] | null,  # declared env-var scope
         "created_at": "...",
         "next_run_at": "...",
         "last_run_at": "..." | null,

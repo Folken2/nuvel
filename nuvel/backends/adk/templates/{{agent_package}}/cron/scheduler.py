@@ -25,6 +25,7 @@ from typing import Any, Awaitable, Callable
 
 from . import storage
 from .delivery import deliver, is_silent, strip_silent
+from .isolation import cron_isolation
 from .schedule import compute_next_run, parse_schedule
 from .service import NUVEL_CRON_RUNNING_ENV, get_service
 
@@ -78,8 +79,12 @@ async def run_one_job(
     prev = os.environ.get(NUVEL_CRON_RUNNING_ENV)
     os.environ[NUVEL_CRON_RUNNING_ENV] = "1"
     try:
+        # Install the isolation scope (headless flag + scoped secrets) for the
+        # duration of the run. The ContextVars propagate through the awaited
+        # runner so the headless-policy plugin and any shell tool see them.
         try:
-            response = await invoker(job_id, prompt)
+            with cron_isolation(job_id, secrets=job.get("secrets")):
+                response = await invoker(job_id, prompt)
         except Exception as exc:
             logger.exception("cron: job %s invocation failed", job_id)
             job["last_error"] = str(exc)

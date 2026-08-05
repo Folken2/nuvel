@@ -15,16 +15,24 @@ from google.adk.tools import FunctionTool
 from .service import NUVEL_CRON_RUNNING_ENV, get_service
 
 
-_MUTATING = {"create", "update", "pause", "resume", "run", "remove"}
+_MUTATING = {"create", "update", "pause", "resume", "run", "remove", "confirm"}
+
+
+def _parse_secrets(raw: str) -> list[str] | None:
+    """Parse the comma-separated ``secrets`` arg. ``""`` → None (full env)."""
+    if not raw or not raw.strip():
+        return None
+    return [n.strip() for n in raw.split(",") if n.strip()]
 
 
 def cronjob(
-    action: Literal["create", "list", "get", "update", "pause", "resume", "run", "remove"],
+    action: Literal["create", "list", "get", "update", "pause", "resume", "run", "remove", "confirm"],
     job_id: str = "",
     name: str = "",
     prompt: str = "",
     schedule: str = "",
     delivery: str = "",
+    secrets: str = "",
     new_name: str = "",
     new_prompt: str = "",
     new_schedule: str = "",
@@ -37,8 +45,8 @@ def cronjob(
 
     Args:
         action: One of ``create``, ``list``, ``get``, ``update``, ``pause``,
-                ``resume``, ``run``, ``remove``.
-        job_id: Required for get/update/pause/resume/run/remove.
+                ``resume``, ``run``, ``remove``, ``confirm``.
+        job_id: Required for get/update/pause/resume/run/remove/confirm.
         name: Job name (required for ``create``).
         prompt: Prompt to run when the job fires (required for ``create``).
         schedule: Schedule string (required for ``create``). Examples:
@@ -46,6 +54,9 @@ def cronjob(
                   ``"2026-12-15T09:00:00"``.
         delivery: ``local`` (default), ``origin``, ``slack:<channel>``,
                   or ``telegram:<chat_id>``.
+        secrets: Optional comma-separated env-var names the job may read
+                 (e.g. ``"SLACK_TOKEN,GITHUB_TOKEN"``). Enforced only when
+                 secret scoping is enabled; empty = full env (back-compat).
         new_name / new_prompt / new_schedule / new_status: For ``update``.
 
     Returns:
@@ -78,8 +89,13 @@ def cronjob(
                 "job": svc.create_job(
                     name=name, prompt=prompt, schedule=schedule,
                     delivery=delivery or "local",
+                    secrets=_parse_secrets(secrets),
                 ),
             }
+        if action == "confirm":
+            if not job_id:
+                return {"status": "error", "message": "job_id required"}
+            return {"status": "ok", "job": svc.confirm_job(job_id)}
         if action == "update":
             fields: dict[str, Any] = {}
             if new_name:
