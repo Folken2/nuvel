@@ -33,6 +33,9 @@ from .memory_plugin import MemoryPlugin
 from .trace_plugin import TracePlugin
 from .skill_curator_plugin import SkillCuratorPlugin
 
+from {{agent_package}}.guardrails import GuardrailsPlugin
+from {{agent_package}}.memory import SIBLING_RUNNER
+
 # ── Pre-configured instances (importable as dotted paths by ADK) ─────
 
 memory = MemoryPlugin()
@@ -45,6 +48,9 @@ context_filter = ContextFilterPlugin(
 console_logger = ConsoleLoggerPlugin()
 tool_events = ToolEventsPlugin()
 resilience = ResiliencePlugin()
+# Long-horizon safety: halts runaway model/tool loops via a shared latch.
+# Sits right after resilience so it observes tool outcomes retries produce.
+guardrails = GuardrailsPlugin()
 cache = CachePlugin()
 self_healing = ReflectAndRetryToolPlugin(
     name="self_healing",
@@ -56,6 +62,9 @@ save_files = SaveFilesAsArtifactsPlugin()
 recordings = RecordingsPlugin()
 replay = ReplayPlugin()
 skill_curator = SkillCuratorPlugin()
+# Owns the fire-and-forget lifecycle for the memory review fork and drains
+# in-flight judge runs at shutdown. No-op until NUVEL_MEMORY_REVIEW_FORK=1.
+sibling_runner = SIBLING_RUNNER
 
 # Ordered list of dotted paths for get_fast_api_app(extra_plugins=...).
 # skill_curator is intentionally last — it observes the trajectory built by
@@ -70,12 +79,14 @@ PLUGIN_PATHS = [
     "{{agent_package}}.plugins.console_logger",
     "{{agent_package}}.plugins.tool_events",
     "{{agent_package}}.plugins.resilience",
+    "{{agent_package}}.plugins.guardrails",
     "{{agent_package}}.plugins.cache",
     "{{agent_package}}.plugins.self_healing",
     "{{agent_package}}.plugins.save_files",
     "{{agent_package}}.plugins.recordings",
     "{{agent_package}}.plugins.replay",
     "{{agent_package}}.plugins.skill_curator",
+    "{{agent_package}}.plugins.sibling_runner",
 ]
 
 # Same plugins as PLUGIN_PATHS, as instances rather than dotted import paths.
@@ -90,12 +101,14 @@ PLUGIN_INSTANCES = [
     console_logger,
     tool_events,
     resilience,
+    guardrails,
     cache,
     self_healing,
     save_files,
     recordings,
     replay,
     skill_curator,
+    sibling_runner,
 ]
 
 __all__ = [
@@ -107,6 +120,7 @@ __all__ = [
     "TracePlugin",
     "ContextWindowPlugin",
     "SkillCuratorPlugin",
+    "GuardrailsPlugin",
     "PLUGIN_PATHS",
     "PLUGIN_INSTANCES",
 ]

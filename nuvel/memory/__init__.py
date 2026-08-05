@@ -6,9 +6,14 @@ from nuvel.memory.factory import build_default_service
 from nuvel.memory.resolver import ConfigScopeResolver, ScopeResolver
 from nuvel.memory.scope import Scope, ScopeChain
 from nuvel.memory.store import MemoryRow, MemoryStore, ScopeAuthorizationError
+from nuvel.memory.sibling_runner import SIBLING_RUNNER, SiblingRunner
+from nuvel.memory.throttle import try_claim
 
 __all__ = [
     "build_default_service",
+    "SIBLING_RUNNER",
+    "SiblingRunner",
+    "try_claim",
     "ConfigScopeResolver",
     "Embedder",
     "GoogleEmbedder",

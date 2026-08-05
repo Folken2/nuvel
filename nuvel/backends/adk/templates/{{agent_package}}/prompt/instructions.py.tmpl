@@ -1,12 +1,18 @@
 """
 Instruction builder for {{agent_name}}.
 
-Composes the system prompt every turn from these layers:
-  1. AWAKENING.md (persona scaffold only — present until complete_awakening deletes it)
-  2. SOUL.md      (character — read fresh each turn)
-  3. Frame        (system posture)
-  4. Date
-  5. Memory       (AGENT_MEMORY.md + topics)
+Composes the system prompt as three tiers so the cached prefix stays stable
+across turns (prefix caching keeps latency + cost down):
+
+  1. Stable tier   — static identity/persona: AWAKENING.md (persona scaffold,
+                     present until complete_awakening removes it), SOUL.md, and
+                     the system frame. Identical across turns within a session.
+  2. Session tier  — session-specific but slow-changing: the structured
+                     ## User Profile block and the memories retrieved for this
+                     conversation (relevance-conditioned, not the whole file).
+  3. Volatile tier — per-turn reminders (date, infra warnings, last-error
+                     nudge, near-budget notice). Rides the tail, NOT the
+                     cached prefix.
 
 Skills are exposed via the LazySkillToolset (see agent.py) — queried on
 demand rather than injected into the prompt.
@@ -15,7 +21,8 @@ demand rather than injected into the prompt.
 import logging
 
 from ..utils.date_utils import format_current_date
-from ..state.memory import load_all_memory
+from ..memory.preload import retrieve_memory_block
+from ..memory.profile import load_user_profile_block
 from ..config.paths import awakening_file, soul_file
 
 logger = logging.getLogger(__name__)
@@ -31,24 +38,76 @@ def _read(path) -> str:
         return ""
 
 
+def _invocation_context(ctx):
+    return getattr(ctx, "_invocation_context", None)
+
+
+def _user_id(ctx) -> str:
+    ictx = _invocation_context(ctx)
+    return getattr(ictx, "user_id", "") or ""
+
+
+def _state(ctx) -> dict:
+    ictx = _invocation_context(ctx)
+    session = getattr(ictx, "session", None)
+    state = getattr(session, "state", None)
+    return state if isinstance(state, dict) else {}
+
+
 _FRAME = """\
 {{instruction_frame}}"""
 
 
-async def get_agent_instruction(ctx) -> str:
-    """ADK InstructionProvider — assembled per turn."""
+def build_stable_tier() -> str:
+    """Tier 1 — static identity/persona. Byte-identical across turns."""
     soul = _read(soul_file())
-{{awakening_load}}    memory = ""
-    try:
-        memory = load_all_memory()
-    except Exception as e:
-        logger.warning("Failed to load memory: %s", e)
-
-    parts: list[str] = []
+{{awakening_load}}    parts: list[str] = []
 {{awakening_inject}}    if soul:
         parts.append(soul)
     parts.append(_FRAME)
-    parts.append(f"Today: {format_current_date()}")
-    if memory:
-        parts.append(f"# Memory\n\n{memory}")
     return "\n\n".join(parts)
+
+
+async def build_session_tier(ctx) -> str:
+    """Tier 2 — session context: user profile + relevance-retrieved memory."""
+    sections: list[str] = []
+    try:
+        profile_block = load_user_profile_block(_user_id(ctx))
+        if profile_block:
+            sections.append(profile_block)
+    except Exception as e:
+        logger.warning("Failed to load user profile: %s", e)
+    try:
+        memory = await retrieve_memory_block(ctx)
+        if memory:
+            sections.append(f"# Relevant memory\n\n{memory}")
+    except Exception as e:
+        logger.warning("Failed to load memory: %s", e)
+    return "\n\n".join(sections)
+
+
+def build_volatile_tier(ctx) -> str:
+    """Tier 3 — per-turn reminders. Never part of the cached prefix."""
+    reminders: list[str] = [f"Today: {format_current_date()}"]
+    state = _state(ctx)
+    infra = state.get("_infra_warning")
+    if infra:
+        reminders.append(f"[!] Infrastructure: {infra}")
+    last_error = state.get("_last_error")
+    if last_error:
+        reminders.append(f"[!] Last error to address: {last_error}")
+    if state.get("_near_budget"):
+        reminders.append("[!] Approaching cost/context budget — be concise and wrap up.")
+    return "\n\n".join(reminders)
+
+
+async def get_agent_instruction(ctx) -> str:
+    """ADK InstructionProvider — assembled per turn from the three tiers."""
+    tiers: list[str] = [build_stable_tier()]
+    session = await build_session_tier(ctx)
+    if session:
+        tiers.append(session)
+    volatile = build_volatile_tier(ctx)
+    if volatile:
+        tiers.append(volatile)
+    return "\n\n".join(tiers)

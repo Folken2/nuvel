@@ -95,13 +95,13 @@ class TestRunAdkGatewayUsesAgentHarness(unittest.TestCase):
     def test_streaming_section_uses_agent_harness(self):
         self.assertIn("from agent_hn3.harness import AgentHarness", self.run_adk)
         self.assertIn("harness = AgentHarness.get(app_name)", self.run_adk)
-        self.assertIn("runner = harness.build_runner(agent=live_agent)", self.run_adk)
+        # Runner is built through the harness (memory_service now wired in too).
+        self.assertIn("harness.build_runner(agent=live_agent, memory_service=", self.run_adk)
 
     def test_cron_section_uses_agent_harness(self):
-        self.assertIn(
-            "AgentHarness.get(app.state.app_name).build_runner(agent=_cron_root)",
-            self.run_adk,
-        )
+        self.assertIn("_harness = AgentHarness.get(app.state.app_name)", self.run_adk)
+        self.assertIn("_harness.build_runner(", self.run_adk)
+        self.assertIn("agent=_cron_root", self.run_adk)
 
     def test_standard_mode_uses_agent_harness_for_session_and_artifact_uris(self):
         self.assertIn('harness = AgentHarness.get("agent-hn3")', self.run_adk)
@@ -128,7 +128,6 @@ class TestRunAdkGatewayUsesAgentHarnessNoFlags(unittest.TestCase):
         self.assertIn("harness = AgentHarness.get(app_name)", self.run_adk)
 
     def test_cron_section_uses_agent_harness(self):
-        self.assertIn(
-            "AgentHarness.get(app.state.app_name).build_runner(agent=_cron_root)",
-            self.run_adk,
-        )
+        self.assertIn("_harness = AgentHarness.get(app.state.app_name)", self.run_adk)
+        self.assertIn("_harness.build_runner(", self.run_adk)
+        self.assertIn("agent=_cron_root", self.run_adk)

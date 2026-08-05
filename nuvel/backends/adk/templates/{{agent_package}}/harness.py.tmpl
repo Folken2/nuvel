@@ -29,6 +29,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from google.adk.agents import BaseAgent
 from google.adk.apps.app import App
+from google.adk.apps._configs import EventsCompactionConfig, ResumabilityConfig
 from google.adk.artifacts.base_artifact_service import ArtifactVersion, BaseArtifactService
 from google.adk.runners import Runner
 from google.adk.sessions.base_session_service import BaseSessionService
@@ -76,6 +77,8 @@ class AgentHarness:
         self.dev_mode = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
         self._session_service: Optional[BaseSessionService] = None
         self._artifact_service: Optional[BaseArtifactService] = None
+        self._memory_service: Optional[Any] = None
+        self._memory_service_built = False
 
     @classmethod
     def get(cls, app_name: str) -> "AgentHarness":
@@ -179,11 +182,59 @@ class AgentHarness:
         """Pre-configured BasePlugin instances, ordered as PLUGIN_PATHS."""
         return PLUGIN_INSTANCES
 
+    async def memory_service(self) -> Optional[Any]:
+        """The default memory backend (OrgMemoryService) when a DB is configured.
+
+        Returns ``None`` when no org-memory DSN is set or the org-memory extra
+        isn't installed — the agent then relies on the markdown memory store.
+        Cached after the first build. Async because building the store may run
+        a migration. Pass the result to ``build_runner(memory_service=...)`` so
+        relevance-conditioned recall retrieves through it.
+        """
+        if not self._memory_service_built:
+            from {{agent_package}}.memory.org_backend import build_memory_service
+
+            self._memory_service = await build_memory_service()
+            self._memory_service_built = True
+        return self._memory_service
+
+    # ── Long-horizon resilience config ───────────────────────────────
+
+    @property
+    def resumability_config(self) -> ResumabilityConfig:
+        """Let a long run resume after an interruption instead of restarting.
+
+        Disable via RESUMABILITY=false when a deployment can't persist the
+        extra invocation state (e.g. a stateless demo).
+        """
+        enabled = os.getenv("RESUMABILITY", "true").lower() in ("true", "1", "yes")
+        return ResumabilityConfig(is_resumable=enabled)
+
+    @property
+    def compaction_config(self) -> EventsCompactionConfig:
+        """Roll old events into summaries so long sessions don't blow the window.
+
+        Fires on a sliding window of user turns (``compaction_interval``) with a
+        small ``overlap_size`` so summaries share context, and keeps the most
+        recent events verbatim (``event_retention_size``). Tunable via env.
+        """
+        return EventsCompactionConfig(
+            compaction_interval=int(os.getenv("COMPACTION_INTERVAL", "8")),
+            overlap_size=int(os.getenv("COMPACTION_OVERLAP", "2")),
+            event_retention_size=int(os.getenv("COMPACTION_RETENTION", "20")),
+        )
+
     # ── App / Runner construction ────────────────────────────────────
 
     def app_for(self, root_agent: BaseAgent) -> App:
         """Builds an App wrapping root_agent with the full plugin chain."""
-        return App(name=self.app_name, root_agent=root_agent, plugins=self.plugins)
+        return App(
+            name=self.app_name,
+            root_agent=root_agent,
+            plugins=self.plugins,
+            resumability_config=self.resumability_config,
+            events_compaction_config=self.compaction_config,
+        )
 
     def build_runner(
         self,
