@@ -107,6 +107,12 @@ ENV_READ_PATTERNS = (
     re.compile(r"""\b_?(?:env|get_env)[a-z_]*\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
 )
 
+# Known blind spot: the fifth pattern above only matches helpers with "env"/"get_env" as
+# a *prefix* (e.g. `_env_int`). A suffix-named helper like `_int_env` (env at the end) is
+# not matched. That's harmless today — `_int_env` in skill_curator_plugin.py is always
+# called with a variable (an already-covered ENV_* constant), never a literal directly —
+# but a future call passing a literal straight to a suffix-named helper would go uncaught.
+
 ENV_ENTRY_RE = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]+)=", re.M)
 
 # Read by template code but deliberately absent from .env.example. Each entry needs a
@@ -185,20 +191,50 @@ PLUGIN_INSTANCE_LABELS = {
     "sibling_runner": "SiblingRunner",
 }
 
-PLUGIN_INSTANCES_LIST_RE = re.compile(r"PLUGIN_INSTANCES\s*=\s*\[(.*?)\]", re.S)
+# Anchors the closing bracket at column 0, matching how PLUGIN_INSTANCES is actually
+# formatted (one entry per line, `]` alone on its own line). A naive non-greedy
+# `\[(.*?)\]` would stop at the *first* `]` it sees — silently truncating if the list
+# were ever refactored to `PLUGIN_INSTANCES = [...] + EXTRA_PLUGINS` or contained an
+# entry with an inner `]` (a subscript, a comprehension). That would make this parser
+# return a short list, which would still validate clean against a subset of the README
+# table — a green test certifying coverage it doesn't actually have. Anchoring the
+# close means those shapes fail to match at all instead of matching short.
+#
+# Known static-parse limitation (by design, not a bug): this only understands a single
+# bracketed list literal. A plugin appended after the literal via `.append()`, `+=`, or
+# a conditional block is invisible to this parser and gets no coverage checking.
+PLUGIN_INSTANCES_LIST_RE = re.compile(r"PLUGIN_INSTANCES\s*=\s*\[(.*?)^\]", re.S | re.M)
 README_PLUGIN_ROW_RE = re.compile(r"^\|\s*\*\*([A-Za-z0-9]+)\*\*\s*\|", re.M)
+
+# A parse that finds fewer than this many entries is treated as implausible rather than
+# real — this is a sanity floor to catch catastrophic truncation, not the actual plugin
+# count (which must never be hand-encoded here; that's the drift this test exists to stop).
+_PLUGIN_INSTANCES_MIN_PLAUSIBLE = 2
 
 
 def _plugin_instance_names() -> list[str]:
     """Bare variable names, one per line, from the PLUGIN_INSTANCES list literal."""
     text = PLUGIN_INIT_TMPL.read_text(encoding="utf-8")
     match = PLUGIN_INSTANCES_LIST_RE.search(text)
-    assert match, f"could not find a PLUGIN_INSTANCES list in {PLUGIN_INSTANCES_SOURCE}"
+    assert match, (
+        f"could not find a PLUGIN_INSTANCES list matching {PLUGIN_INSTANCES_LIST_RE.pattern!r} "
+        f"in {PLUGIN_INSTANCES_SOURCE}. The PLUGIN_INSTANCES literal may have been "
+        "reformatted or built dynamically (e.g. `[...] + EXTRA_PLUGINS`, an `.append()`, "
+        "or a closing `]` no longer alone on its own line) — this parser only understands "
+        "a single bracketed literal with the closing `]` at column 0."
+    )
     names = []
     for line in match.group(1).splitlines():
         line = line.split("#", 1)[0].strip().rstrip(",")
         if line:
             names.append(line)
+    assert len(names) >= _PLUGIN_INSTANCES_MIN_PLAUSIBLE, (
+        f"parsing {PLUGIN_INSTANCES_SOURCE} with {PLUGIN_INSTANCES_LIST_RE.pattern!r} "
+        f"found only {len(names)} entrie(s): {names}. That is implausibly few for the "
+        "real plugin chain — the PLUGIN_INSTANCES literal may have been reformatted or "
+        "built dynamically in a way this parser doesn't understand; treating a short "
+        "parse as ground truth would silently under-check README coverage."
+    )
     return names
 
 
