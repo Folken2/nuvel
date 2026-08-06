@@ -60,7 +60,7 @@ Tool names follow MCP conventions — Composio prefixes them by toolkit. Example
 
 The ADK `McpToolset` wires these into the agent's tool list automatically; your system prompt doesn't need to enumerate them. Claude/the model picks based on the descriptions Composio provides.
 
-If you want only specific toolkits exposed (rather than every connection), filter at the Composio dashboard level — connect only what the agent should access. The MCP transport doesn't have per-tool gating.
+If you want only specific toolkits or tools exposed (rather than every connection), you have three options: connect only what the agent should access in the Composio dashboard; scope the session at creation time with `create(..., toolkits=..., tools=..., tags=...)`; or filter client-side with ADK's `McpToolset(tool_filter=[...])`. See `references/composio-patterns.md` for both filtering mechanisms.
 
 ## Multi-tenant patterns — `user_id` is load-bearing
 

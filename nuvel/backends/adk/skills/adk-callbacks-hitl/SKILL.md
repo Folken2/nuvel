@@ -168,6 +168,52 @@ actions = EventActions(state_delta={"counter": new_value})
 | `user:` | User | Yes | Per-user preferences |
 | `temp:` | Temporary | No | Scratch data, cleared after turn |
 
+## Callbacks already installed by the generated plugin chain
+
+A generated agent doesn't start from a blank callback slate — the shipped
+plugin chain already registers real callbacks the reader will encounter
+before writing their own:
+
+- `GuardrailsPlugin` — `before_model_callback` (the halt-latch consumer),
+  `after_model_callback` (`NoProgressGuard`, a no-progress/response-loop
+  detector), and `after_tool_callback` (`RepeatedFailureGuard`, a
+  repeated-failure detector).
+- `exfil_guard` — a `before_tool_callback` that scans tool arguments for
+  secret-shaped values and can block the call.
+- `CronIsolationPlugin` — a `before_tool_callback` that is a no-op on
+  ordinary turns and only engages during a scheduled cron run.
+
+For the full mechanism behind the first two, load `adk-long-horizon-guardrails`;
+for the cron-specific one, load `adk-cron-isolation`.
+
+### Worked example: the halt latch as a state-key pattern
+
+The halt guards are a concrete instance of the "write a reason to state, then
+short-circuit while it's set" pattern this skill teaches in the abstract:
+
+```python
+# after_tool_callback (or after_model_callback) — writes the reason
+def latch_halt(state, reason: str) -> bool:
+    if state.get("halt_reason"):
+        return False  # already halted — first reason wins
+    state["halt_reason"] = reason
+    return True
+
+# before_model_callback — consumes it
+async def halt_consumer_callback(*, callback_context, llm_request=None):
+    reason = callback_context.state.get("halt_reason")
+    if not reason:
+        return None                       # not halted — model call proceeds
+    callback_context.state["__halt_handoff_delivered__"] = True
+    return LlmResponse(content=halt_content(reason))
+```
+
+Note what the shipped version does **not** do: nothing in the default plugin
+chain calls `acknowledge_halt` / `reset_halt_handoff` to clear the latch, so
+a halted session stays halted until something explicitly clears it at a
+turn boundary — a latch does not self-clear. See `adk-long-horizon-guardrails`
+for that clearing contract in full.
+
 ## References
 
 - Load `callback-signatures` for every callback signature with WRONG vs CORRECT examples.

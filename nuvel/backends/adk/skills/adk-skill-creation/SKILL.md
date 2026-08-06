@@ -177,6 +177,16 @@ Produce a structured review with sections for each category above. Use severity 
 - Load `performance-patterns` for common performance anti-patterns.
 ```
 
+## Skills proposed by the agent itself
+
+A generated agent can optionally propose its own `SKILL.md` files: the
+skill curator (`NUVEL_SKILL_CURATOR`, default off) observes tool usage
+during a run and writes candidate skills into `NUVEL_SKILL_PROPOSALS_DIR`
+for a human to review before they become live skills — the conventions in
+this skill are exactly what such a proposal should be judged against
+before it's accepted. Load `adk-memory-self-improvement` for how the
+curator decides when to propose and where proposals land.
+
 ## Wiring Skills into an Agent
 
 After creating SKILL.md files, they must be wired into the agent via `SkillToolset`. Load the `skilltoolset-wiring` reference for the complete wiring code.
