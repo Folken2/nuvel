@@ -83,6 +83,8 @@ Construct it with `GuardrailsPlugin(failure_threshold=3, no_progress_window=5)` 
 
 `EXFIL_GUARD_STRICT` controls the response: it defaults to `1` (strict). In strict mode the call is blocked outright and the model gets back an error result instead of the tool ever running. In lax mode the call proceeds, but a warning is stamped into `tool_context.state["exfil_warning"]` for a downstream logger or plugin to surface.
 
+`exfil_guard` ships wired unconditionally, exactly like the halt guards: `agent.py.tmpl` imports it and registers it as `before_tool_callback=[exfil_guard]` on the agent, so every generated agent scans every tool call's arguments from the first run. This is a deliberate asymmetry within the "command / exfiltration guards" family: `exfil_guard` is auto-wired, but `command_safety.classify` (above) is **not** — it's a library function you call from your own tool's guard, not something the scaffold registers for you. Don't assume the two share a wiring status just because they live in the same module family.
+
 ## When NOT to use
 
 These guards are default-on, but "default-on" doesn't mean "never tune":
@@ -111,6 +113,6 @@ EXFIL_GUARD_STRICT=1        # default; 0/false/no = lax (flag instead of block)
 | `NoProgressGuard` | `after_model_callback` | `window` identical model responses in a row |
 | `RepeatedFailureGuard` | `after_tool_callback` | `threshold` identical-signature tool failures in a row |
 | `command_safety.classify` | (consulted by your tool's own guard, not auto-wired) | destructive/risky shell argv |
-| `exfil_guard` | `before_tool_callback` | secret-shaped tool arguments |
+| `exfil_guard` | `before_tool_callback` (auto-wired) | secret-shaped tool arguments |
 
 Internals of the halt latch — turn ordering, why first-write-wins, the handoff flag's once-per-halt semantics, and a worked example of authoring a custom guard — are in `references/halt-latch-internals.md`.

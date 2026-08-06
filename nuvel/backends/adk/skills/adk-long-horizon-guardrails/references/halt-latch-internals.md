@@ -41,7 +41,7 @@ Concretely, in a turn where the model decides to call a tool:
    may latch a halt *for the next turn* — it does not retroactively cancel the
    response the model just gave.
 4. If the model asked for a tool call, `before_tool_callback` (`exfil_guard`,
-   if wired) runs before the tool executes.
+   wired unconditionally via `agent.py.tmpl`) runs before the tool executes.
 5. `after_tool_callback` (`RepeatedFailureGuard`) inspects the tool result and
    may latch a halt, again for the next turn.
 
