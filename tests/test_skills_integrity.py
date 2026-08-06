@@ -1,8 +1,19 @@
-"""Integrity tests for the bundled knowledge skills and template env surface.
+"""Integrity tests for the bundled knowledge skills.
 
 These exist because four PRs between v0.2.0 and 643994f shipped subsystems with no
-skill coverage and 18 environment variables with no `.env.example` entry. They turn
-"remember to document it" into a failing build.
+skill coverage. They turn "remember to document the skill" into a failing build.
+
+Three guards, all static checks over `nuvel/backends/*/skills/`:
+
+1. `test_referenced_files_exist` — a SKILL.md must not cite a `references/*.md`
+   that isn't on disk.
+2. `test_frontmatter_is_valid` — valid YAML frontmatter, `name` matching the
+   directory, non-empty `description`.
+3. `test_skill_count_matches_expectation` — per-framework skill counts match
+   `EXPECTED_SKILL_COUNTS`, so adding a skill forces an explicit update here.
+
+Scope note: this file asserts nothing about the template env surface — there is no
+`.env.example` parity check here yet.
 """
 
 from __future__ import annotations

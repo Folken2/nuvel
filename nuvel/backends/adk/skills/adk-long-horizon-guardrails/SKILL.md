@@ -19,7 +19,7 @@ description: >-
 - **Halt guards** — detect runaway loops (no progress, a tool failing identically) and latch a shared halt signal that `GuardrailsPlugin` consumes to short-circuit the model.
 - **Command / exfiltration guards** — structurally classify shell commands for destructive operations and scan tool arguments for leaked secrets.
 
-`GuardrailsPlugin` is wired unconditionally into every generated agent's plugin chain (`plugins/__init__.py.tmpl:54`). This is not an opt-in feature you turn on for risky agents — every scaffolded ADK agent ships with the halt guards active from the first run. You can raise thresholds or change strictness (see "When NOT to use" below), but the chain itself is always there.
+`GuardrailsPlugin` is wired unconditionally into every generated agent's plugin chain — instantiated at `plugins/__init__.py.tmpl:54` and registered in both chain listings, `PLUGIN_PATHS` (line 84) and `PLUGIN_INSTANCES` (line 107). This is not an opt-in feature you turn on for risky agents — every scaffolded ADK agent ships with the halt guards active from the first run. You can raise thresholds or change strictness (see "When NOT to use" below), but the chain itself is always there.
 
 ## The halt latch
 
@@ -61,7 +61,7 @@ Two state keys carry the whole mechanism:
 - `after_model_callback` → `NoProgressGuard`
 - `after_tool_callback` → `RepeatedFailureGuard`
 
-Construct it with `GuardrailsPlugin(failure_threshold=3, no_progress_window=5)` to override either default; it's registered once per agent in `plugins/__init__.py.tmpl`.
+Construct it with `GuardrailsPlugin(failure_threshold=3, no_progress_window=5)` to override either default; it's instantiated once per agent at `plugins/__init__.py.tmpl:54` and registered in the chain at `PLUGIN_PATHS` (line 84) and `PLUGIN_INSTANCES` (line 107).
 
 ## Command safety is structural, not textual
 

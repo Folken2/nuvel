@@ -106,7 +106,9 @@ An `after_tool_callback` is the right hook if you're tracking, say, cumulative
 cost surfaced in tool results:
 
 ```python
-from nuvel.guardrails import latch_halt
+# In a generated agent the guardrails package is copied in as <package>/guardrails/ —
+# generated agents don't depend on the `nuvel` package at runtime.
+from <package>.guardrails import latch_halt
 
 _SPEND_KEY = "__budget_spend_usd__"
 _BUDGET_USD = 5.00
