@@ -1,6 +1,6 @@
 ---
 name: adk-memory-self-improvement
-description: EXPERIMENTAL, opt-in memory self-improvement for long-lived ADK agents — relevance-conditioned preload, the periodic consolidation "dream" pass, the after-turn judge fork, fire-and-forget sibling runs, per-session throttling, and the skill curator that proposes SKILL.md files. Read before enabling any NUVEL_MEMORY_* or NUVEL_SKILL_CURATOR* flag, when budgeting the extra LLM calls these add per turn, or when an agent should improve its own memory and skills over months. Every feature here defaults off and none should reach production without eval coverage.
+description: EXPERIMENTAL, opt-in memory self-improvement for long-lived ADK agents — relevance-conditioned preload, the periodic consolidation "dream" pass, the after-turn judge fork, fire-and-forget sibling runs, per-session throttling, and the skill curator that proposes SKILL.md files. Read before enabling any NUVEL_MEMORY_* or NUVEL_SKILL* flag, when budgeting the extra LLM calls these add per turn, or when an agent should improve its own memory and skills over months. Every fork-adding feature here defaults off (preload is the on-by-default exception) and none should reach production without eval coverage.
 ---
 
 # Memory self-improvement for ADK agents
