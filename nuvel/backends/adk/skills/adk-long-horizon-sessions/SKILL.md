@@ -8,8 +8,8 @@ description: >-
   deciding whether RESUMABILITY should stay on for a stateless deployment,
   or when tuning COMPACTION_INTERVAL / COMPACTION_OVERLAP /
   COMPACTION_RETENTION. Pairs with adk-long-horizon-guardrails (which stops
-  runaway runs) and adk-prompt-engineering (the cache-stable prompt tiers
-  compaction interacts with).
+  runaway runs) and adk-prompt-engineering (the cache-stable prompt tiers,
+  a separate but adjacent long-horizon cost lever).
 ---
 
 # Long-horizon sessions for ADK agents
@@ -61,11 +61,13 @@ These are adjacent but distinct mechanisms, and both ship active by default — 
 
 In short: compaction changes what history exists; `ContextWindowPlugin` tells you how much of the window that history (plus everything else) is using; `CONTEXT_FILTER_KEEP` trims how many invocations are replayed into the prompt at all. They're complementary controls on the same underlying pressure, not the same mechanism.
 
-## Interaction with the cache-stable prompt tiers
+## Why this sits next to the prompt-tier contract
 
-This is the reason resumability, compaction, and the prompt-tier contract belong in one skill: compaction rewrites session history, and session history is **session-tier** content in the agent's three-tier system prompt (`prompt/instructions.py.tmpl`). The **stable tier must stay byte-identical regardless of what compaction does to history** — it is built independently by `build_stable_tier()` and never touches session state. A byte-identical stable prefix is what keeps provider prompt caching hot across turns; if compaction (or anything else) perturbed that prefix, every turn would pay for a fresh, uncached prompt instead of a cache hit. `tests/test_prompt_tiers.py` pins exactly this contract — the stable prefix must not move when only volatile or session content changes.
+Compaction and the three-tier system prompt (`prompt/instructions.py.tmpl`) are **structurally separate** — don't go looking for a causal link between them. Compaction operates on the ADK Session's event list; `build_session_tier(ctx)` builds Tier 2 from exactly two things, a user-profile block and relevance-retrieved memory, and never reads or reassembles conversation/event history. A `grep -niE 'compact|event|history'` over `instructions.py.tmpl` turns up nothing, because there is nothing there to turn up: compacting the event log does not rewrite, move, or otherwise touch any tier builder.
 
-The full three-tier contract (stable / session / volatile, what belongs in each, and how the `InstructionProvider` assembles them) lives in `adk-prompt-engineering`. Read this skill for *why* compaction can't be allowed to leak into the stable tier; read that one for the complete tier design.
+The reason these topics still belong in one skill is thematic, not mechanistic: both are cache- and cost-sensitive concerns on a long-running session. `build_stable_tier()` is rebuilt fresh from persona/soul files every turn and is unaffected by anything compaction does — which is exactly what you want, because the **stable tier must stay byte-identical turn over turn** for the provider's cached prefix to stay hot, and a cache hit costs a fraction of a fresh input token. Compaction earns you headroom on the *event* side of the ledger; a byte-identical stable prefix earns you a cheap prompt on the *instruction* side. They're two independent levers on the same turn's total cost, not one mechanism feeding the other.
+
+`tests/test_prompt_tiers.py` pins the stable-prefix contract on its own terms (unaffected by compaction either way). The full three-tier contract — stable / session / volatile, what belongs in each, and how `InstructionProvider` assembles them — lives in `adk-prompt-engineering`; read that skill for the complete tier design.
 
 ## When NOT to use
 
