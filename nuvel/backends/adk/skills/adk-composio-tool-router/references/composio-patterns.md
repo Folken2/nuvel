@@ -25,11 +25,18 @@ def get_agent_for_user(end_user_id: str):
 ```
 
 This is the "per-request `user_id`" pattern from the main skill. `Composio().create()`
-is a lightweight session lookup, not a fresh OAuth handshake — the connections already
-exist from the one-time dashboard step — so creating one per incoming request is fast
-enough to do on the hot path. There's no need to cache or pool sessions to make this
-viable; the cost you're paying is a network round trip to Composio, not a slow
-authentication flow.
+is an alias for `ToolRouter.create` (`composio/sdk.py:172`), and it **creates a new
+server-side tool-router session**, returning a fresh `session_id`
+(`composio/core/models/tool_router.py:786` — `self._client.tool_router.session.create(...)`).
+It is *not* a lookup of an existing session: retrieval is a different method,
+`Composio().use(session_id)` → `tool_router.session.retrieve` (`tool_router.py:855`).
+
+What it is not is a fresh OAuth handshake — the connections already exist from the
+one-time dashboard step, so session creation is fast and doing it per incoming request
+is normally fine. But because each call mints a new session rather than reusing one,
+this *is* a place where caching matters if you're creating sessions at high rate:
+hold the returned `session_id` for the life of a conversation and re-enter it with
+`use(session_id)`, rather than calling `create()` on every turn.
 
 ## Service-account vs end-user-account models
 
@@ -60,23 +67,65 @@ self-modification are in place before the agent can act on connected accounts.
 
 ## Filtering toolkits per agent
 
-The MCP transport itself doesn't support per-tool gating — once a toolkit is connected
-under a `user_id`, every tool in it is visible to any agent using that session. There's
-no filter you can apply at the `McpToolset` layer to hide `GMAIL_SEND_EMAIL` while
-keeping `GMAIL_READ_EMAIL`.
+There are two real filtering mechanisms, at two different layers. Reach for either or
+both — you do **not** need extra `user_id`s or extra Composio accounts to give two
+agents different tool access.
 
-So filtering happens one layer up, at connection time: only connect the toolkits an
-agent should be able to reach, scoped to the `user_id` that agent runs as. If two
-agents need different toolkit access, give them different `user_id`s (or different
-Composio accounts) rather than trying to filter a shared session's tool list.
+**1. Filter at the Composio session (server side).** `ToolRouter.create` — which
+`Composio().create()` aliases — takes `toolkits=`, `tools=` and `tags=` keyword
+arguments that scope what the session exposes at all
+(`composio/core/models/tool_router.py:441-461`):
+
+```python
+session = Composio().create(
+    user_id=end_user_id,
+    toolkits=["gmail", "slack"],                      # or {"enable": [...]} / {"disable": [...]}
+    tools={
+        "gmail": ["GMAIL_SEND_EMAIL", "GMAIL_SEARCH"],  # list = enable-only
+        "slack": {"disable": ["SLACK_DELETE_MESSAGE"]}, # blacklist
+        "linear": {"tags": ["readOnlyHint"]},           # filter by MCP tag
+    },
+    tags=["readOnlyHint", "idempotentHint"],            # global tag filter
+)
+```
+
+Per the parameter docs, `toolkits` accepts a list of slugs or an `{"enable": [...]}` /
+`{"disable": [...]}` dict; `tools` maps a toolkit slug to a list of tool slugs
+(shorthand for enable), or a dict with `enable` / `disable` / `tags`; `tags` accepts
+the MCP tag literals `readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`, and toolkit-level tags override the global setting. This is the
+mechanism to use for "this agent may send mail but not delete it."
+
+**2. Filter at the `McpToolset` (client side).** ADK's `McpToolset.__init__` takes
+`tool_filter: Optional[Union[ToolPredicate, List[str]]] = None` — "a list of tool names
+to include, or a `ToolPredicate` function for custom filtering logic"
+(`google/adk/tools/mcp_tool/mcp_toolset.py:106`, documented at `:134-136`):
+
+```python
+McpToolset(
+    connection_params=StreamableHTTPConnectionParams(url=..., headers=...),
+    tool_filter=["GMAIL_SEND_EMAIL", "GMAIL_SEARCH"],
+)
+```
+
+This is how two agents can share one Composio session and still see different tool
+lists — useful when the session is built once at startup but several agents consume it.
+
+You can also still filter at connection time in the dashboard, by only connecting the
+toolkits an agent should ever reach. And per-`user_id` scoping remains the right tool
+for **credential isolation** — keeping user A's OAuth grants out of user B's session —
+it just isn't the mechanism for narrowing which tools an agent may call.
 
 ## Debugging "tool not found"
 
 Work through this checklist in order:
 
-1. **Is `COMPOSIO_API_KEY` set?** If it's unset, the toolset no-ops silently — the
+1. **Is `COMPOSIO_API_KEY` set?** If it's unset, the toolset gracefully no-ops — the
    agent starts fine with only its local tools, and every Composio tool name will
-   look like "not found" because the `McpToolset` was never created.
+   look like "not found" because the `McpToolset` was never created. It's not
+   completely silent: an INFO line is logged
+   (`"COMPOSIO_API_KEY not set — Composio Tool Router disabled."`,
+   `<package>/tools/composio_mcp.py:26`), so check the startup logs at INFO level.
 2. **Was the toolkit connected for *this* `user_id`?** Connections are scoped per
    user; a toolkit connected under `user_id="alice"` is invisible to a session created
    with `user_id="bob"` or `user_id="default"`. Check the Composio dashboard for which
