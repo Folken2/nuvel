@@ -80,7 +80,7 @@ Verify: `ls generated-agents/<name>/` should show `<snake_name>/`, `run_adk.py`,
 
 ### 3. Survey the relevant ADK knowledge
 
-`nuvel` bundles 10 ADK knowledge skills. Don't read them all — pick by topic:
+`nuvel` bundles 15 ADK knowledge skills. Don't read them all — pick by topic:
 
 ```bash
 nuvel skills list                    # see what's available
@@ -101,8 +101,15 @@ Available skills (all live in `nuvel/backends/adk/skills/<slug>/SKILL.md` inside
 | `adk-skill-creation` | Authoring SKILL.md files for the agent's own domain knowledge |
 | `adk-skill-design-patterns` | Five canonical skill shapes — pick before writing one |
 | `adk-composio-tool-router` | Wiring the Composio Tool Router MCP (`--with-composio`) |
+| `adk-long-horizon-guardrails` | Halt guards, argv-level shell command safety, exfil guard for agents that run unattended or long |
+| `adk-long-horizon-sessions` | Resumability and event compaction for sessions that span many turns or restarts |
+| `adk-cron-isolation` | Scoped secrets, headless tool policy, HITL-gated job creation for scheduled/cron agent runs |
+| `adk-org-memory-retrieval` | Org-scoped memory wiring, hybrid RRF retrieval, knowledge graph queries |
+| `adk-memory-self-improvement` | **Experimental** — consolidation, judge forks, skill curator for self-improving memory |
 
 Read the SKILL.md directly with the Read tool — they're tuned for progressive disclosure (short top, deep references).
+
+Agents meant to run unattended or long should read `adk-long-horizon-guardrails` and `adk-long-horizon-sessions` before deploy — both describe default-on behaviour (halt guards, resumability, compaction) that changes how the agent behaves under load.
 
 ### 4. Fill in the brain
 
