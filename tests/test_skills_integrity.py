@@ -89,3 +89,192 @@ def test_skill_count_matches_expectation(framework: str) -> None:
         "If this is intentional, update EXPECTED_SKILL_COUNTS and every documented "
         "count (.claude/skills/nuvel/SKILL.md, CLAUDE.md, README.md)."
     )
+
+
+TEMPLATE_DIR = BACKENDS / "adk" / "templates"
+ENV_EXAMPLE = TEMPLATE_DIR / ".env.example"
+
+# Template code reads env vars five ways: os.getenv, os.environ.get/[], via a
+# module-level ENV_* name constant (e.g. ENV_PRELOAD = "NUVEL_MEMORY_PRELOAD"), and via
+# a local wrapper-helper idiom (e.g. _env_int("TRACE_MAX_ARGS_CHARS", 50_000) in
+# trace_plugin.py) whose literal is invisible to the other four patterns because it's
+# an argument to a custom function, not to os.getenv/os.environ directly.
+ENV_READ_PATTERNS = (
+    re.compile(r"""getenv\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
+    re.compile(r"""environ\.get\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
+    re.compile(r"""environ\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]"""),
+    re.compile(r"""^\s*_?ENV_[A-Z0-9_]+\s*=\s*["']([A-Z][A-Z0-9_]{2,})["']""", re.M),
+    re.compile(r"""\b_?(?:env|get_env)[a-z_]*\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
+)
+
+# Known blind spot: the fifth pattern above only matches helpers with "env"/"get_env" as
+# a *prefix* (e.g. `_env_int`). A suffix-named helper like `_int_env` (env at the end) is
+# not matched. That's harmless today — `_int_env` in skill_curator_plugin.py is always
+# called with a variable (an already-covered ENV_* constant), never a literal directly —
+# but a future call passing a literal straight to a suffix-named helper would go uncaught.
+
+ENV_ENTRY_RE = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]+)=", re.M)
+
+# Read by template code but deliberately absent from .env.example. Each entry needs a
+# reason — do not add to this set to silence a failure.
+ENV_EXAMPLE_EXEMPT = {
+    "RECORD": "test-only: golden-recording switch in tests/test_agent.py.tmpl",
+    "HOST": "platform-provided; read only in run_adk.py's diagnostic dump",
+    "TELEGRAM_BOT_TOKEN": (
+        "read in two places: the --with-telegram overlay's gateway env block, and "
+        "unconditionally in the base template's cron/delivery.py _send_telegram(). "
+        "Still exempt because it no-ops without the rest of the overlay's machinery "
+        "(gateway routes, webhook registration) — documenting it in the base "
+        ".env.example would advertise a knob that does nothing on its own."
+    ),
+}
+
+
+def _env_vars_read_by_template_code() -> set[str]:
+    found: set[str] = set()
+    for path in TEMPLATE_DIR.rglob("*"):
+        if not path.is_file() or path.name == ".env.example":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for pattern in ENV_READ_PATTERNS:
+            found |= set(pattern.findall(text))
+    return found
+
+
+def test_every_env_var_read_by_template_is_documented() -> None:
+    """A knob the template reads must appear in .env.example, or be explicitly exempt."""
+    documented = set(ENV_ENTRY_RE.findall(ENV_EXAMPLE.read_text(encoding="utf-8")))
+    undocumented = sorted(
+        _env_vars_read_by_template_code() - documented - set(ENV_EXAMPLE_EXEMPT)
+    )
+    assert not undocumented, (
+        "These env vars are read by template code but absent from .env.example: "
+        f"{undocumented}. Document them, or add to ENV_EXAMPLE_EXEMPT with a reason."
+    )
+
+
+PLUGIN_INIT_TMPL = TEMPLATE_DIR / "{{agent_package}}" / "plugins" / "__init__.py.tmpl"
+README_PATH = REPO_ROOT / "README.md"
+
+PLUGIN_INSTANCES_SOURCE = f"{PLUGIN_INIT_TMPL} (PLUGIN_INSTANCES list, ~lines 98-116)"
+README_TABLE_SOURCE = f"{README_PATH} ('## Plugin Chain' table, ~lines 256-278)"
+
+# PLUGIN_INSTANCES holds snake_case variable names; README's Plugin Chain table uses
+# class-ish display names. These do not mechanically transform into one another —
+# e.g. `self_healing` is instantiated as ReflectAndRetryToolPlugin(name="self_healing",
+# ...) and `save_files` as SaveFilesAsArtifactsPlugin, and `sibling_runner` is
+# documented as "SiblingRunner" (no "Plugin" suffix, unlike every other row). A naive
+# PascalCase+"Plugin" transform would get those three wrong, so every entry is listed
+# explicitly here rather than derived. If PLUGIN_INSTANCES gains an entry not listed
+# below, the test must fail loudly rather than silently skip it — a human has to decide
+# the display name.
+PLUGIN_INSTANCE_LABELS = {
+    "memory": "MemoryPlugin",
+    "cost_guard": "CostGuardPlugin",
+    "context_window": "ContextWindowPlugin",
+    "trace": "TracePlugin",
+    "context_filter": "ContextFilterPlugin",
+    "console_logger": "ConsoleLoggerPlugin",
+    "tool_events": "ToolEventsPlugin",
+    "resilience": "ResiliencePlugin",
+    "guardrails": "GuardrailsPlugin",
+    "cron_isolation": "CronIsolationPlugin",
+    "cache": "CachePlugin",
+    "self_healing": "ReflectAndRetryToolPlugin",
+    "save_files": "SaveFilesAsArtifactsPlugin",
+    "recordings": "RecordingsPlugin",
+    "replay": "ReplayPlugin",
+    "skill_curator": "SkillCuratorPlugin",
+    "sibling_runner": "SiblingRunner",
+}
+
+# Anchors the closing bracket at column 0, matching how PLUGIN_INSTANCES is actually
+# formatted (one entry per line, `]` alone on its own line). A naive non-greedy
+# `\[(.*?)\]` would stop at the *first* `]` it sees — silently truncating if the list
+# were ever refactored to `PLUGIN_INSTANCES = [...] + EXTRA_PLUGINS` or contained an
+# entry with an inner `]` (a subscript, a comprehension). That would make this parser
+# return a short list, which would still validate clean against a subset of the README
+# table — a green test certifying coverage it doesn't actually have. Anchoring the
+# close means those shapes fail to match at all instead of matching short.
+#
+# Known static-parse limitation (by design, not a bug): this only understands a single
+# bracketed list literal. A plugin appended after the literal via `.append()`, `+=`, or
+# a conditional block is invisible to this parser and gets no coverage checking.
+PLUGIN_INSTANCES_LIST_RE = re.compile(r"PLUGIN_INSTANCES\s*=\s*\[(.*?)^\]", re.S | re.M)
+README_PLUGIN_ROW_RE = re.compile(r"^\|\s*\*\*([A-Za-z0-9]+)\*\*\s*\|", re.M)
+
+# A parse that finds fewer than this many entries is treated as implausible rather than
+# real — this is a sanity floor to catch catastrophic truncation, not the actual plugin
+# count (which must never be hand-encoded here; that's the drift this test exists to stop).
+_PLUGIN_INSTANCES_MIN_PLAUSIBLE = 2
+
+
+def _plugin_instance_names() -> list[str]:
+    """Bare variable names, one per line, from the PLUGIN_INSTANCES list literal."""
+    text = PLUGIN_INIT_TMPL.read_text(encoding="utf-8")
+    match = PLUGIN_INSTANCES_LIST_RE.search(text)
+    assert match, (
+        f"could not find a PLUGIN_INSTANCES list matching {PLUGIN_INSTANCES_LIST_RE.pattern!r} "
+        f"in {PLUGIN_INSTANCES_SOURCE}. The PLUGIN_INSTANCES literal may have been "
+        "reformatted or built dynamically (e.g. `[...] + EXTRA_PLUGINS`, an `.append()`, "
+        "or a closing `]` no longer alone on its own line) — this parser only understands "
+        "a single bracketed literal with the closing `]` at column 0."
+    )
+    names = []
+    for line in match.group(1).splitlines():
+        line = line.split("#", 1)[0].strip().rstrip(",")
+        if line:
+            names.append(line)
+    assert len(names) >= _PLUGIN_INSTANCES_MIN_PLAUSIBLE, (
+        f"parsing {PLUGIN_INSTANCES_SOURCE} with {PLUGIN_INSTANCES_LIST_RE.pattern!r} "
+        f"found only {len(names)} entrie(s): {names}. That is implausibly few for the "
+        "real plugin chain — the PLUGIN_INSTANCES literal may have been reformatted or "
+        "built dynamically in a way this parser doesn't understand; treating a short "
+        "parse as ground truth would silently under-check README coverage."
+    )
+    return names
+
+
+def _readme_plugin_table_rows() -> list[str]:
+    """Bolded first-column labels, one per data row, from the Plugin Chain table."""
+    text = README_PATH.read_text(encoding="utf-8")
+    section = re.search(r"## Plugin Chain\n(.*?)\n## ", text, re.S)
+    assert section, f"could not find the '## Plugin Chain' section in {README_PATH}"
+    return README_PLUGIN_ROW_RE.findall(section.group(1))
+
+
+def test_plugin_chain_table_documents_every_plugin() -> None:
+    """Every PLUGIN_INSTANCES entry must have a matching row in README's plugin table."""
+    instances = _plugin_instance_names()
+
+    unmapped = sorted(set(instances) - set(PLUGIN_INSTANCE_LABELS))
+    assert not unmapped, (
+        f"{PLUGIN_INSTANCES_SOURCE} has entries with no expected README label in "
+        f"PLUGIN_INSTANCE_LABELS: {unmapped}. A snake_case variable name cannot be "
+        "mechanically converted to its README display name (see the comment above "
+        "PLUGIN_INSTANCE_LABELS) — add an explicit mapping entry for each name above "
+        "before this test can verify it is documented."
+    )
+
+    table_rows = _readme_plugin_table_rows()
+    table_labels = set(table_rows)
+    missing = sorted(
+        f"{name} (expected README label {PLUGIN_INSTANCE_LABELS[name]!r})"
+        for name in instances
+        if PLUGIN_INSTANCE_LABELS[name] not in table_labels
+    )
+    assert not missing, (
+        f"These entries from {PLUGIN_INSTANCES_SOURCE} have no matching row in "
+        f"{README_TABLE_SOURCE}: {missing}. Add a row for each, or fix its label in "
+        "PLUGIN_INSTANCE_LABELS if the README wording changed."
+    )
+
+    assert len(table_rows) == len(instances), (
+        f"{README_TABLE_SOURCE} has {len(table_rows)} data rows but "
+        f"{PLUGIN_INSTANCES_SOURCE} has {len(instances)} entries — every plugin in the "
+        "chain must have exactly one documented row (extra or duplicate rows drift "
+        "just as silently as missing ones)."
+    )

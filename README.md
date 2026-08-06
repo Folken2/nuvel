@@ -33,7 +33,7 @@ Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Age
 
 nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, the Claude Agent SDK, and Anthropic Managed Agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 11-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 17-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
 
 ## Frameworks
 
@@ -46,7 +46,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 ## Features
 
 - **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
-- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (11-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
+- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (17-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
 - **Portable knowledge skills** — 26 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
 - **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character. Inspired by OpenClaw. *(ADK only.)*
 - **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more. *(ADK only.)*
@@ -196,7 +196,7 @@ nuvel/
 │   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── plugins/               # 11 plugins (see Plugin Chain below)
+│   ├── plugins/               # Meta-agent chain (12, via Makefile PLUGIN_FLAGS)
 │   ├── config/                # LiteLLM/OpenRouter config
 │   └── backends/              # Per-framework scaffolders + skills
 │       ├── adk/               # Google ADK backend
@@ -249,23 +249,33 @@ pip install -r requirements.txt
 DEV_MODE=true python run_adk.py
 ```
 
+### Configuration
+
+Every environment variable a generated agent reads is documented inline in `.env.example`, grouped by subsystem (auth, plugins, providers, memory, cron, and more). It's copied into each scaffolded project from `nuvel/backends/adk/templates/.env.example`, so that file — not this README — is the canonical reference for what to configure.
+
 ## Plugin Chain
 
 Every generated agent ships with a full plugin chain — cross-cutting concerns that apply to all interactions without touching agent code.
 
 | Plugin | Type | What it does |
 |--------|------|-------------|
+| **MemoryPlugin** | Features | Markdown file-based long-term memory across sessions |
 | **CostGuardPlugin** | Budget | Calculates USD cost per LLM call, enforces per-session budget limits |
 | **ContextWindowPlugin** | Observability | Tracks context-window occupancy per response (tokens used / max / %) for live UI indicators |
 | **TracePlugin** | Observability | Raw event JSONL + consolidated conversation JSON for eval pipelines |
+| **ContextFilterPlugin** | Performance | Keeps last N invocations in context window (default: 10) |
 | **ConsoleLoggerPlugin** | Observability | Color-coded terminal output for all lifecycle events |
 | **ToolEventsPlugin** | Observability | Structured tool execution events for SSE streaming |
-| **ContextFilterPlugin** | Performance | Keeps last N invocations in context window (default: 10) |
-| **CachePlugin** | Performance | Session-scoped caching for specific tools with TTL |
 | **ResiliencePlugin** | Resilience | Circuit breaker and rate limiting for tool calls |
+| **GuardrailsPlugin** | Resilience | Halts runaway model/tool loops — no-progress and repeated-failure guards behind a shared halt latch |
+| **CronIsolationPlugin** | Resilience | Headless tool-approval policy during scheduled cron runs; inert outside cron runs |
+| **CachePlugin** | Performance | Session-scoped caching for specific tools with TTL |
 | **ReflectAndRetryToolPlugin** | Resilience | Self-healing tool retry with LLM reflection (max 3) |
 | **SaveFilesAsArtifactsPlugin** | Features | Saves user-uploaded files as session artifacts |
-| **MemoryPlugin** | Features | Markdown file-based long-term memory across sessions |
+| **RecordingsPlugin** | Testing | Records LLM/tool interactions for ADK conformance testing; inert unless recording mode is active |
+| **ReplayPlugin** | Testing | Replays recorded interactions instead of executing live calls; inert unless replay mode is active |
+| **SkillCuratorPlugin** | Features | Proposes `SKILL.md` files from observed tool usage; opt-in, default off (`NUVEL_SKILL_CURATOR`) |
+| **SiblingRunner** | Features | Drains fire-and-forget memory-review sibling runs at shutdown; no-op until `NUVEL_MEMORY_REVIEW_FORK=1` |
 
 ### Cost Tracking & Budget Guard
 
