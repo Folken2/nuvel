@@ -19,7 +19,7 @@ make install     # pip install -e .  (exposes `nuvel` console script)
 make test        # python -m pytest tests/ -v
 make run         # nuvel run         (meta-agent, prod-style)
 make dev         # nuvel run --dev   (in-memory sessions)
-make dev-ui      # adk web with all 10 plugins loaded
+make dev-ui      # adk web with all 12 plugins loaded (meta-agent's own chain, not the 17-plugin generated-agent chain)
 make skills      # nuvel skills list
 ```
 
@@ -43,7 +43,7 @@ ADK has an additional `templates_overlays/` directory (e.g. `gateway-slack/`, `g
 
 ### Two plugin chains — don't confuse them
 
-- `nuvel/plugins/` — plugins for the **meta-agent itself** (cost guard, trace, console logger, etc.). Wired via `PLUGIN_FLAGS` in the [Makefile](Makefile) and loaded by `nuvel run`.
+- `nuvel/plugins/` — plugins for the **meta-agent itself** (cost guard, trace, console logger, etc.). Wired via `PLUGIN_FLAGS` in the [Makefile](Makefile) and loaded by `nuvel run`; that block currently declares 12 plugins.
 - `nuvel/backends/adk/templates/{{agent_package}}/plugins/` — the analogous plugin chain that gets *copied into every generated ADK agent*. Modifications here affect future scaffolded projects, not the meta-agent.
 
 The 17 plugins in `PLUGIN_INSTANCES` (see `{{agent_package}}/plugins/__init__.py.tmpl:98-116`) — Memory, CostGuard, ContextWindow, Trace, ContextFilter, ConsoleLogger, ToolEvents, Resilience, Guardrails, CronIsolation, Cache, ReflectAndRetryTool (self-healing), SaveFilesAsArtifacts, Recordings, Replay, SkillCurator, SiblingRunner — follow the ADK plugin lifecycle and apply cross-cutting concerns without touching agent code.
@@ -65,7 +65,7 @@ generated-agents/my-agent/
 ├── my_agent/
 │   ├── agent.py        # LlmAgent + SkillToolset wiring
 │   ├── prompt/, tools/, skills/, contexts/
-│   ├── plugins/        # full 10-plugin chain (copy of templates)
+│   ├── plugins/        # full 17-plugin chain (copy of templates)
 │   └── config/         # LiteLLM/OpenRouter config
 ├── run_adk.py          # FastAPI server with auth + health checks
 └── .env.example
