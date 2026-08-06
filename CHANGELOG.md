@@ -28,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Two reference files promised by skills but never written: `adk-composio-tool-router/references/composio-patterns.md` and `claude-sdk-hooks/references/hook-patterns.md`.
 - `adk-composio-tool-router` incorrectly stated that per-tool filtering was impossible and advised provisioning extra Composio identities as a workaround; both `McpToolset(tool_filter=...)` and `ToolRouter.create(tools=/toolkits=/tags=)` support it.
-- Hardened the `PLUGIN_INSTANCES` parser in `tests/test_skills_integrity.py` against silent truncation on reformatting.
 
 ## [0.2.0] - 2026-07-23
 
@@ -40,11 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OrgMemoryService` v1 — hierarchical, scope-aware memory ([#39](https://github.com/Folken2/nuvel/pull/39)).
 - `ContextWindowPlugin` for live context-window usage tracking ([#42](https://github.com/Folken2/nuvel/pull/42)).
 - `nuvel eval` — an online trace scorer ([#35](https://github.com/Folken2/nuvel/pull/35)), later extended with replay A/B (`nuvel eval replay/compare/variants`) ([#41](https://github.com/Folken2/nuvel/pull/41)).
-- `nuvel dashboard` — a local Editorial-style command center ([#33](https://github.com/Folken2/nuvel/pull/33)); `nuvel traces` for cross-agent trace inspection, later extended with error-rate surfacing ([#22](https://github.com/Folken2/nuvel/pull/22), [#29](https://github.com/Folken2/nuvel/pull/29)); `nuvel pricing` to sync pricing data from OpenRouter ([#27](https://github.com/Folken2/nuvel/pull/27)); `nuvel doctor` diagnostics ([#10](https://github.com/Folken2/nuvel/pull/10) era).
+- `nuvel dashboard` — a local Editorial-style command center ([#33](https://github.com/Folken2/nuvel/pull/33)); `nuvel traces` for cross-agent trace inspection, later extended with error-rate surfacing ([#22](https://github.com/Folken2/nuvel/pull/22), [#29](https://github.com/Folken2/nuvel/pull/29)); `nuvel pricing` to sync pricing data from OpenRouter ([#27](https://github.com/Folken2/nuvel/pull/27)); `nuvel doctor` diagnostics ([#10](https://github.com/Folken2/nuvel/pull/10)).
 - Scheduled prompts (`nuvel cron`) — service, scheduler, HTTP API, `/cron` slash command ([#17](https://github.com/Folken2/nuvel/pull/17)).
 - Unified `AgentHarness` with persistent versioned artifacts ([#45](https://github.com/Folken2/nuvel/pull/45)); ADK Workflows + Task API support, including a workflow-safe scaffolding path and template ([#46](https://github.com/Folken2/nuvel/pull/46)).
-- Unified slash-command registry across CLI and channels ([#11](https://github.com/Folken2/nuvel/pull/11) era); voice-memo transcription and `/personality` runtime overlay for gateways.
-- Gateway multimodal support: inbound/outbound attachments across Slack, Telegram, and Teams, with artifact upload via Composio ([#8](https://github.com/Folken2/nuvel/pull/8) era).
+- Unified slash-command registry across CLI and channels ([#11](https://github.com/Folken2/nuvel/pull/11)); voice-memo transcription and `/personality` runtime overlay for gateways.
+- Gateway multimodal support: inbound/outbound attachments across Slack, Telegram, and Teams, with artifact upload via Composio ([#8](https://github.com/Folken2/nuvel/pull/8)).
 
 ### Changed
 
@@ -53,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Wired `artifact_service` and the plugin chain into the gateway `Runner` ([#44](https://github.com/Folken2/nuvel/pull/44)).
-- Dropped duplicate `list_skills`/`read_skill` `FunctionTool`s in favor of the built-in `SkillToolset` ([#20](https://github.com/Folken2/nuvel/pull/20) era).
+- Dropped duplicate `list_skills`/`read_skill` `FunctionTool`s in favor of the built-in `SkillToolset` ([#20](https://github.com/Folken2/nuvel/pull/20)).
 
 This range also includes example-agent work on `outlook-king`/`word-king`/`ppt-king` (Office.js add-ins built on the ADK pattern) and documentation passes covering CLAUDE.md/AGENTS.md, doctor, traces, pricing, and env vars — omitted above as internal/example-scoped rather than user-facing `nuvel-cli` changes.
 
