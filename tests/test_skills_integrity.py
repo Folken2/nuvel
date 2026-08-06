@@ -22,8 +22,7 @@ FRAMEWORK_DIRS = {
     "anthropic_managed_agents": BACKENDS / "anthropic_managed_agents" / "skills",
 }
 
-# Updated by Task 9 once the five new ADK skills exist.
-EXPECTED_SKILL_COUNTS = {"adk": 10, "claude_agent_sdk": 6, "anthropic_managed_agents": 5}
+EXPECTED_SKILL_COUNTS = {"adk": 15, "claude_agent_sdk": 6, "anthropic_managed_agents": 5}
 
 REFERENCE_RE = re.compile(r"references/([a-z0-9][a-z0-9-]*\.md)")
 
@@ -66,4 +65,16 @@ def test_frontmatter_is_valid(skill_dir: Path) -> None:
     assert description, f"{skill_dir.name}: frontmatter 'description' is missing or empty"
     assert name == skill_dir.name, (
         f"{skill_dir.name}: frontmatter name {name!r} does not match directory name"
+    )
+
+
+@pytest.mark.parametrize("framework", sorted(EXPECTED_SKILL_COUNTS))
+def test_skill_count_matches_expectation(framework: str) -> None:
+    """A new skill must be registered here, so counts in docs cannot silently drift."""
+    actual = len(_skill_dirs(framework))
+    expected = EXPECTED_SKILL_COUNTS[framework]
+    assert actual == expected, (
+        f"{framework}: found {actual} skills, expected {expected}. "
+        "If this is intentional, update EXPECTED_SKILL_COUNTS and every documented "
+        "count (.claude/skills/nuvel/SKILL.md, CLAUDE.md, README.md)."
     )
