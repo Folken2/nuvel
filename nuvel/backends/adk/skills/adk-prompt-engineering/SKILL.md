@@ -296,7 +296,7 @@ the session tier degrades to whatever sources succeeded (down to empty)
 instead of breaking prompt assembly for the whole turn
 (`test_session_tier_degrades_when_sources_fail`).
 
-This contract is pinned by the 12 tests in `tests/test_prompt_tiers.py` —
+This contract is pinned by the 11 tests in `tests/test_prompt_tiers.py` —
 in particular `test_full_prompt_stable_prefix_survives_volatile_change` and
 `test_stable_tier_ignores_volatile_state` assert that changing only volatile
 state leaves the stable prefix byte-identical. A future edit that breaks
