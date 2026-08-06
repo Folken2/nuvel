@@ -202,7 +202,7 @@ nuvel/
 │       ├── adk/               # Google ADK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # Production skeleton for ADK agents
-│       │   └── skills/        # 10 ADK knowledge skills
+│       │   └── skills/        # 15 ADK knowledge skills
 │       ├── claude_agent_sdk/  # Claude Agent SDK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # FastAPI + SDK skeleton
@@ -219,7 +219,7 @@ nuvel/
 ### Key Design Decisions
 
 - **Template-based scaffolding** — Every generated agent inherits a proven production skeleton (plugins, circuit breakers, rate limiting, structured logging, SSE streaming). You only write the brain.
-- **Skills as a portable knowledge format** — The seven ADK skills follow the Anthropic skills format, so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
+- **Skills as a portable knowledge format** — The 15 ADK skills follow the Anthropic skills format, so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
 - **Scoped file operations** — All file tools are sandboxed to the output directory. No path traversal possible.
 
 ## Generated Agent Structure
