@@ -89,3 +89,52 @@ def test_skill_count_matches_expectation(framework: str) -> None:
         "If this is intentional, update EXPECTED_SKILL_COUNTS and every documented "
         "count (.claude/skills/nuvel/SKILL.md, CLAUDE.md, README.md)."
     )
+
+
+TEMPLATE_DIR = BACKENDS / "adk" / "templates"
+ENV_EXAMPLE = TEMPLATE_DIR / ".env.example"
+
+# Template code reads env vars three ways: os.getenv, os.environ.get/[], and via a
+# module-level ENV_* name constant (e.g. ENV_PRELOAD = "NUVEL_MEMORY_PRELOAD").
+ENV_READ_PATTERNS = (
+    re.compile(r"""getenv\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
+    re.compile(r"""environ\.get\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
+    re.compile(r"""environ\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]"""),
+    re.compile(r"""^\s*_?ENV_[A-Z0-9_]+\s*=\s*["']([A-Z][A-Z0-9_]{2,})["']""", re.M),
+)
+
+ENV_ENTRY_RE = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]+)=", re.M)
+
+# Read by template code but deliberately absent from .env.example. Each entry needs a
+# reason — do not add to this set to silence a failure.
+ENV_EXAMPLE_EXEMPT = {
+    "RECORD": "test-only: golden-recording switch in tests/test_agent.py.tmpl",
+    "HOST": "platform-provided; read only in run_adk.py's diagnostic dump",
+    "TELEGRAM_BOT_TOKEN": "injected by the --with-telegram overlay's gateway env block",
+}
+
+
+def _env_vars_read_by_template_code() -> set[str]:
+    found: set[str] = set()
+    for path in TEMPLATE_DIR.rglob("*"):
+        if not path.is_file() or path.name == ".env.example":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for pattern in ENV_READ_PATTERNS:
+            found |= set(pattern.findall(text))
+    return found
+
+
+def test_every_env_var_read_by_template_is_documented() -> None:
+    """A knob the template reads must appear in .env.example, or be explicitly exempt."""
+    documented = set(ENV_ENTRY_RE.findall(ENV_EXAMPLE.read_text(encoding="utf-8")))
+    undocumented = sorted(
+        _env_vars_read_by_template_code() - documented - set(ENV_EXAMPLE_EXEMPT)
+    )
+    assert not undocumented, (
+        "These env vars are read by template code but absent from .env.example: "
+        f"{undocumented}. Document them, or add to ENV_EXAMPLE_EXEMPT with a reason."
+    )
