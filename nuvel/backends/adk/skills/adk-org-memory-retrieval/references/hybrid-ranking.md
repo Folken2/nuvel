@@ -1,21 +1,32 @@
 # Hybrid ranking internals
 
-Everything below lives in `nuvel/memory/hybrid.py`, which is deliberately pure and
-side-effect-free — no DB handle, no I/O, no clock dependency it can't override via
-a `now` argument — so the whole cascade unit-tests without a database
-(`tests/test_memory_hybrid.py` exercises it directly). The SQL that produces the
-keyword and vector arms lives in `nuvel/memory/backends/postgres_store.py`; this
-file only ranks candidates it's handed.
+Everything below lives in `nuvel/memory/hybrid.py`, which is deliberately DB-free — no
+DB handle, no network, no I/O, no clock dependency it can't override via a `now`
+argument — so the whole cascade unit-tests without a database
+(`tests/test_memory_hybrid.py` exercises it directly). It is not *side-effect*-free:
+`fuse_and_rank` writes the computed score back onto the caller's `MemoryRow` objects
+(`hybrid.py:290`, `hybrid.py:299-301` — `row.score = ...` / `row.score *= ...`), so the
+rows you pass in are mutated in place. The SQL that produces the keyword and vector
+arms lives in `nuvel/memory/backends/postgres_store.py`; this file only ranks
+candidates it's handed.
 
-## The two arms and RRF fusion
+## The three arms and RRF fusion
 
 `postgres_store.search()` (`postgres_store.py:115-158`) runs three ranked
-candidate lists concurrently, each ordered best-first:
+candidate lists concurrently:
 
-- **vector arm** — pgvector cosine-distance nearest-neighbour scan (`postgres_store.py:186-203`)
+- **vector arm** — pgvector cosine-distance nearest-neighbour scan, ordered
+  best-first by cosine distance (`postgres_store.py:186-203`)
 - **keyword arm** — `to_tsvector`/`websearch_to_tsquery` full-text search with a
-  `pg_trgm` similarity tiebreak for short/fuzzy queries (`postgres_store.py:205-242`)
-- **relational arm** — typed-edge recall, optional, see below
+  `pg_trgm` similarity tiebreak for short/fuzzy queries, ordered best-first by
+  relevance (`postgres_store.py:205-242`)
+- **relational arm** — typed-edge recall, optional, see below. This one is **not**
+  ordered by relevance: the SQL orders by `created_at desc`, i.e. recency
+  (`postgres_store.py:387`), and `relational_recall` then appends results
+  seed-first — memories mentioning the resolved seed before memories mentioning its
+  walked neighbours (`relational.py:161-179`). RRF still treats its position as a
+  rank, so within the relational arm "rank 0" means "most recent memory mentioning
+  the seed," not "best match."
 
 `reciprocal_rank_fusion` (`hybrid.py:66-89`) fuses them:
 
@@ -47,7 +58,7 @@ normalized RRF score:
 base_score = RRF_WEIGHT * normalized_rrf + COSINE_WEIGHT * cosine
 ```
 
-`RRF_WEIGHT = 0.7`, `COSINE_WEIGHT = 0.3` (`hybrid.py:27-29`). RRF dominates the
+`RRF_WEIGHT = 0.7`, `COSINE_WEIGHT = 0.3` (`hybrid.py:28-29`). RRF dominates the
 blend — rank position across arms is trusted more than a single continuous
 similarity number — but cosine still nudges close calls, which matters most when
 two rows land at the same rank in different arms.
@@ -65,8 +76,10 @@ tier = tier_boost.get(row.scope_level, 0.5)
 row.score = base_score * tier
 ```
 
-(`hybrid.py:286-290`). Defaults come from `OrgMemoryService.DEFAULT_TIER_BOOST`
-(`org_memory_service.py:34-41`):
+(`hybrid.py:286-290`). Defaults come from the module-level `DEFAULT_TIER_BOOST`
+constant in `nuvel/memory/org_memory_service.py` (`org_memory_service.py:34-41`) — a
+bare module name, not an attribute on the class; `OrgMemoryService.__init__` reads it
+as `tier_boost or DEFAULT_TIER_BOOST` (`org_memory_service.py:59`):
 
 | scope_level | factor |
 |---|---|
@@ -86,8 +99,13 @@ gbrain: gbrain has no scope hierarchy, so its first cascade stage boosts
 ### The floor gate
 
 ```python
-floor = compute_floor_threshold((r.score for r in unified.values()), FLOOR_RATIO)
+floor = compute_floor_threshold((r.score or 0.0 for r in unified.values()), floor_ratio)
 ```
+
+Note the two details the snippet preserves: a `None` score coalesces to `0.0` rather
+than raising, and the ratio comes from `fuse_and_rank`'s `floor_ratio` parameter
+(`hybrid.py:293`), which only *defaults* to the module constant
+(`floor_ratio: float = FLOOR_RATIO`, `hybrid.py:252`) — a caller can override it.
 
 `compute_floor_threshold(scores, floor_ratio)` (`hybrid.py:92-106`) returns
 `max(finite scores) * floor_ratio`, or `-inf` (no gate at all) when
@@ -137,8 +155,12 @@ All three factors compound multiplicatively on the post-tier, floor-gated score
 
 ## Why every factor is bounded
 
-Every stage above lives in roughly `[1.0, 1.6]` per factor (gbrain's own
-convention, carried over deliberately). An unbounded metadata multiplier could
+Every *metadata* factor — Stages 1-3 — lives in roughly `[1.0, 1.6]` (gbrain's own
+convention, carried over deliberately): recency `[1.0, 1.4]`, access `[1.0, 1.6]`,
+title `1.0` or `1.25`. Stage 0 is the exception and runs the other way: the tier boost
+is `[0.5, 1.0]` (`user` = `1.0` down to the `0.5` unknown-scope fallback), so it is
+always a demotion, never an amplification — the highest-tier row keeps its base score
+and everything below it is scaled down. An unbounded metadata multiplier could
 let a single strong signal — an absurd access count, a stale-but-frequently-hit
 row — override the primary keyword+vector+tier relevance signal entirely. Bounding
 each factor, and gating the whole cascade behind the floor threshold, keeps

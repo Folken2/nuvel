@@ -17,7 +17,7 @@ There are **two distinct activation paths** — do not conflate them.
 
 **Path 1 — meta-agent / `run_adk.py`, via ADK's service registry.** `nuvel.memory.adk_registry.register_org_memory_scheme()` registers a factory under the `nuvel-org-memory` scheme through ADK's official extension point, `google.adk.cli.service_registry.register_memory_service` (`adk_registry.py:56`). After that, `get_fast_api_app(memory_service_uri="nuvel-org-memory://default")` constructs `OrgMemoryService` natively — the same mechanism ADK uses for its own built-in `agentengine://` and `rag://` schemes. **No monkey-patching.**
 
-`run_adk.py` only calls the registrar when `NUVEL_ORG_MEMORY_URI` is set (`run_adk.py:95-98`); it is passed straight through as `memory_service_uri` (lines 106, 126). The registry's own factory (`adk_registry.py:31-42`) then requires both `NUVEL_ORG_MEMORY_DSN` and `NUVEL_ORG_GRAPH_PATH` to be set — it **raises** `RuntimeError` if either is missing, because at this point the caller has explicitly opted into org memory:
+The repo's own **`nuvel/run_adk.py`** only calls the registrar when `NUVEL_ORG_MEMORY_URI` is set (`nuvel/run_adk.py:95-98`); it is passed straight through as `memory_service_uri` (lines 106, 126). Note the path: this is the meta-agent's server. A *generated* agent's `run_adk.py` has no org-memory wiring at all — that surface is Path 2 below. The registry's own factory (`adk_registry.py:31-42`) then requires both `NUVEL_ORG_MEMORY_DSN` and `NUVEL_ORG_GRAPH_PATH` to be set — it **raises** `RuntimeError` if either is missing, because at this point the caller has explicitly opted into org memory:
 
 ```bash
 export NUVEL_ORG_MEMORY_DSN=$NUVEL_ORG_MEMORY_DSN     # postgres DSN, never inline a literal
@@ -31,13 +31,13 @@ Neither path is on by default. `factory.build_default_service()` (`factory.py:22
 
 ## Hybrid retrieval
 
-`postgres_store.py`'s `search()` runs two arms concurrently over the same scope-isolated candidate pool: a SQL full-text/trigram **keyword arm** and a pgvector cosine-distance **vector arm** (`postgres_store.py:169-244`). A third, optional **relational arm** (typed-edge recall, below) is fused in alongside them. All three are combined by Reciprocal Rank Fusion:
+`nuvel/memory/backends/postgres_store.py`'s `search()` runs two arms concurrently over the same scope-isolated candidate pool: a SQL full-text/trigram **keyword arm** and a pgvector cosine-distance **vector arm** (`nuvel/memory/backends/postgres_store.py:169-244`). A third, optional **relational arm** (typed-edge recall, below) is fused in alongside them. All three are combined by Reciprocal Rank Fusion:
 
 ```
 score = Σ_arm  weight_arm / (RRF_K + rank_in_arm)      # RRF_K = 60  (hybrid.py:25)
 ```
 
-`hybrid.py` holds only pure, side-effect-free ranking math — no DB calls, no I/O — so the whole cascade unit-tests without a database (`hybrid.py:1-13`). See `references/hybrid-ranking.md` for the full formula, every cascade stage, and a tuning guide.
+`hybrid.py` holds only DB-free ranking math — no DB calls, no I/O — so the whole cascade unit-tests without a database (`hybrid.py:1-13`). (It does mutate the `MemoryRow`s it's handed, writing back `row.score`; see the reference file.) See `references/hybrid-ranking.md` for the full formula, every cascade stage, and a tuning guide.
 
 ## The tier boost is nuvel's divergence
 
@@ -51,11 +51,11 @@ Rather than always returning a fixed top-N, `apply_autocut` (`hybrid.py:198-239`
 
 ## The knowledge graph self-wires
 
-Every memory write triggers `extract_entity_links` (`extraction.py:151`) over the content text, fire-and-forget (`org_memory_service.py:218-234`), with **zero LLM calls**: verb regexes for typed relationships plus a bare-capitalized-phrase scan for everything else. Precedence — first match wins when a pattern could classify the same edge two ways — is, in source order (`extraction.py:99-121`): `founded > invested_in > advises > partner_of > competitor_of > attended > works_at`, plus a separate `is <Title> at <Company>` employment form checked first (`_WORKS_AT_TITLE`, line 125). Everything not captured by a typed pattern becomes a low-confidence `mentioned` bare edge, unless it reduces to a stopword (`_STOPWORDS`, lines 58-66) — precision-first: better to under-extract than to pollute the graph with "The", "It", or "Yesterday" as entities. Schema lives in `0001_init.sql` and `0002_entity_links.sql`; see `references/knowledge-graph-schema.md`.
+Every memory write triggers `extract_entity_links` (`extraction.py:151`) over the content text, fire-and-forget (`org_memory_service.py:218-234`), with **zero LLM calls**: verb regexes for typed relationships plus a bare-capitalized-phrase scan for everything else. The seven typed patterns, in source order (`extraction.py:99-121`), are `founded`, `invested_in`, `advises`, `partner_of`, `competitor_of`, `attended`, `works_at`, plus a separate `is <Title> at <Company>` employment form run first (`_WORKS_AT_TITLE`, line 125). Precedence between them is **by confidence, not by order**: the dedup in `add()` (`extraction.py:167-178`) keys on `(subject, relationship, object)` and only replaces on strictly higher confidence, so patterns yielding *different* relationships for one entity pair all emit rows, and source order breaks ties only because all seven share `CONF_TYPED`. Everything not captured by a typed pattern becomes a low-confidence `mentioned` bare edge, unless it reduces to a stopword (`_STOPWORDS`, lines 58-66) — precision-first: better to under-extract than to pollute the graph with "The", "It", or "Yesterday" as entities. Schema lives in `0001_init.sql` and `0002_entity_links.sql`; see `references/knowledge-graph-schema.md`.
 
 ## Relational recall
 
-`parse_relational_query` (`relational.py:68`) detects relationship questions — "who founded Acme", "founders of Acme", "who works at Globex" — deterministically: regex only, no LLM, with a bounded (1-80 char) seed capture so it's ReDoS-safe (`relational.py:31`). A match resolves a seed entity against `entity_names`, then walks typed edges via `GraphView.counterparts` to gather memories mentioning the seed and its neighbours (`relational_recall`, `relational.py:119-179`). The arm is fail-open: a non-relational query, an unresolved entity, or any graph error yields an empty arm rather than breaking the keyword+vector hot path (`postgres_store.py:160-167`). It's fused at `RELATIONAL_WEIGHT = 0.5` (`hybrid.py:35`) — under the keyword/vector arms' weight of `1.0` — because it's high-precision but low-recall: a resolved typed edge is a strong signal but rare, so it can surface a new candidate or reinforce a shared one, but never leapfrog a strong dual-arm hit on its own.
+`parse_relational_query` (`relational.py:68`) detects relationship questions — "who founded Acme", "founders of Acme", "who works at Globex" — deterministically: regex only, no LLM, with a bounded (1-80 char) seed capture so it's ReDoS-safe (`relational.py:31`). A match resolves a seed entity against `entity_names`, then walks typed edges via `GraphView.counterparts` to gather memories mentioning the seed and its neighbours (`relational_recall`, `relational.py:119-179`). The arm is fail-open: a non-relational query, an unresolved entity, or any graph error yields an empty arm rather than breaking the keyword+vector hot path (`nuvel/memory/backends/postgres_store.py:160-167`). It's fused at `RELATIONAL_WEIGHT = 0.5` (`hybrid.py:35`) — under the keyword/vector arms' weight of `1.0` — because it's high-precision but low-recall: a resolved typed edge is a strong signal but rare, so it can surface a new candidate or reinforce a shared one, but never leapfrog a strong dual-arm hit on its own.
 
 ## Synthesis and gap analysis
 
