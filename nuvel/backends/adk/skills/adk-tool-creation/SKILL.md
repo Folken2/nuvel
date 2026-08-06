@@ -87,6 +87,30 @@ agent = LlmAgent(
 )
 ```
 
+## A tool call may be denied before your function ever runs
+
+In a generated agent, a tool doesn't execute unconditionally just because
+the model called it. Three independent gates can intercept the call first:
+
+- A command-safety classifier (`command_safety.classify`) can return
+  `deny`/`ask` for a shell-executing tool's argv — but only if your own
+  tool guard calls it; it's a library function, not something the scaffold
+  wires in automatically.
+- `exfil_guard`, a `before_tool_callback` wired unconditionally into every
+  generated agent, can block a call whose arguments carry a secret-shaped
+  value before the tool body runs.
+- During a cron run, the headless approval policy (`CronIsolationPlugin`)
+  can auto-deny a non-shell tool outright, since no human is present to
+  approve it.
+
+Design tools to expect this: surface a denial as a structured, non-fatal
+result (e.g. `{"status": "error", "error": "..."}`, matching the Return
+Format Convention above) rather than assuming the function body always
+runs — the model should see a normal tool-error response it can react to,
+not a crash. Load `adk-long-horizon-guardrails` for the command-safety
+classifier and `exfil_guard`, and `adk-cron-isolation` for the headless
+denial policy.
+
 ## References
 
 - Load `tool-patterns` for complete CRUD, API wrapper, file-ops, and search tool implementations.

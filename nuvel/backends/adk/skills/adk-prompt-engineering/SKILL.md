@@ -244,6 +244,73 @@ User: {ctx.state.get('user_name', 'Unknown')}
 - Non-engineers can edit domain knowledge without touching Python
 - Prompts stay readable — large reference blocks live in separate files
 
+## The three prompt tiers (cache stability)
+
+Every agent scaffolded by nuvel assembles its system prompt as an
+`InstructionProvider` that builds three tiers, concatenated in this fixed
+order (`prompt/instructions.py.tmpl`):
+
+1. **Stable** — `build_stable_tier()`: static identity/persona (the persona
+   scaffold, SOUL.md, and the system frame). Byte-identical across turns
+   within a session — nothing in this tier is allowed to vary turn to turn.
+2. **Session** — `build_session_tier(ctx)`: session-specific but
+   slow-changing — the structured user-profile block plus memory retrieved
+   for the current conversation (relevance-conditioned, not the whole
+   memory file). Changes only when the underlying profile or retrieved
+   memory actually changes.
+3. **Volatile** — `build_volatile_tier(ctx)`: per-turn reminders (today's
+   date, an infra warning, the last tool error, a near-budget notice).
+   Rides the tail of the prompt and is expected to differ every turn.
+
+`get_agent_instruction(ctx)` returns `"\n\n".join([stable, session, volatile])`
+(skipping any empty tier) — stable always leads, volatile always trails.
+
+**Why the ordering is a cost decision, not a formatting one.** Providers
+cache on prompt *prefix*: a cache hit costs a fraction of a fresh input
+token, but the cache only stays warm while the leading bytes of the prompt
+stay identical. Put anything per-turn near the front — a timestamp, a
+turn counter, an error message — and you invalidate the cached prefix on
+every single turn, silently multiplying input-token cost with no change in
+behavior. Ordering stable-then-session-then-volatile is what keeps the
+expensive, rarely-changing identity/persona text cache-hot turn after turn
+while only the cheap tail pays for freshness. This matters most for exactly
+the agents nuvel targets: long stable personas plus heavy retrieved memory,
+run over many turns.
+
+**The authoring contract.** When adding instruction content to a generated
+agent, decide which tier it belongs to and don't mix them:
+
+- New persona text, tone rules, or identity content → the **stable** tier.
+- Anything derived from session state (user profile fields, retrieved
+  memory) → the **session** tier.
+- Anything that changes every turn (dates, warnings, error nudges, budget
+  notices) → the **volatile** tier.
+- **Never interpolate a per-turn value into the stable tier** — that's the
+  one mistake that defeats the whole scheme, since it makes the "stable"
+  prefix move on every turn anyway.
+
+**Graceful degradation.** `build_session_tier` wraps each source
+independently in `try`/`except`: if the user-profile store or the memory
+retrieval call fails, that section is simply omitted rather than raising —
+the session tier degrades to whatever sources succeeded (down to empty)
+instead of breaking prompt assembly for the whole turn
+(`test_session_tier_degrades_when_sources_fail`).
+
+This contract is pinned by the 12 tests in `tests/test_prompt_tiers.py` —
+in particular `test_full_prompt_stable_prefix_survives_volatile_change` and
+`test_stable_tier_ignores_volatile_state` assert that changing only volatile
+state leaves the stable prefix byte-identical. A future edit that breaks
+tier isolation fails that suite.
+
+Event compaction (see `adk-long-horizon-sessions`) is a structurally
+separate mechanism — it rewrites the session's *event* history, not the
+system-instruction tiers described here, and `instructions.py.tmpl` never
+reads events or does any compaction-related work. The two are independent
+levers on the same turn's total cost: compaction buys headroom on the event
+side of the ledger, a byte-identical stable prefix buys a cheap prompt on
+the instruction side. Tune them as two separate cost decisions, not one
+feeding the other.
+
 ## Tool Documentation Best Practices
 
 When an agent has many tools, dedicate a section of the prompt to explaining

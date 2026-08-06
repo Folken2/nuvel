@@ -14,7 +14,7 @@ description: >-
 
 ## The two families
 
-`nuvel/guardrails` ships two families of protection for agents that run for a long time or unattended (`guardrails/__init__.py:3-11`):
+`nuvel/guardrails` ships two families of protection for agents that run for a long time or unattended (`guardrails/__init__.py:3-11`). This skill is the "stopping" half of long-horizon operation — for the "surviving" half (resumability across interruptions, event compaction so a growing session doesn't exhaust the context window), load `adk-long-horizon-sessions`.
 
 - **Halt guards** — detect runaway loops (no progress, a tool failing identically) and latch a shared halt signal that `GuardrailsPlugin` consumes to short-circuit the model.
 - **Command / exfiltration guards** — structurally classify shell commands for destructive operations and scan tool arguments for leaked secrets.

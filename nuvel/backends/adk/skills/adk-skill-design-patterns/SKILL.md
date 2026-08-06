@@ -86,6 +86,15 @@ Most real agents benefit from 2-3 patterns. Common combinations:
 
 When combining, create **one skill per pattern** — don't merge patterns into a single skill. Keep separation of concerns clean.
 
+## Judging a curator-proposed skill
+
+The optional skill curator (`NUVEL_SKILL_CURATOR`, default off) can propose
+new `SKILL.md` files from observed tool usage, landing them in
+`NUVEL_SKILL_PROPOSALS_DIR` for human review rather than adding them live —
+when reviewing one, check it against these five patterns and the decision
+matrix above, the same way you'd evaluate a pattern proposed by a human.
+Load `adk-memory-self-improvement` for how and when the curator proposes.
+
 ## References
 
 - Load `pattern-tool-wrapper` for the Tool Wrapper pattern guide and skeleton template.
