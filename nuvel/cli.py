@@ -358,6 +358,9 @@ def build_parser() -> argparse.ArgumentParser:
     from nuvel.eval import cli as eval_cli
     eval_cli.register(sub)
 
+    from nuvel.evalv2 import cli as evalv2_cli
+    evalv2_cli.register(sub)
+
     return parser
 
 
