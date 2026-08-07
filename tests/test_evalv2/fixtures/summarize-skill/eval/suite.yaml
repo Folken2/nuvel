@@ -1,0 +1,22 @@
+name: summarize-eval
+description: Evaluates summarize accuracy
+skill: summarize
+evaluators:
+  - llm-judge:
+      rubric:
+        accuracy: 0.5
+        conciseness: 0.3
+        tone: 0.2
+      model: openai/gpt-4o-mini
+      max_cost: 0.10
+  - deterministic:
+      - { type: exact-match, field: output.summary, threshold: 0.8 }
+      - { type: max-length, field: output.summary, max_chars: 500 }
+  - self-consistency:
+      runs: 3
+      threshold: 0.9
+      max_cost: 0.05
+thresholds:
+  pass: 0.8
+  warn: 0.6
+  regression: -0.05
