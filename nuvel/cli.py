@@ -7,6 +7,12 @@ Subcommands:
         List bundled knowledge skills for a framework.
     nuvel skills search <q> [--framework <fw>]
         Search skills by name or description.
+    nuvel plugins list
+        List Agent Plugins discovered in the configured plugin_dirs.
+    nuvel plugins load <dir>
+        Load and inspect a single plugin directory.
+    nuvel plugins config
+        Show the current plugin directory configuration.
     nuvel run [--dev]
         Launch the meta-agent (ADK-based) for autonomous scaffolding.
     nuvel traces list|show|stats
@@ -153,6 +159,72 @@ def _cmd_skills_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_plugins(registry) -> None:
+    """Print a formatted view of loaded plugins, skills, and MCP servers."""
+    plugins = registry.get_all_plugins()
+    if not plugins:
+        print("No plugins found.")
+    for info in plugins:
+        m = info.manifest
+        header = m.name
+        if m.version:
+            header += f" v{m.version}"
+        print(f"● {header}")
+        if m.description:
+            print(f"    {m.description}")
+        if info.skills:
+            print(f"    skills:  {', '.join(s.name for s in info.skills)}")
+        for name, entry in info.mcp_servers.items():
+            print(f"    mcp:     {name} ({entry.transport})")
+        for err in info.errors:
+            print(f"    ! {err.component}: {err.message}")
+    for err in registry.errors:
+        print(
+            f"✗ {err.plugin_name}: {err.component}: {err.message}",
+            file=sys.stderr,
+        )
+
+
+def _cmd_plugins_list(args: argparse.Namespace) -> int:
+    from nuvel.agent_plugins import PluginRegistry
+    from nuvel.config import get_plugin_dirs
+
+    registry = PluginRegistry(get_plugin_dirs())
+    registry.discover_plugins()
+    _print_plugins(registry)
+    return 0
+
+
+def _cmd_plugins_load(args: argparse.Namespace) -> int:
+    from nuvel.agent_plugins import PluginRegistry
+    from nuvel.agent_plugins.exceptions import ManifestError
+
+    path = Path(args.dir).expanduser()
+    if not path.is_dir():
+        print(f"Error: not a directory: {path}", file=sys.stderr)
+        return 1
+
+    registry = PluginRegistry([])
+    try:
+        registry.load_plugin(path)
+    except ManifestError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    _print_plugins(registry)
+    return 0
+
+
+def _cmd_plugins_config(args: argparse.Namespace) -> int:
+    from nuvel.config import get_plugin_dirs
+
+    dirs = get_plugin_dirs()
+    print("Plugin directories (set NUVEL_PLUGIN_DIRS to override):")
+    for d in dirs:
+        state = "exists" if d.is_dir() else "missing"
+        print(f"  {d}  [{state}]")
+    return 0
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     env = os.environ.copy()
     if args.dev:
@@ -231,6 +303,25 @@ def build_parser() -> argparse.ArgumentParser:
     _add_framework_flag(p_search)
     p_search.add_argument("query", help="Substring to match against skill name/description.")
     p_search.set_defaults(func=_cmd_skills_search)
+
+    p_plugins = sub.add_parser("plugins", help="Discover and inspect Agent Plugins.")
+    plugins_sub = p_plugins.add_subparsers(dest="plugins_command", required=True)
+
+    p_pl_list = plugins_sub.add_parser(
+        "list", help="List all plugins found in the configured plugin_dirs."
+    )
+    p_pl_list.set_defaults(func=_cmd_plugins_list)
+
+    p_pl_load = plugins_sub.add_parser(
+        "load", help="Load and inspect a single plugin directory."
+    )
+    p_pl_load.add_argument("dir", help="Path to a plugin directory (with plugin.json).")
+    p_pl_load.set_defaults(func=_cmd_plugins_load)
+
+    p_pl_config = plugins_sub.add_parser(
+        "config", help="Show the current plugin directory configuration."
+    )
+    p_pl_config.set_defaults(func=_cmd_plugins_config)
 
     p_run = sub.add_parser("run", help="Launch the meta-agent server.")
     p_run.add_argument("--dev", action="store_true", help="Run with DEV_MODE=true.")
