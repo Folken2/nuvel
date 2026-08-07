@@ -38,7 +38,7 @@ def default_suite_yaml(skill: str, description: str = "") -> str:
         "      model: openai/gpt-4o-mini\n"
         "      max_cost: 0.10\n"
         "  - deterministic:\n"
-        "      - { type: max-length, field: output, max_chars: 2000 }\n"
+        "      - { type: max-length, max_chars: 3000 }\n"
         "thresholds:\n"
         "  pass: 0.8\n"
         "  warn: 0.6\n"

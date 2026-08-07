@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .cache import SampleCache
 from .compare import ComparisonReport, compare_results
 from .exceptions import EvalError
 from .init import init_eval_suite
@@ -116,6 +117,7 @@ def run_eval(
     results_dir: Path | None = None,
     executor: Callable | None = None,
     judge_fn: Callable | None = None,
+    cache: SampleCache | None = None,
     stream=None,
 ) -> int:
     """Load a skill's suite, run it, print a report, and persist the result."""
@@ -138,6 +140,7 @@ def run_eval(
         model=model,
         executor=executor or LLMExecutor(model),
         judge_fn=judge_fn,
+        cache=cache,
         save_baseline=save_baseline,
     )
     result = EvalRunner(suite, config).run()
@@ -362,12 +365,16 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    results_dir = get_results_dir()
+    cache = SampleCache(cache_dir=results_dir / "cache")
     return run_eval(
         args.skill,
         skills_dir=_skills_root(args),
         model=args.model,
         json_out=args.json,
         save_baseline=args.save_baseline,
+        results_dir=results_dir,
+        cache=cache,
     )
 
 

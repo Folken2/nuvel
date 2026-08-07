@@ -71,10 +71,15 @@ class LLMExecutor:
 
     def __call__(self, suite: EvalSuite, example: EvalExample) -> str:
         instructions = self._skill_instructions(suite)
-        model = self.model or _DEFAULT_MODEL
         if self._complete_fn is not None:
-            return self._complete_fn(model, instructions, example.input)
-        return self._run_litellm(model, instructions, example.input)
+            return self._complete_fn(self.model, instructions, example.input)
+        if self.model is None:
+            raise RuntimeError(
+                "LLMExecutor requires a model. No model configured and no --model "
+                "provided. Either add an llm-judge evaluator to suite.yaml with a "
+                "model, or pass --model to the CLI."
+            )
+        return self._run_litellm(self.model, instructions, example.input)
 
     @staticmethod
     def _run_litellm(model: str, instructions: str, user_input: str) -> str:
@@ -185,8 +190,13 @@ class EvalRunner:
                         "note": result.details.get("note", "self-consistency below threshold"),
                     }
                 )
-        else:
+        elif self.plan.deterministic or self.plan.rubric is not None:
+            # Only the executor's output is consumed by these evaluators; with
+            # no evaluators at all there is nothing to score, so skip the call
+            # (and the LLMExecutor's model requirement) entirely.
             output = self.executor(self.suite, example)
+        else:
+            output = ""
 
         if self.plan.deterministic:
             results.extend(run_deterministic_checks(output, self.plan.deterministic, example))
