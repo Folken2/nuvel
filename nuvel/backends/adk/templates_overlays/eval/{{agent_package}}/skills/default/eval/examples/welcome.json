@@ -1,0 +1,6 @@
+{
+  "id": "welcome-greeting",
+  "input": "Hi there! What can you help me with?",
+  "expected_output": "A friendly greeting from {{agent_name}} that briefly explains what it can help with.",
+  "tags": ["smoke", "greeting"]
+}

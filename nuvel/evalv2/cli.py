@@ -1,8 +1,9 @@
 """nuvel evalv2 — CLI for the skill-driven evaluation system.
 
-Three subcommands, registered onto the top-level ``nuvel`` parser alongside
-the legacy ``eval`` tree (which stays intact until Phase 4):
+Four subcommands, registered onto the top-level ``nuvel`` parser alongside
+the legacy ``eval`` tree (production trace scoring — a different job):
 
+    nuvel evalv2 init <skill>         # stamp a starter eval/ suite into a skill
     nuvel evalv2 list                 # skills that ship an eval/ suite
     nuvel evalv2 run <skill>          # run a skill's suite, save the result
     nuvel evalv2 compare <skill>      # diff the latest run against baseline
@@ -26,6 +27,7 @@ from typing import Callable
 
 from .compare import ComparisonReport, compare_results
 from .exceptions import EvalError
+from .init import init_eval_suite
 from .runner import EvalRunConfig, EvalRunner, LLMExecutor
 from .schema import EvalSuiteResult
 from .suite import EvalSuite
@@ -161,6 +163,56 @@ def _persist_result(
     if save_baseline:
         (skill_dir / "baseline.json").write_text(payload, encoding="utf-8")
     return run_path
+
+
+def _resolve_skill_dir(skill: str, skills_dir: Path) -> Path:
+    """Resolve a skill argument to a directory.
+
+    A ``skill`` that is itself an existing directory (a path) is used as-is;
+    otherwise it is treated as a name under ``skills_dir``.
+    """
+    candidate = Path(skill).expanduser()
+    if candidate.is_dir():
+        return candidate
+    return Path(skills_dir) / skill
+
+
+def init_eval(
+    skill: str,
+    *,
+    skills_dir: Path,
+    name: str | None = None,
+    description: str = "",
+    force: bool = False,
+    stream=None,
+) -> int:
+    """Initialize an ``eval/`` suite in a skill directory."""
+    stream = stream or sys.stdout
+    skill_dir = _resolve_skill_dir(skill, skills_dir)
+    if not skill_dir.is_dir():
+        print(
+            f"Error: skill directory not found: {skill_dir}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        eval_dir = init_eval_suite(
+            skill_dir, name=name, description=description, force=force
+        )
+    except FileExistsError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Initialized eval suite in {skill_dir}", file=stream)
+    print(f"  {eval_dir / 'suite.yaml'}", file=stream)
+    print(f"  {eval_dir / 'examples'}/", file=stream)
+    print(
+        f"\nAdd examples under {eval_dir / 'examples'}/, then run "
+        f"`nuvel evalv2 run {skill_dir.name}`.",
+        file=stream,
+    )
+    return 0
 
 
 def compare_eval(
@@ -299,6 +351,16 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_init(args: argparse.Namespace) -> int:
+    return init_eval(
+        args.skill,
+        skills_dir=_skills_root(args),
+        name=args.name,
+        description=args.description,
+        force=args.force,
+    )
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     return run_eval(
         args.skill,
@@ -332,6 +394,16 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Skill-driven evaluation (v2): list, run, compare.",
     )
     sub = p.add_subparsers(dest="evalv2_command", required=True)
+
+    p_init = sub.add_parser("init", help="Initialize an eval/ suite in a skill.")
+    p_init.add_argument("skill", help="Skill name (under the skills dir) or a path.")
+    _add_skills_dir_flag(p_init)
+    p_init.add_argument("--name", default=None, help="Suite name (default: <skill>-eval).")
+    p_init.add_argument("--description", default="", help="One-line suite description.")
+    p_init.add_argument(
+        "--force", action="store_true", help="Overwrite an existing eval/ directory."
+    )
+    p_init.set_defaults(func=_cmd_init)
 
     p_list = sub.add_parser("list", help="List skills that ship an eval/ suite.")
     _add_skills_dir_flag(p_list)

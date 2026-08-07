@@ -158,6 +158,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel new <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
 | `nuvel new <name> --workflow` | *(adk only)* Workflow-native root agent — an ADK 2.0 `Workflow` graph with task-mode nodes, typed contracts, and conditional routing |
 | `nuvel new <name> --with-acp` | *(adk only)* Make the agent ACP-compatible (Agent Client Protocol over stdio, `python -m <pkg>.acp`) and CLI-runnable (`python -m <pkg>.cli`) |
+| `nuvel new <name> --with-eval` | *(adk only)* Stamp a starter evalv2 suite into the agent (`skills/default/eval/suite.yaml` + a sample example) |
 | `nuvel new <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
@@ -165,10 +166,11 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel traces list \| show \| stats \| errors` | Inspect JSONL trace logs across all local agents |
 | `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs |
-| `nuvel eval score \| report \| worst \| drift` | Score traces (heuristics + LLM judge), surface worst runs, detect drift |
-| `nuvel eval variants [--agent <name>]` | List discovered replay-variant configs (`evals/variants/*.yaml`) for an agent |
-| `nuvel eval replay <name> [--agent <name>] [--since YYYY-MM-DD] [--max-cost-usd N] [--concurrency N] [--force] [--dry-run]` | Replay a config variant against historical traces and score each replay with the judge/rubric |
-| `nuvel eval compare <name> [--agent <name>]` | Diff a variant's replays against baseline `scored.jsonl`; exits 2 on regression (Δ overall < −0.05) |
+| `nuvel eval score \| report \| worst \| drift` | **Production trace scoring** — score traces (heuristics + LLM judge), surface worst runs, detect drift |
+| `nuvel evalv2 init <skill> [--name <n>] [--description <d>] [--force]` | **Skill evaluation** — stamp a starter `eval/` suite into a skill |
+| `nuvel evalv2 list` | List skills that ship an `eval/` suite |
+| `nuvel evalv2 run <skill> [--model <m>] [--json] [--save-baseline]` | Run a skill's eval suite against a fresh executor and save the result |
+| `nuvel evalv2 compare <skill> [--json] [--threshold N]` | Diff a skill's latest run against its baseline; exits 2 on regression |
 | `nuvel plugins list` | Discover [Agent Plugins](https://agent-plugins.org/) in the configured `plugin_dirs` (`NUVEL_PLUGIN_DIRS`, default `./plugins`), listing each plugin's skills and MCP servers |
 | `nuvel plugins load <dir>` | Load and inspect a single plugin directory |
 | `nuvel plugins config` | Show the current plugin directory configuration |

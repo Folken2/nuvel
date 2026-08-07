@@ -74,6 +74,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         with_teams=args.with_teams,
         workflow=args.workflow,
         with_acp=args.with_acp,
+        with_eval=args.with_eval,
     )
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
@@ -88,6 +89,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("workflow")
         if result.get("with_acp"):
             flags.append("acp")
+        if result.get("with_eval"):
+            flags.append("eval")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
         channels = [
@@ -298,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="(adk only) Make the agent ACP-compatible and CLI-runnable: add an "
              "Agent Client Protocol adapter (stdio JSON-RPC, python -m <pkg>.acp) "
              "plus a local terminal CLI (python -m <pkg>.cli).",
+    )
+    p_new.add_argument(
+        "--with-eval", action="store_true",
+        help="(adk only) Stamp a starter evalv2 suite into the agent "
+             "(skills/default/eval/suite.yaml + a sample example). Run it with "
+             "`nuvel evalv2 run`.",
     )
     p_new.set_defaults(func=_cmd_new)
 

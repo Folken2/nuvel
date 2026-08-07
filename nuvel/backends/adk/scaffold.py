@@ -598,6 +598,7 @@ def scaffold_agent(
     with_teams: bool = False,
     workflow: bool = False,
     with_acp: bool = False,
+    with_eval: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -622,6 +623,8 @@ def scaffold_agent(
                   a local terminal CLI, so the agent is runnable as an editor
                   subprocess (`python -m <pkg>.acp`) and from the command line
                   (`python -m <pkg>.cli`). Independent of the other flags.
+        with_eval: Stamp a starter evalv2 suite into the agent's default skill
+                   (skills/default/eval/suite.yaml + examples/welcome.json).
 
     Returns:
         A dict with status and metadata.
@@ -687,6 +690,8 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "gateway-teams", target, replacements, files_created)
         if with_acp:
             _stamp_tree(OVERLAYS_DIR / "acp", target, replacements, files_created)
+        if with_eval:
+            _stamp_tree(OVERLAYS_DIR / "eval", target, replacements, files_created)
 
         return {
             "status": "ok",
@@ -702,6 +707,7 @@ def scaffold_agent(
             "with_teams": with_teams,
             "workflow": workflow,
             "with_acp": with_acp,
+            "with_eval": with_eval,
         }
 
     except Exception as exc:

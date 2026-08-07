@@ -79,46 +79,6 @@ def _format_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
     return "\n".join(out)
 
 
-def render_variants(rows: list) -> str:
-    """List discovered variants: name, version, agent, description."""
-    if not rows:
-        return "No variants found (looked for generated-agents/*/evals/variants/*.yaml)."
-    lines = ["Variants:", ""]
-    for r in rows:
-        v = r.variant
-        desc = (v.description or "").splitlines()[0] if v.description else ""
-        lines.append(f"  {v.name:<24} {v.version:<22} {r.agent:<16} {desc}")
-    return "\n".join(lines)
-
-
-def render_comparison(report) -> str:
-    """Per-agent baseline-vs-variant table with sample-size + regression notes."""
-    if not report.agents:
-        return "No paired traces to compare (run `nuvel eval score` and `nuvel eval replay` first)."
-    header = (
-        f"  {'Agent':<16} {'N':>4} {'Base':>6} {'Var':>6} {'Δover':>7} "
-        f"{'Δqual':>7} {'Δsucc':>7} {'W':>4} {'T':>4} {'L':>4}"
-    )
-    lines = [header, "  " + "-" * (len(header) - 2)]
-    warn = False
-    for a in report.agents:
-        lines.append(
-            f"  {a.agent:<16} {a.n:>4} {a.baseline_overall_mean:>6.2f} "
-            f"{a.variant_overall_mean:>6.2f} {a.d_overall:>+7.2f} "
-            f"{a.d_quality:>+7.2f} {a.d_success:>+7.2f} "
-            f"{a.wins:>4} {a.ties:>4} {a.losses:>4}"
-        )
-        if a.small_sample:
-            warn = True
-    if warn:
-        lines.append("")
-        lines.append("  ⚠ sample too small (N<30) for reliable conclusions — "
-                     "collect more traces or run `nuvel eval score` to fill gaps.")
-    if report.regressed:
-        lines.append("  ⚠ regression detected (Δ overall < -0.05 for at least one agent).")
-    return "\n".join(lines)
-
-
 def render_drift(reports) -> str:
     """Format a list of DriftReport into a table."""
     if not reports:

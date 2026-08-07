@@ -120,6 +120,7 @@ def scaffold_agent(
     with_teams: bool = False,
     workflow: bool = False,
     with_acp: bool = False,
+    with_eval: bool = False,
 ) -> dict:
     """Scaffold a Claude Agent SDK project from the template skeleton.
 
@@ -130,6 +131,11 @@ def scaffold_agent(
         return {
             "status": "error",
             "message": "--with-acp is an ADK-only bundle; use --framework adk if you want it.",
+        }
+    if with_eval:
+        return {
+            "status": "error",
+            "message": "--with-eval is not yet supported for the claude-agent-sdk backend. Use --framework adk.",
         }
     if persona:
         return {

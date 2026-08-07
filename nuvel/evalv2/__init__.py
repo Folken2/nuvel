@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from .cache import SampleCache
 from .compare import ComparisonReport, compare_results
+from .init import default_suite_yaml, init_eval_suite
 from .exceptions import (
     CacheError,
     EvalError,
@@ -55,4 +56,7 @@ __all__ = [
     # Phase 3: comparison
     "ComparisonReport",
     "compare_results",
+    # Phase 4: init
+    "init_eval_suite",
+    "default_suite_yaml",
 ]
