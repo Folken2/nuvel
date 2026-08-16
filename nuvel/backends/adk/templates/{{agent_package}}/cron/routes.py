@@ -22,6 +22,9 @@ class CreateJobRequest(BaseModel):
     schedule: str = Field(..., min_length=1)
     delivery: str = "local"
     origin: Optional[dict[str, Any]] = None
+    # Declared env-var names the job may read. Enforced only when
+    # NUVEL_CRON_SCOPE_SECRETS=1; None = full env (back-compat).
+    secrets: Optional[list[str]] = None
 
 
 class UpdateJobRequest(BaseModel):
@@ -46,7 +49,7 @@ async def create_job(body: CreateJobRequest) -> dict[str, Any]:
     try:
         return get_service().create_job(
             name=body.name, prompt=body.prompt, schedule=body.schedule,
-            delivery=body.delivery, origin=body.origin,
+            delivery=body.delivery, origin=body.origin, secrets=body.secrets,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -71,6 +74,15 @@ async def update_job(job_id: str, body: UpdateJobRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="job not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/jobs/{job_id}/confirm")
+async def confirm_job(job_id: str) -> dict[str, Any]:
+    """Promote an HITL-gated ``pending`` job to ``active``."""
+    try:
+        return get_service().confirm_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
 
 
 @router.post("/jobs/{job_id}/run")

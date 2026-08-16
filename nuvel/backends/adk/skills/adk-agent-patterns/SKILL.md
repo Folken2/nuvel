@@ -147,6 +147,14 @@ research_loop = LoopAgent(
 Exits via `tool_context.actions.escalate = True` or `max_iterations`. Always set
 `max_iterations`. For loop exit patterns, see `references/loop-patterns.md`.
 
+`max_iterations` is the intended termination condition, but it's not the only
+backstop: if a loop's exit logic itself fails to trigger — a reviewer that
+never escalates, a step that returns the same output forever — the shipped
+`NoProgressGuard` / `RepeatedFailureGuard` halt guards catch the runaway
+response loop or the identically-failing tool call and latch a halt rather
+than letting the loop spin unbounded. Load `adk-long-horizon-guardrails` for
+how those guards work and how they're wired into every generated agent.
+
 ### 3c. ParallelAgent — fan-out only
 
 ```python

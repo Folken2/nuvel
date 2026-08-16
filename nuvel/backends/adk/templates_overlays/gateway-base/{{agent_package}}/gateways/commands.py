@@ -458,6 +458,7 @@ async def _cmd_cron(ctx: CommandContext) -> CommandResult:
             "  /cron pause <id>\n"
             "  /cron resume <id>\n"
             "  /cron run <id>\n"
+            "  /cron confirm <id>\n"
             "  /cron remove <id>"
         ])
 
@@ -476,7 +477,7 @@ async def _cmd_cron(ctx: CommandContext) -> CommandResult:
             )
         return CommandResult(handled=True, replies=["\n".join(lines)])
 
-    if sub in {"pause", "resume", "run", "remove", "rm", "del", "delete"}:
+    if sub in {"pause", "resume", "run", "confirm", "remove", "rm", "del", "delete"}:
         if not rest:
             return CommandResult(handled=True, replies=[f"Usage: /cron {sub} <id>"])
         jid = rest[0]
@@ -490,6 +491,9 @@ async def _cmd_cron(ctx: CommandContext) -> CommandResult:
             if sub == "run":
                 svc.trigger_now(jid)
                 return CommandResult(handled=True, replies=[f"Job {jid} queued for the next tick."])
+            if sub == "confirm":
+                svc.confirm_job(jid)
+                return CommandResult(handled=True, replies=[f"Confirmed {jid} — it will now tick."])
             # remove/rm/del/delete
             if not svc.delete_job(jid):
                 return CommandResult(handled=True, replies=[f"No job {jid!r}."])
@@ -503,6 +507,7 @@ async def _cmd_cron(ctx: CommandContext) -> CommandResult:
         # Parse: <schedule> <prompt> [--name N] [--deliver D]
         positional: list[str] = []
         name = ""
+        secrets: list[str] | None = None
         delivery = "origin" if (ctx.extra or {}).get("platform") else "local"
         i = 0
         while i < len(rest):
@@ -511,6 +516,9 @@ async def _cmd_cron(ctx: CommandContext) -> CommandResult:
                 name = rest[i + 1]; i += 2; continue
             if tok in ("--deliver", "-d") and i + 1 < len(rest):
                 delivery = rest[i + 1]; i += 2; continue
+            if tok in ("--secrets", "-s") and i + 1 < len(rest):
+                secrets = [n.strip() for n in rest[i + 1].split(",") if n.strip()]
+                i += 2; continue
             positional.append(tok); i += 1
         if len(positional) < 2:
             return CommandResult(handled=True, replies=[
@@ -524,10 +532,15 @@ async def _cmd_cron(ctx: CommandContext) -> CommandResult:
         try:
             job = svc.create_job(
                 name=name, prompt=prompt, schedule=schedule,
-                delivery=delivery, origin=origin,
+                delivery=delivery, origin=origin, secrets=secrets,
             )
         except ValueError as exc:
             return CommandResult(handled=True, replies=[f"Error: {exc}"])
+        if job.get("status") == "pending":
+            return CommandResult(handled=True, replies=[
+                f"Created {job['id']}: {job['name']!r} (pending). "
+                f"Confirm to start ticking: /cron confirm {job['id']}"
+            ])
         return CommandResult(handled=True, replies=[
             f"Scheduled {job['id']}: {job['name']!r} — next run at {job['next_run_at']}"
         ])

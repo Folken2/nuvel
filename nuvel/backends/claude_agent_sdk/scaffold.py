@@ -119,12 +119,18 @@ def scaffold_agent(
     with_telegram: bool = False,
     with_teams: bool = False,
     workflow: bool = False,
+    with_acp: bool = False,
 ) -> dict:
     """Scaffold a Claude Agent SDK project from the template skeleton.
 
     The persona and with_composio flags are ADK-only; passing them here
     returns an error rather than silently ignoring.
     """
+    if with_acp:
+        return {
+            "status": "error",
+            "message": "--with-acp is an ADK-only bundle; use --framework adk if you want it.",
+        }
     if persona:
         return {
             "status": "error",

@@ -109,7 +109,7 @@ Pair this with structured logging (`LOG_FORMAT=json`) and you have replayable ag
 
 ## Common patterns
 
-For deeper patterns — stacked hooks, dynamic context injection in UserPromptSubmit, rate limiting, redaction in PostToolUse, hook ordering and short-circuit semantics — see `references/hook-patterns.md`.
+For deeper patterns — stacked hooks, dynamic context injection in UserPromptSubmit, rate limiting, redaction in PostToolUse, hook ordering and deny precedence — see `references/hook-patterns.md`.
 
 ## Quick reference
 

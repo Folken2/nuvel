@@ -122,8 +122,14 @@ def scaffold_agent(
     with_telegram: bool = False,
     with_teams: bool = False,
     workflow: bool = False,
+    with_acp: bool = False,
 ) -> dict:
     """Scaffold a Managed Agents project from the template skeleton."""
+    if with_acp:
+        return {
+            "status": "error",
+            "message": "--with-acp is an ADK-only bundle; use --framework adk if you want it.",
+        }
     if persona:
         return {
             "status": "error",

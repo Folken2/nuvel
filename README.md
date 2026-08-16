@@ -33,23 +33,24 @@ Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Age
 
 nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, the Claude Agent SDK, and Anthropic Managed Agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 11-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 17-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
 
 ## Frameworks
 
 | Framework | Flag | Knowledge skills | Where the agent runs |
 | --- | --- | --- | --- |
-| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 10 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router, workflow graphs, task delegation) | Your server (OpenRouter + LiteLLM) |
+| [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 15 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router, workflow graphs, task delegation, long-horizon guardrails/sessions, cron isolation, org memory retrieval, self-improvement) | Your server (OpenRouter + LiteLLM) |
 | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | `--framework claude-agent-sdk` | 6 skills (tool creation, MCP integration, permissions, hooks, system prompts, deployment) | Your server (Anthropic API direct) |
 | [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | `--framework anthropic-managed-agents` | 5 skills (overview, tools, events, deployment, skills + memory) | Anthropic's infrastructure (your server is a thin proxy) |
 
 ## Features
 
 - **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
-- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (11-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
-- **Portable knowledge skills** — 21 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
+- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (17-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
+- **Portable knowledge skills** — 26 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
 - **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character. Inspired by OpenClaw. *(ADK only.)*
 - **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more. *(ADK only.)*
+- **ACP-compatible & CLI-runnable** — `--with-acp` adds an [Agent Client Protocol](https://agentclientprotocol.com) adapter (JSON-RPC over stdio, the protocol editors like Zed use to drive an agent as a subprocess) plus a local terminal CLI. Run it as an editor subprocess (`python -m <pkg>.acp`) or straight from the shell (`python -m <pkg>.cli "…"` one-shot, or a REPL). The adapter honors the editor's session: `mcpServers` passed in `session/new` (stdio / HTTP / SSE) are wired in as tools, the agent reads/writes through the editor's filesystem view (unsaved buffers included) when the client supports it, and sensitive tool calls are gated by an editor approve/deny prompt (`session/request_permission`, tunable via `ACP_PERMISSION_MODE`). Both entrypoints reuse the same plugin-wired Runner as the FastAPI server. *(ADK only.)*
 - **Messaging gateways** — scaffold an agent reachable from Slack, Telegram, or MS Teams with one flag (`--with-slack`, `--with-telegram`, `--with-teams`). See [docs/superpowers/specs/2026-05-09-messaging-gateways-design.md](docs/superpowers/specs/2026-05-09-messaging-gateways-design.md). *(ADK only.)*
   - **Slack:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and uploads agent artifacts back to chat. See the per-channel README for details.
   - **Telegram:** Multimodal — forwards user images/files (size and count caps via `GATEWAY_MAX_ATTACHMENT_*`) and uploads agent artifacts back to chat. See the per-channel README for details.
@@ -156,6 +157,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel new <name> --with-telegram` | *(adk only)* Add a Telegram Bot webhook gateway |
 | `nuvel new <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
 | `nuvel new <name> --workflow` | *(adk only)* Workflow-native root agent — an ADK 2.0 `Workflow` graph with task-mode nodes, typed contracts, and conditional routing |
+| `nuvel new <name> --with-acp` | *(adk only)* Make the agent ACP-compatible (Agent Client Protocol over stdio, `python -m <pkg>.acp`) and CLI-runnable (`python -m <pkg>.cli`) |
 | `nuvel new <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
@@ -197,13 +199,13 @@ nuvel/
 │   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── plugins/               # 11 plugins (see Plugin Chain below)
+│   ├── plugins/               # Meta-agent chain (12, via Makefile PLUGIN_FLAGS)
 │   ├── config/                # LiteLLM/OpenRouter config
 │   └── backends/              # Per-framework scaffolders + skills
 │       ├── adk/               # Google ADK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # Production skeleton for ADK agents
-│       │   └── skills/        # 10 ADK knowledge skills
+│       │   └── skills/        # 15 ADK knowledge skills
 │       ├── claude_agent_sdk/  # Claude Agent SDK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # FastAPI + SDK skeleton
@@ -220,7 +222,7 @@ nuvel/
 ### Key Design Decisions
 
 - **Template-based scaffolding** — Every generated agent inherits a proven production skeleton (plugins, circuit breakers, rate limiting, structured logging, SSE streaming). You only write the brain.
-- **Skills as a portable knowledge format** — The seven ADK skills follow the Anthropic skills format, so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
+- **Skills as a portable knowledge format** — The 15 ADK skills follow the Anthropic skills format, so they work in Claude Code today and in any agent that adopts the format. Progressive disclosure (L1/L2/L3) keeps context usage efficient.
 - **Scoped file operations** — All file tools are sandboxed to the output directory. No path traversal possible.
 
 ## Generated Agent Structure
@@ -250,23 +252,33 @@ pip install -r requirements.txt
 DEV_MODE=true python run_adk.py
 ```
 
+### Configuration
+
+Every environment variable a generated agent reads is documented inline in `.env.example`, grouped by subsystem (auth, plugins, providers, memory, cron, and more). It's copied into each scaffolded project from `nuvel/backends/adk/templates/.env.example`, so that file — not this README — is the canonical reference for what to configure.
+
 ## Plugin Chain
 
 Every generated agent ships with a full plugin chain — cross-cutting concerns that apply to all interactions without touching agent code.
 
 | Plugin | Type | What it does |
 |--------|------|-------------|
+| **MemoryPlugin** | Features | Markdown file-based long-term memory across sessions |
 | **CostGuardPlugin** | Budget | Calculates USD cost per LLM call, enforces per-session budget limits |
 | **ContextWindowPlugin** | Observability | Tracks context-window occupancy per response (tokens used / max / %) for live UI indicators |
 | **TracePlugin** | Observability | Raw event JSONL + consolidated conversation JSON for eval pipelines |
+| **ContextFilterPlugin** | Performance | Keeps last N invocations in context window (default: 10) |
 | **ConsoleLoggerPlugin** | Observability | Color-coded terminal output for all lifecycle events |
 | **ToolEventsPlugin** | Observability | Structured tool execution events for SSE streaming |
-| **ContextFilterPlugin** | Performance | Keeps last N invocations in context window (default: 10) |
-| **CachePlugin** | Performance | Session-scoped caching for specific tools with TTL |
 | **ResiliencePlugin** | Resilience | Circuit breaker and rate limiting for tool calls |
+| **GuardrailsPlugin** | Resilience | Halts runaway model/tool loops — no-progress and repeated-failure guards behind a shared halt latch |
+| **CronIsolationPlugin** | Resilience | Headless tool-approval policy during scheduled cron runs; inert outside cron runs |
+| **CachePlugin** | Performance | Session-scoped caching for specific tools with TTL |
 | **ReflectAndRetryToolPlugin** | Resilience | Self-healing tool retry with LLM reflection (max 3) |
 | **SaveFilesAsArtifactsPlugin** | Features | Saves user-uploaded files as session artifacts |
-| **MemoryPlugin** | Features | Markdown file-based long-term memory across sessions |
+| **RecordingsPlugin** | Testing | Records LLM/tool interactions for ADK conformance testing; inert unless recording mode is active |
+| **ReplayPlugin** | Testing | Replays recorded interactions instead of executing live calls; inert unless replay mode is active |
+| **SkillCuratorPlugin** | Features | Proposes `SKILL.md` files from observed tool usage; opt-in, default off (`NUVEL_SKILL_CURATOR`) |
+| **SiblingRunner** | Features | Drains fire-and-forget memory-review sibling runs at shutdown; no-op until `NUVEL_MEMORY_REVIEW_FORK=1` |
 
 ### Cost Tracking & Budget Guard
 

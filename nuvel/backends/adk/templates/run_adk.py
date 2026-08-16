@@ -204,7 +204,12 @@ def main() -> None:
                   f"model on the individual nodes if you need it).")
             live_agent = root_agent
 
-        runner = harness.build_runner(agent=live_agent)
+        # Wire OrgMemoryService when a memory DB is configured; None
+        # (markdown fallback) otherwise. Built synchronously here because
+        # main() runs before the event loop starts.
+        import asyncio as _asyncio
+        _mem = _asyncio.run(harness.memory_service())
+        runner = harness.build_runner(agent=live_agent, memory_service=_mem)
 
         # Mount streaming WebSocket
         mount_streaming(app, runner, harness.session_service, app_name)
@@ -276,7 +281,13 @@ def main() -> None:
                 from {{agent_package}}.agent import root_agent as _cron_root
                 from {{agent_package}}.harness import AgentHarness
                 app.state.app_name = getattr(app.state, "app_name", "{{agent_name}}")
-                app.state.runner = AgentHarness.get(app.state.app_name).build_runner(agent=_cron_root)
+                _harness = AgentHarness.get(app.state.app_name)
+                # Wire OrgMemoryService when a memory DB is configured; None
+                # (markdown fallback) otherwise.
+                _mem = await _harness.memory_service()
+                app.state.runner = _harness.build_runner(
+                    agent=_cron_root, memory_service=_mem,
+                )
             except Exception:
                 import logging as _lg
                 _lg.getLogger(__name__).exception(
@@ -291,6 +302,20 @@ def main() -> None:
     @app.on_event("shutdown")
     async def _stop_cron_scheduler():  # noqa: D401
         await cron_scheduler.stop_scheduler()
+
+    # ── Memory consolidation ("dream") pass ──────────────────────────
+    # Periodic dedupe/reconcile of accumulated memories into a structured
+    # user profile. Opt-in via NUVEL_MEMORY_CONSOLIDATION=1; runs off the
+    # same lightweight scheduler pattern as cron (not Cloud Scheduler).
+    from {{agent_package}}.memory import consolidation as _consolidation
+
+    @app.on_event("startup")
+    async def _start_consolidation():  # noqa: D401
+        _consolidation.start_consolidation_scheduler()
+
+    @app.on_event("shutdown")
+    async def _stop_consolidation():  # noqa: D401
+        await _consolidation.stop_consolidation_scheduler()
 
     print(f"[ADK] Server ready: http://0.0.0.0:{port}")
     uvicorn.run(app, host="", port=port)

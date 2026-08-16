@@ -330,8 +330,10 @@ class TestScaffoldIncludesMemory(unittest.TestCase):
         agent_dir = Path(result["path"])
 
         instructions = (agent_dir / "test_mem4" / "prompt" / "instructions.py").read_text()
-        self.assertIn("load_all_memory", instructions)
-        self.assertIn("# Memory", instructions)
+        # Memory is now injected relevance-conditioned via the preload surface,
+        # not by pasting the whole file — see memory/preload.retrieve_memory_block.
+        self.assertIn("retrieve_memory_block", instructions)
+        self.assertIn("Relevant memory", instructions)
 
     def test_scaffold_env_example_has_memory_config(self):
         """Env example includes memory configuration."""
