@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "local-tool": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "my_server", "--root", "${PLUGIN_ROOT}"],
+      "env": {"DATA_DIR": "${PLUGIN_DATA}"}
+    },
+    "remote-api": {
+      "type": "streamable-http",
+      "url": "https://api.example.com/mcp",
+      "headers": {"X-Client": "nuvel"}
+    }
+  }
+}

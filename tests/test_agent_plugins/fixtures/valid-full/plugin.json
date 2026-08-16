@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "valid-full",
+  "version": "1.2.3",
+  "description": "A fully-featured example plugin.",
+  "author": {
+    "name": "Nuvel",
+    "email": "hello@example.com",
+    "url": "https://example.com"
+  },
+  "homepage": "https://example.com/valid-full",
+  "repository": "https://github.com/example/valid-full",
+  "license": "MIT",
+  "keywords": ["example", "demo"],
+  "extensions": {
+    "com.example.client": {"feature": true}
+  }
+}

@@ -169,6 +169,9 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel eval variants [--agent <name>]` | List discovered replay-variant configs (`evals/variants/*.yaml`) for an agent |
 | `nuvel eval replay <name> [--agent <name>] [--since YYYY-MM-DD] [--max-cost-usd N] [--concurrency N] [--force] [--dry-run]` | Replay a config variant against historical traces and score each replay with the judge/rubric |
 | `nuvel eval compare <name> [--agent <name>]` | Diff a variant's replays against baseline `scored.jsonl`; exits 2 on regression (Δ overall < −0.05) |
+| `nuvel plugins list` | Discover [Agent Plugins](https://agent-plugins.org/) in the configured `plugin_dirs` (`NUVEL_PLUGIN_DIRS`, default `./plugins`), listing each plugin's skills and MCP servers |
+| `nuvel plugins load <dir>` | Load and inspect a single plugin directory |
+| `nuvel plugins config` | Show the current plugin directory configuration |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |
 

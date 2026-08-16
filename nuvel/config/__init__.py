@@ -18,6 +18,25 @@ def get_skills_dir(default: pathlib.Path) -> pathlib.Path:
     return default
 
 
+def get_plugin_dirs(workdir: pathlib.Path | None = None) -> list[pathlib.Path]:
+    """Return the Agent Plugin directories to scan.
+
+    Honors ``NUVEL_PLUGIN_DIRS`` (a comma-separated list of paths). When unset,
+    defaults to ``["./plugins"]``. Relative paths are resolved against
+    ``workdir`` (the current working directory by default).
+    """
+    base = workdir or pathlib.Path.cwd()
+    raw = os.getenv("NUVEL_PLUGIN_DIRS", "").strip()
+    parts = [p.strip() for p in raw.split(",") if p.strip()] or ["./plugins"]
+    dirs: list[pathlib.Path] = []
+    for part in parts:
+        path = pathlib.Path(part).expanduser()
+        if not path.is_absolute():
+            path = base / path
+        dirs.append(path)
+    return dirs
+
+
 def is_skill_enabled(skill_name: str) -> bool:
     """Return True if ``skill_name`` is in the ``META_AGENT_SKILLS`` allowlist.
 
