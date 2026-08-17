@@ -96,6 +96,27 @@ It exposes:
 
 The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol, `skills_loader.py` = hub discovery/loading) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
+## Role scoping
+
+If you are deployed for a specific role, scope your skills by setting a theme.
+
+### Via AGENTS.md
+
+Add this at the top of this file:
+```yaml
+role: hr
+```
+
+When `role` is set, only load skills whose `theme` matches the value. The full list of themes is in `skills/index.json`.
+
+### Via MCP server
+
+```bash
+nuvel mcp serve --theme hr
+```
+
+This filters `resources/list` and skill search tools to only the HR theme. A sales agent can run `--theme sales`, a software engineer `--theme software-development`.
+
 ## Generated Agent Shape
 
 An ADK generated agent usually looks like:

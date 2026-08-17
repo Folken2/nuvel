@@ -45,6 +45,32 @@ def _make_hub(root: Path) -> Path:
     return skills
 
 
+def _make_multi_theme_hub(root: Path) -> Path:
+    """Create a hub with 3 hr + 3 sales skills for theme-scoping tests."""
+    skills = root / "skills"
+    themes = {"hr": ["onboarding", "offboarding", "payroll"],
+              "sales": ["prospecting", "demo", "closing"]}
+    index_themes: dict[str, list[dict]] = {}
+    for theme, names in themes.items():
+        index_themes[theme] = []
+        for name in names:
+            skill_dir = skills / theme / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\nversion: 1.0.0\n---\n\n{theme} / {name}.\n",
+                encoding="utf-8",
+            )
+            index_themes[theme].append({
+                "name": name,
+                "description": f"{theme} skill {name}",
+                "author": theme.upper(),
+                "path": f"skills/{theme}/{name}/SKILL.md",
+            })
+    index = {"version": "1.0.0", "themes": index_themes}
+    (skills / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    return skills
+
+
 class TestResolveSkillsDir(unittest.TestCase):
     def test_finds_skills_subdir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +176,74 @@ class TestServerMethods(unittest.TestCase):
         self.assertIsNone(
             self.server.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"})
         )
+
+
+class TestThemeScoping(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.skills = _make_multi_theme_hub(Path(self._tmp.name))
+
+    def _server(self, theme=None):
+        return SkillsMCPServer(SkillsLoader(self.skills), theme=theme)
+
+    def _call(self, server, method, params=None, msg_id=1):
+        return server.dispatch(
+            {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}}
+        )
+
+    def _tool(self, server, name, arguments):
+        resp = self._call(server, "tools/call", {"name": name, "arguments": arguments})
+        self.assertNotIn("error", resp)
+        return json.loads(resp["result"]["content"][0]["text"])
+
+    def test_resources_list_scoped_hr(self):
+        resp = self._call(self._server(theme="hr"), "resources/list")
+        resources = resp["result"]["resources"]
+        themes = {r["uri"].split("/")[2] for r in resources}
+        self.assertEqual(len(resources), 3)
+        self.assertEqual(themes, {"hr"})
+
+    def test_resources_list_scoped_sales(self):
+        resp = self._call(self._server(theme="sales"), "resources/list")
+        resources = resp["result"]["resources"]
+        themes = {r["uri"].split("/")[2] for r in resources}
+        self.assertEqual(len(resources), 3)
+        self.assertEqual(themes, {"sales"})
+
+    def test_resources_list_unscoped_returns_all(self):
+        resp = self._call(self._server(), "resources/list")
+        self.assertEqual(len(resp["result"]["resources"]), 6)
+
+    def test_search_skills_scoped(self):
+        # "skill" appears in every description; scoping limits the results.
+        result = self._tool(self._server(theme="hr"), "search_skills", {"query": "skill"})
+        self.assertEqual(result["count"], 3)
+        self.assertTrue(all(r["theme"] == "hr" for r in result["results"]))
+
+    def test_get_skill_within_scope(self):
+        result = self._tool(self._server(theme="hr"), "get_skill", {"name": "payroll"})
+        self.assertEqual(result["theme"], "hr")
+        self.assertIn("hr / payroll.", result["content"])
+
+    def test_get_skill_outside_scope_not_found(self):
+        resp = self._call(
+            self._server(theme="hr"),
+            "tools/call",
+            {"name": "get_skill", "arguments": {"name": "closing"}},
+        )
+        self.assertIn("error", resp)
+
+    def test_resources_read_ignores_scope(self):
+        # Scoping is about discovery, not access control.
+        resp = self._call(
+            self._server(theme="hr"), "resources/read", {"uri": "skill://sales/closing"}
+        )
+        self.assertIn("sales / closing.", resp["result"]["contents"][0]["text"])
+
+    def test_unknown_theme_returns_empty(self):
+        resp = self._call(self._server(theme="nope"), "resources/list")
+        self.assertEqual(resp["result"]["resources"], [])
 
 
 if __name__ == "__main__":

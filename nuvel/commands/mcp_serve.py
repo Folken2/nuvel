@@ -35,6 +35,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Skills hub directory (a dir with index.json, or a repo root "
              "containing skills/index.json). Default: current directory.",
     )
+    p_serve.add_argument(
+        "--theme",
+        default=None,
+        help="Scope to a single theme/role (e.g. 'hr', 'sales'). "
+             "When set, only skills in that theme are exposed.",
+    )
     p_serve.set_defaults(func=_cmd_mcp_serve)
 
 
@@ -49,5 +55,6 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    SkillsMCPServer(loader).serve()
+    server = SkillsMCPServer(loader, theme=args.theme)
+    server.serve()
     return 0
