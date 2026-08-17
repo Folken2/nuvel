@@ -15,6 +15,7 @@ It ships as:
 - Knowledge skills in `nuvel/backends/<framework>/skills/`.
 - A CLI scaffolder exposed as `nuvel new`.
 - A meta-agent exposed as `nuvel run`, implemented as a Google ADK `LlmAgent` in `nuvel/agent.py`.
+- A Skills MCP server exposed as `nuvel mcp serve`, in `nuvel/mcp/` (stdlib only).
 
 Generated projects are written to `generated-agents/<name>/` and are standalone runnable FastAPI apps. They should not depend on importing the local `nuvel` package at runtime.
 
@@ -74,6 +75,26 @@ Skills are progressive-disclosure documentation, not Python code. They live unde
 Generated ADK agents should prefer the built-in `SkillToolset` instead of duplicating custom `list_skills` or `read_skill` FunctionTools.
 
 Keep `.claude/skills/nuvel/SKILL.md` in sync with CLI flags, scaffold behavior, and agent architecture changes because it is the primary skill entry point for users driving coding agents against this repo.
+
+## Skills MCP Server
+
+`nuvel mcp serve` starts a stdlib-only MCP (Model Context Protocol) stdio server that exposes a skills hub — the [Nuvel Skills](https://github.com/Folken2/skills) repo, or any directory laid out the same way — to MCP clients such as Claude Code, Cursor, and Codex.
+
+```bash
+nuvel mcp serve [--skills-dir <dir>]
+```
+
+- `--skills-dir` (default: current directory) points at a skills hub. It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
+- The server speaks JSON-RPC 2.0 over stdio: protocol messages on stdout (one JSON object per line), diagnostics on stderr.
+
+It exposes:
+
+- **Resources** — `skill://{theme}/{name}` for every skill in the hub's `index.json`, returning the full `SKILL.md`.
+- **Tools** — `search_skills` (keyword search over name/description), `get_skill` (full content + frontmatter metadata by `name` or `theme/name`), and `propose_improvement` (files a structured GitHub issue proposing a skill fix).
+
+`propose_improvement` files issues against `github.com/Folken2/skills` using the `GITHUB_TOKEN` environment variable. Without a token it degrades gracefully: the proposal is logged to stderr and returned to the caller instead of being filed.
+
+The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol, `skills_loader.py` = hub discovery/loading) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Generated Agent Shape
 
