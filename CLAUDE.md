@@ -25,7 +25,7 @@ make skills      # nuvel skills list
 
 Single test: `pytest tests/test_scaffold.py::test_name -v`. Tests are async-mode auto (see `[tool.pytest.ini_options]` in [pyproject.toml](pyproject.toml)) — no `@pytest.mark.asyncio` decorators needed.
 
-CLI surface (full table in README): `nuvel new`, `nuvel skills list|search`, `nuvel doctor`, `nuvel traces`, `nuvel pricing`, `nuvel dashboard`, `nuvel eval`, `nuvel run`.
+CLI surface (full table in README): `nuvel new`, `nuvel skills list|search`, `nuvel doctor`, `nuvel traces`, `nuvel pricing`, `nuvel dashboard`, `nuvel eval`, `nuvel run`, `nuvel mcp serve`.
 
 ## Architecture — the parts that span multiple files
 

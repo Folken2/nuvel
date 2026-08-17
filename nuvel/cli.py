@@ -21,6 +21,8 @@ Subcommands:
         Inspect and sync model pricing.json against OpenRouter.
     nuvel dashboard
         Open the local web dashboard over your trace logs.
+    nuvel mcp serve [--skills-dir <dir>]
+        Serve a skills hub to MCP clients over stdio (resources + tools).
 """
 
 from __future__ import annotations
@@ -30,8 +32,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import yaml
 
 DEFAULT_FRAMEWORK = "adk"
 SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk", "anthropic-managed-agents")
@@ -102,6 +102,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
 
 
 def _load_skills(framework: str) -> list[dict]:
+    import yaml  # local import: keeps the dependency-light commands import-free
+
     skills: list[dict] = []
     skills_dir = _skills_dir(framework)
     if not skills_dir.is_dir():
@@ -352,11 +354,23 @@ def build_parser() -> argparse.ArgumentParser:
     from nuvel import pricing
     pricing.register(sub)
 
-    from nuvel import dashboard
-    dashboard.register(sub)
+    from nuvel.commands import mcp_serve
+    mcp_serve.register(sub)
 
-    from nuvel.eval import cli as eval_cli
-    eval_cli.register(sub)
+    # These subcommands pull optional third-party deps (fastapi/uvicorn, the
+    # eval stack). Register them when importable; skip cleanly when they're not,
+    # so the stdlib-only commands above still work in a bare environment.
+    try:
+        from nuvel import dashboard
+        dashboard.register(sub)
+    except ImportError:
+        pass
+
+    try:
+        from nuvel.eval import cli as eval_cli
+        eval_cli.register(sub)
+    except ImportError:
+        pass
 
     return parser
 
