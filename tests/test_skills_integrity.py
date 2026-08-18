@@ -11,6 +11,9 @@ Three guards, all static checks over `nuvel/backends/*/skills/`:
    directory, non-empty `description`.
 3. `test_skill_count_matches_expectation` — per-framework skill counts match
    `EXPECTED_SKILL_COUNTS`, so adding a skill forces an explicit update here.
+4. `test_every_package_directory_is_named_by_a_skill` — every non-exempt package
+   directory under templates/{{agent_package}}/ is named by at least one skill, so a
+   new subsystem can't ship undocumented.
 
 Scope note: this file asserts nothing about the template env surface — there is no
 `.env.example` parity check here yet.
@@ -18,6 +21,8 @@ Scope note: this file asserts nothing about the template env surface — there i
 
 from __future__ import annotations
 
+import ast
+import difflib
 import re
 from pathlib import Path
 
@@ -105,13 +110,13 @@ ENV_READ_PATTERNS = (
     re.compile(r"""environ\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]"""),
     re.compile(r"""^\s*_?ENV_[A-Z0-9_]+\s*=\s*["']([A-Z][A-Z0-9_]{2,})["']""", re.M),
     re.compile(r"""\b_?(?:env|get_env)[a-z_]*\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""),
+    # Sixth pattern: helpers whose name *ends* in `_env` (e.g. `_int_env("FOO")`,
+    # `_str_env("BAR")`). The fifth pattern only caught the `env`/`get_env` *prefix*
+    # idiom; a suffix-named wrapper passing a literal straight through was invisible.
+    # The helper-name group is non-capturing so findall yields only the env-var name
+    # (a single string), matching every other pattern above.
+    re.compile(r"""(?:\w+_env)\s*\(\s*["']([A-Z_]+)["']"""),
 )
-
-# Known blind spot: the fifth pattern above only matches helpers with "env"/"get_env" as
-# a *prefix* (e.g. `_env_int`). A suffix-named helper like `_int_env` (env at the end) is
-# not matched. That's harmless today — `_int_env` in skill_curator_plugin.py is always
-# called with a variable (an already-covered ENV_* constant), never a literal directly —
-# but a future call passing a literal straight to a suffix-named helper would go uncaught.
 
 ENV_ENTRY_RE = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]+)=", re.M)
 
@@ -191,19 +196,13 @@ PLUGIN_INSTANCE_LABELS = {
     "sibling_runner": "SiblingRunner",
 }
 
-# Anchors the closing bracket at column 0, matching how PLUGIN_INSTANCES is actually
-# formatted (one entry per line, `]` alone on its own line). A naive non-greedy
-# `\[(.*?)\]` would stop at the *first* `]` it sees — silently truncating if the list
-# were ever refactored to `PLUGIN_INSTANCES = [...] + EXTRA_PLUGINS` or contained an
-# entry with an inner `]` (a subscript, a comprehension). That would make this parser
-# return a short list, which would still validate clean against a subset of the README
-# table — a green test certifying coverage it doesn't actually have. Anchoring the
-# close means those shapes fail to match at all instead of matching short.
-#
-# Known static-parse limitation (by design, not a bug): this only understands a single
-# bracketed list literal. A plugin appended after the literal via `.append()`, `+=`, or
-# a conditional block is invisible to this parser and gets no coverage checking.
-PLUGIN_INSTANCES_LIST_RE = re.compile(r"PLUGIN_INSTANCES\s*=\s*\[(.*?)^\]", re.S | re.M)
+# PLUGIN_INSTANCES is discovered by walking the module's AST rather than by regex.
+# The old parser matched a single `[...]` list literal with the closing `]` at column 0;
+# a plugin appended after the literal via `.append()`, `+=`, or inside a conditional
+# block was invisible to it and got no coverage checking. The AST walker below sees the
+# list literal, `PLUGIN_INSTANCES.append(x)` / `.extend([...])` calls, and
+# `PLUGIN_INSTANCES += [...]` augmented assignments wherever they appear, so a plugin
+# added by any of those routes is still checked against the README table.
 README_PLUGIN_ROW_RE = re.compile(r"^\|\s*\*\*([A-Za-z0-9]+)\*\*\s*\|", re.M)
 
 # A parse that finds fewer than this many entries is treated as implausible rather than
@@ -212,28 +211,71 @@ README_PLUGIN_ROW_RE = re.compile(r"^\|\s*\*\*([A-Za-z0-9]+)\*\*\s*\|", re.M)
 _PLUGIN_INSTANCES_MIN_PLAUSIBLE = 2
 
 
+def _elt_name(node: ast.expr) -> str:
+    """The bare identifier an element contributes to the plugin list."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ast.unparse(node).strip()
+
+
 def _plugin_instance_names() -> list[str]:
-    """Bare variable names, one per line, from the PLUGIN_INSTANCES list literal."""
-    text = PLUGIN_INIT_TMPL.read_text(encoding="utf-8")
-    match = PLUGIN_INSTANCES_LIST_RE.search(text)
-    assert match, (
-        f"could not find a PLUGIN_INSTANCES list matching {PLUGIN_INSTANCES_LIST_RE.pattern!r} "
-        f"in {PLUGIN_INSTANCES_SOURCE}. The PLUGIN_INSTANCES literal may have been "
-        "reformatted or built dynamically (e.g. `[...] + EXTRA_PLUGINS`, an `.append()`, "
-        "or a closing `]` no longer alone on its own line) — this parser only understands "
-        "a single bracketed literal with the closing `]` at column 0."
-    )
-    names = []
-    for line in match.group(1).splitlines():
-        line = line.split("#", 1)[0].strip().rstrip(",")
-        if line:
-            names.append(line)
+    """Names in PLUGIN_INSTANCES, discovered by AST walk of the plugins __init__.
+
+    Sees the initial list literal, `PLUGIN_INSTANCES.append(x)` /
+    `.extend([...])` calls, and `PLUGIN_INSTANCES += [...]` extends, wherever
+    they appear — so a plugin added after the literal is not invisible the way it
+    was to the old single-literal regex.
+    """
+    raw = PLUGIN_INIT_TMPL.read_text(encoding="utf-8")
+    # The template embeds `{{agent_package}}` placeholders in import statements, which
+    # are not valid Python; substitute a dummy identifier so ast.parse() succeeds.
+    source = re.sub(r"\{\{[^}]+\}\}", "placeholder", raw)
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:  # pragma: no cover - defensive
+        raise AssertionError(
+            f"could not parse {PLUGIN_INSTANCES_SOURCE} as Python for AST plugin "
+            f"discovery: {exc}. If the template gained a new placeholder syntax, teach "
+            "the substitution above about it."
+        ) from exc
+
+    names: list[str] = []
+    for node in ast.walk(tree):
+        # PLUGIN_INSTANCES = [ ... ]
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.List):
+            if any(
+                isinstance(t, ast.Name) and t.id == "PLUGIN_INSTANCES"
+                for t in node.targets
+            ):
+                names.extend(_elt_name(e) for e in node.value.elts)
+        # PLUGIN_INSTANCES += [ ... ]
+        elif isinstance(node, ast.AugAssign) and isinstance(node.op, ast.Add):
+            if (
+                isinstance(node.target, ast.Name)
+                and node.target.id == "PLUGIN_INSTANCES"
+                and isinstance(node.value, ast.List)
+            ):
+                names.extend(_elt_name(e) for e in node.value.elts)
+        # PLUGIN_INSTANCES.append(x) / PLUGIN_INSTANCES.extend([ ... ])
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            recv = node.func.value
+            if isinstance(recv, ast.Name) and recv.id == "PLUGIN_INSTANCES":
+                if node.func.attr == "append":
+                    names.extend(_elt_name(a) for a in node.args)
+                elif node.func.attr == "extend":
+                    for a in node.args:
+                        if isinstance(a, ast.List):
+                            names.extend(_elt_name(e) for e in a.elts)
+
     assert len(names) >= _PLUGIN_INSTANCES_MIN_PLAUSIBLE, (
-        f"parsing {PLUGIN_INSTANCES_SOURCE} with {PLUGIN_INSTANCES_LIST_RE.pattern!r} "
-        f"found only {len(names)} entrie(s): {names}. That is implausibly few for the "
-        "real plugin chain — the PLUGIN_INSTANCES literal may have been reformatted or "
-        "built dynamically in a way this parser doesn't understand; treating a short "
-        "parse as ground truth would silently under-check README coverage."
+        f"AST walk of {PLUGIN_INSTANCES_SOURCE} found only {len(names)} entrie(s): "
+        f"{names}. That is implausibly few for the real plugin chain — the "
+        "PLUGIN_INSTANCES assignments may have been reshaped in a way this walker "
+        "doesn't understand (e.g. built from a comprehension or a helper call); "
+        "treating a short parse as ground truth would silently under-check README "
+        "coverage."
     )
     return names
 
@@ -278,3 +320,89 @@ def test_plugin_chain_table_documents_every_plugin() -> None:
         "chain must have exactly one documented row (extra or duplicate rows drift "
         "just as silently as missing ones)."
     )
+
+
+# ── Subsystem-level skill coverage ───────────────────────────────────────────
+#
+# The three guards above protect *existing* skill artifacts. They say nothing about
+# the obligation to document a *new* subsystem: a fresh package directory under
+# templates/{{agent_package}}/ can ship with zero skill coverage and the suite stays
+# green. PRs #50/#51/#54/#55 did exactly that — guardrails, cron isolation, org memory,
+# and hybrid retrieval all landed with no skill. This guard asserts that every
+# non-exempt top-level package directory is *named* by at least one skill.
+#
+# It is a name-level check, not a count: a count failure tells you a number to change,
+# a name failure tells you what to write.
+
+AGENT_PKG_DIR = TEMPLATE_DIR / "{{agent_package}}"
+
+# Directories that legitimately need no knowledge skill. Each entry needs a reason —
+# do not add to this set merely to silence a failure; a genuinely new subsystem belongs
+# in a skill, not here.
+SKILL_COVERAGE_EXEMPT_DIRS = {
+    "__pycache__": "build artifact, not source",
+    "utils": "pure infrastructure helpers (date/resilience), no user-facing behavior",
+    "state": "internal state management (session memory, query cache), not a subsystem",
+    "config": "internal wiring (llm/logging/paths/seed), no user-facing knob to teach",
+    "contexts": "empty scaffold directory populated per generated agent",
+    "soul": "the agent's persona/identity doc (SOUL.md), not a code subsystem",
+    "plugins": (
+        "documented via README's '## Plugin Chain' table and guarded by "
+        "test_plugin_chain_table_documents_every_plugin, not by a knowledge skill"
+    ),
+}
+
+
+def _collect_skill_metadata() -> list[dict]:
+    """Frontmatter for every bundled skill: name, description, and hermes tags."""
+    out: list[dict] = []
+    for skill_dir in _all_skill_dirs():
+        meta = _frontmatter(skill_dir / "SKILL.md")
+        hermes = (meta.get("metadata") or {}).get("hermes") or {}
+        tags = hermes.get("tags") or []
+        out.append(
+            {
+                "name": str(meta.get("name", "")),
+                "description": str(meta.get("description", "")),
+                "tags": [str(t) for t in tags],
+            }
+        )
+    return out
+
+
+def _package_dirs() -> list[Path]:
+    """Top-level package directories under templates/{{agent_package}}/."""
+    return sorted(p for p in AGENT_PKG_DIR.iterdir() if p.is_dir())
+
+
+def test_every_package_directory_is_named_by_a_skill() -> None:
+    """A new subsystem directory must be documented by at least one skill's frontmatter."""
+    skills = _collect_skill_metadata()
+    # Sanity floor: if skill discovery collapses to nothing, fail loud rather than
+    # certifying blanket coverage against an empty corpus.
+    assert skills, "no skills discovered — cannot verify subsystem coverage"
+
+    searchable = [
+        (s["name"], f"{s['name']} {s['description']} {' '.join(s['tags'])}".lower())
+        for s in skills
+    ]
+    skill_names = [s["name"] for s in skills]
+
+    failures: list[str] = []
+    for pkg in _package_dirs():
+        name = pkg.name
+        if name in SKILL_COVERAGE_EXEMPT_DIRS:
+            continue
+        if any(name.lower() in haystack for _, haystack in searchable):
+            continue
+        closest = difflib.get_close_matches(name, skill_names, n=1, cutoff=0.0)
+        hint = (
+            f" Closest skill is {closest[0]!r}." if closest else " No skills to match."
+        )
+        failures.append(
+            f"Package {name + '/'!r} is not referenced by any skill. Add a skill that "
+            f"documents this subsystem, or exempt it in SKILL_COVERAGE_EXEMPT_DIRS with "
+            f"a reason.{hint}"
+        )
+
+    assert not failures, "\n".join(failures)
