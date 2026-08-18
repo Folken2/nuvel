@@ -8,7 +8,8 @@ version = "0.3.0"
 description = "Production-ready agents, your way — skills, scaffolder, and meta-agent for Google ADK, the Claude Agent SDK, and Anthropic Managed Agents."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY.md"]
 authors = [{ name = "Albert Folch" }]
 keywords = [
     "adk",
@@ -25,7 +26,6 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
