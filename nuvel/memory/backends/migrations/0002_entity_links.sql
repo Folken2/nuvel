@@ -4,15 +4,18 @@
 -- the *org-scoped* one: an entity name is only ever resolved within its own org
 -- (a global-name variant would leak entities across tenants), and the relational
 -- recall arm in ``postgres_store.py`` walks it via ``org_id`` + ``*_norm`` +
--- ``metadata->>'counterpart_norm'``. On a fresh database 0001_init.sql already
--- creates these tables with exactly this shape, so every statement here is a
--- ``... if not exists`` no-op; on a database that predates that (only the older
--- link table, or none) these statements create/backfill the graph. Re-running
--- the whole migration sequence is safe either way.
+-- ``metadata->>'counterpart_norm'``.
 --
--- Spec-facing extras (target_entity_name_raw / canonical_name / aliases) are
--- added as nullable, additive columns so display/canonical rendering is possible
--- without changing the org-scoped resolution key.
+-- On a database where 0001 has already run, most statements here are no-ops
+-- (``if not exists``). Three columns genuinely added by this migration:
+--   entity_links.target_entity_name_raw   (line 39 — nullable, spec display)
+--   entity_names.canonical_name           (line 69 — nullable, canonical form)
+--   entity_names.aliases                  (line 70 — text[], default '{}')
+-- Re-running the whole sequence is safe either way (idempotent).
+--
+-- Note: 0001 declares entity_links.id as ``serial``. The ``bigserial`` at line 26
+-- below is unreachable on any database where 0001 ran — migrations apply
+-- filename-sorted, so 0001's ``serial`` is always the live type.
 
 create extension if not exists pg_trgm;
 
