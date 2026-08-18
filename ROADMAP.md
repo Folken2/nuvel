@@ -8,7 +8,7 @@
 
 | Priority | What | Why |
 |---|---|---|
-| 1 | **Celo Fixings demo** | Draft their actual constitution + manifest, do a live deploy. Design partner is the fastest way to find real gaps. |
+| 1 | **Design partner demo** | Draft their actual constitution + manifest, do a live deploy. Design partner is the fastest way to find real gaps. |
 | 2 | **Skill evaluation dashboard** | `evalv2` exists but lives in CLI. A web view showing "these 5 skills are green, these 2 regressed" makes it a product. |
 | 3 | **Co-assistant wiring** | Connect the fleet CLI to the SaaS frontend. `nuvel fleet deploy` → visible in a web UI. |
 
