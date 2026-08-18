@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-18
+
+### Added
+
+- `nuvel.bots` module — typed Python SDK for Hermes bot lifecycle management (BotClient, SkillManager, FleetDeployer)
+- `nuvel bots` CLI — create, list, chat, info, logs, delete, and send messages between bots
+- `nuvel bots skills` CLI — list and search skills from the Nuvel Skills Hub
+- `nuvel fleet` CLI — deploy, list, status, destroy, and update-vision for multi-bot fleet deployment
+- Fleet governance: VISION.md shared constitution, Manager bot with fleet-governance skills, per-bot cron routines
+- `acknowledge_halt` tool — agents can recover from halted sessions instead of bricking
+- `command_guard` callback — `command_safety.classify()` now wired as a before_tool_callback in generated agents
+- 7 enterprise skills in the Nuvel Skills Hub: hr/payroll-processor, customer/triage-agent, ops/inventory-checker, ops/order-processor, audit/log-inspector, fleet/manage, fleet/troubleshoot
+
+### Fixed
+
+- Migration header in 0002_entity_links.sql now accurately describes the 3 columns it adds (#61)
+- THIRD_PARTY.md now ships in the installed wheel (PEP 639 license-files) (#62)
+- PLUGIN_INSTANCES parser replaced with AST-based walker — handles .append() and += (#63)
+- Added subsystem coverage guard — new packages can't ship without skill references (#64)
+
 ## [0.3.0] - 2026-08-06
 
 ### Added

@@ -63,6 +63,60 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 - **`nuvel doctor`** — one command diagnoses the install and any generated agent in your cwd: missing env vars, broken deps, framework SDKs, Docker reachability.
 - **Vendor-neutral by default** — pick OpenRouter (ADK) or Anthropic direct (Claude Agent SDK), optional PostgreSQL for sessions, runs on any host that takes a Docker container.
 
+## Bot Fleet Management
+
+nuvel ships with a built-in bot fleet management system for orchestrating Hermes-backed agents.
+
+**Single-bot operations:**
+
+```
+nuvel bots create <name> [--skills <refs>] [--model <model>]
+nuvel bots list
+nuvel bots info <name>
+nuvel bots chat <name> <message>
+nuvel bots logs <name> [-n 50]
+nuvel bots delete <name>
+nuvel bots send <from> <to> <msg>
+```
+
+**Skill discovery:**
+
+```
+nuvel bots skills list [--category <theme>]
+nuvel bots skills search <query>
+```
+
+**Fleet deployment (multi-bot):**
+
+```
+nuvel fleet deploy <manifest.yaml>
+nuvel fleet list
+nuvel fleet status <name>
+nuvel fleet destroy <manifest.yaml>
+nuvel fleet update-vision <fleet> <path>
+```
+
+Fleet manifests support VISION.md (shared constitution symlinked into every bot), a Manager bot with fleet governance skills, and per-bot cron routines.
+
+Example manifest:
+
+```yaml
+name: "my-company"
+vision: |
+  # Fleet Constitution
+  All bots follow these shared rules...
+manager:
+  name: manager-bot
+  model: anthropic/claude-sonnet-4
+default_model: deepseek/deepseek-v4-flash
+bots:
+  - name: triage-bot
+    skills: [customer/triage-agent]
+    routines:
+      - schedule: "0 8 * * 1-5"
+        task: "Review yesterday's logs"
+```
+
 ## Quick Install
 
 **Use the skills with Claude Code:**
