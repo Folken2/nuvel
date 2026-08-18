@@ -104,8 +104,12 @@ def _improvement_issue(skill_name, current_version, issue, suggested_fix, harnes
 class SkillsMCPServer:
     """MCP JSON-RPC server backed by a :class:`SkillsLoader`."""
 
-    def __init__(self, loader: SkillsLoader):
+    def __init__(self, loader: SkillsLoader, theme: str | None = None):
         self.loader = loader
+        # When set, discovery (resources/list, search_skills, get_skill) is
+        # scoped to this single theme. resources/read is unaffected — scoping
+        # is about discovery, not access control.
+        self.theme = theme
         self._methods = {
             "initialize": self.handle_initialize,
             "resources/list": self.handle_resources_list,
@@ -118,6 +122,15 @@ class SkillsMCPServer:
             "get_skill": self.tool_get_skill,
             "propose_improvement": self.tool_propose_improvement,
         }
+
+    # --- Scoping helpers -----------------------------------------------------
+
+    def _scoped_entries(self):
+        """Yield ``(theme, entry)`` honoring the configured theme scope."""
+        for theme, entry in self.loader.iter_entries():
+            if self.theme is not None and theme != self.theme:
+                continue
+            yield theme, entry
 
     # --- Method handlers -----------------------------------------------------
 
@@ -133,7 +146,7 @@ class SkillsMCPServer:
 
     def handle_resources_list(self, params):
         resources = []
-        for theme, entry in self.loader.iter_entries():
+        for theme, entry in self._scoped_entries():
             name = entry["name"]
             resources.append({
                 "uri": f"skill://{theme}/{name}",
@@ -260,7 +273,7 @@ class SkillsMCPServer:
         if not query:
             raise McpError(INVALID_PARAMS, "Missing required argument 'query'")
         matches = []
-        for theme, entry in self.loader.iter_entries():
+        for theme, entry in self._scoped_entries():
             haystack = "{} {}".format(
                 entry.get("name", ""), entry.get("description", "")
             ).lower()
@@ -282,6 +295,12 @@ class SkillsMCPServer:
         wanted_theme, wanted_name = (None, name)
         if "/" in name:
             wanted_theme, wanted_name = name.split("/", 1)
+
+        # Under a theme scope, discovery is confined to that theme.
+        if self.theme is not None:
+            if wanted_theme is not None and wanted_theme != self.theme:
+                raise McpError(INVALID_PARAMS, f"Skill not found: {name}")
+            wanted_theme = self.theme
 
         theme, entry = self.loader.find(wanted_theme, wanted_name)
         if entry is None:
