@@ -1,7 +1,10 @@
 """Tests for the structural shell-command safety classifier."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from nuvel.guardrails.command_guard import command_guard_callback
 from nuvel.guardrails.command_safety import classify, lex, segments
 from nuvel.guardrails.command_classify import (
     command_prefix,
@@ -197,3 +200,67 @@ def test_has_command_substitution():
     assert has_command_substitution("echo `date`")
     assert has_command_substitution("diff <(a) <(b)")
     assert not has_command_substitution("echo plain")
+
+
+# ── command_guard_callback (before_tool_callback wiring) ───────────────
+
+def _tool(name):
+    return SimpleNamespace(name=name)
+
+
+def _tool_ctx(state=None):
+    return SimpleNamespace(state=state if state is not None else {})
+
+
+def test_command_guard_blocks_dangerous_command():
+    ctx = _tool_ctx()
+    result = command_guard_callback(_tool("bash"), {"command": "rm -rf /"}, ctx)
+    assert result is not None
+    assert result["blocked_by"] == "command_guard"
+    assert result["severity"] == "deny"
+    assert "dangerous" in result["error"]
+
+
+def test_command_guard_allows_safe_command():
+    ctx = _tool_ctx()
+    assert command_guard_callback(_tool("bash"), {"command": "ls -la"}, ctx) is None
+    assert "command_warning" not in ctx.state
+
+
+def test_command_guard_flags_but_allows_risky_command():
+    ctx = _tool_ctx()
+    # `git push --force` is an "ask" verdict: allowed through but recorded.
+    result = command_guard_callback(
+        _tool("terminal"), {"command": "git push --force origin main"}, ctx
+    )
+    assert result is None
+    assert "command_warning" in ctx.state
+    assert "ask" in ctx.state["command_warning"]
+
+
+def test_command_guard_ignores_non_shell_tools():
+    # A dangerous string routed through a non-shell tool is not this guard's job.
+    ctx = _tool_ctx()
+    assert command_guard_callback(_tool("search"), {"command": "rm -rf /"}, ctx) is None
+    assert "command_warning" not in ctx.state
+
+
+def test_command_guard_reads_a_bare_string_argument():
+    ctx = _tool_ctx()
+    result = command_guard_callback(_tool("sh"), "rm -rf /etc", ctx)
+    assert result is not None
+    assert result["blocked_by"] == "command_guard"
+
+
+def test_command_guard_no_command_key_passes_through():
+    ctx = _tool_ctx()
+    assert command_guard_callback(_tool("bash"), {"cwd": "/tmp"}, ctx) is None
+
+
+def test_command_guard_lax_mode_downgrades_deny(monkeypatch):
+    monkeypatch.setenv("COMMAND_GUARD_STRICT", "0")
+    ctx = _tool_ctx()
+    result = command_guard_callback(_tool("bash"), {"command": "rm -rf /"}, ctx)
+    assert result is None  # not blocked in lax mode
+    assert "command_warning" in ctx.state
+    assert "deny" in ctx.state["command_warning"]

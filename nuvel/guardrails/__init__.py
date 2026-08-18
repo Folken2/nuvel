@@ -20,6 +20,7 @@ from .command_classify import (
     split_segments,
     strip_wrapper,
 )
+from .command_guard import command_guard_callback
 from .command_safety import classify, lex, segments
 from .exfil_guard import exfil_guard
 from .guardrails_plugin import GuardrailsPlugin
@@ -27,6 +28,7 @@ from .halt_consumer import (
     HALT_HANDOFF_DELIVERED_STATE_KEY,
     HALT_REASON_STATE_KEY,
     acknowledge_halt,
+    acknowledge_halt_tool,
     halt_consumer_callback,
     halt_content,
     latch_halt,
@@ -43,6 +45,7 @@ __all__ = [
     "halt_consumer_callback",
     "latch_halt",
     "acknowledge_halt",
+    "acknowledge_halt_tool",
     "reset_halt_handoff",
     # guards
     "NoProgressGuard",
@@ -58,6 +61,7 @@ __all__ = [
     "lex",
     "classify",
     "segments",
+    "command_guard_callback",
     # exfiltration
     "exfil_guard",
 ]

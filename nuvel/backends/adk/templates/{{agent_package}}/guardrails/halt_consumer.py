@@ -76,6 +76,52 @@ def reset_halt_handoff(state: Any) -> None:
     state[HALT_HANDOFF_DELIVERED_STATE_KEY] = None
 
 
+def _reset_latching_guards(state: Any) -> None:
+    """Reset the counters of guards that latch, so an at-threshold counter
+    doesn't re-trip the halt on the very next event after acknowledgement.
+
+    Imported lazily: ``no_progress`` and ``repeated_failure`` both import from
+    this module, so a top-level import here would be circular.
+    """
+    try:
+        from .no_progress import NoProgressGuard
+
+        NoProgressGuard.reset(state)
+    except Exception:  # a guard absent or refactored away must not break recovery
+        pass
+    try:
+        from .repeated_failure import RepeatedFailureGuard
+
+        RepeatedFailureGuard.reset(state)
+    except Exception:
+        pass
+
+
+def acknowledge_halt_tool(state: Any) -> dict[str, Any]:
+    """Lift a latched halt so the session can resume, reporting the reason.
+
+    Exposed to the agent as the ``acknowledge_halt`` tool: when a turn comes
+    back as ``[halted: <reason>]``, calling this clears the latch and lets the
+    next model call run again. Beyond clearing ``HALT_REASON_STATE_KEY`` it also
+    clears the handoff flag and resets the latching guards' counters — otherwise
+    a counter already at threshold would immediately re-trip the halt.
+
+    Returns a status dict; ``message`` is a human-readable summary suitable for
+    handing straight back to the model.
+    """
+    reason = state.get(HALT_REASON_STATE_KEY)
+    if not reason:
+        return {"status": "no_halt", "message": "No halt signal found."}
+    acknowledge_halt(state)
+    reset_halt_handoff(state)
+    _reset_latching_guards(state)
+    return {
+        "status": "acknowledged",
+        "reason": reason,
+        "message": f"Halt acknowledged. Reason was: {reason}. Session resumed.",
+    }
+
+
 __all__ = [
     "HALT_REASON_STATE_KEY",
     "HALT_HANDOFF_DELIVERED_STATE_KEY",
@@ -83,5 +129,6 @@ __all__ = [
     "halt_consumer_callback",
     "latch_halt",
     "acknowledge_halt",
+    "acknowledge_halt_tool",
     "reset_halt_handoff",
 ]

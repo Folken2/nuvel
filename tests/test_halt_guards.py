@@ -9,6 +9,7 @@ from nuvel.guardrails.halt_consumer import (
     HALT_HANDOFF_DELIVERED_STATE_KEY,
     HALT_REASON_STATE_KEY,
     acknowledge_halt,
+    acknowledge_halt_tool,
     halt_consumer_callback,
     halt_content,
     latch_halt,
@@ -66,6 +67,53 @@ async def test_halt_consumer_short_circuits_when_latched():
     assert result is not None
     assert result.content.parts[0].text == "[halted: loop detected]"
     assert state[HALT_HANDOFF_DELIVERED_STATE_KEY] is True
+
+
+# ── acknowledge_halt_tool (session recovery) ──────────────────────────
+
+def test_acknowledge_halt_tool_clears_latch_and_reports_reason():
+    state = {HALT_REASON_STATE_KEY: "no progress in 5 turns"}
+    result = acknowledge_halt_tool(state)
+    assert result["status"] == "acknowledged"
+    assert result["reason"] == "no progress in 5 turns"
+    assert result["message"] == (
+        "Halt acknowledged. Reason was: no progress in 5 turns. Session resumed."
+    )
+    # The latch is cleared, so the next model call would run again.
+    assert state[HALT_REASON_STATE_KEY] is None
+
+
+def test_acknowledge_halt_tool_reports_when_nothing_latched():
+    result = acknowledge_halt_tool({})
+    assert result["status"] == "no_halt"
+    assert result["message"] == "No halt signal found."
+
+
+async def test_acknowledge_halt_tool_lets_a_halted_session_proceed():
+    # A no-progress guard latches after an identical streak…
+    guard = NoProgressGuard(window=2)
+    ctx = _ctx()
+    for _ in range(2):
+        await guard.after_model_callback(
+            callback_context=ctx, llm_response=_text_response("stuck")
+        )
+    assert ctx.state[HALT_REASON_STATE_KEY]
+    # …the consumer short-circuits the model while latched…
+    assert await halt_consumer_callback(callback_context=ctx) is not None
+
+    # …acknowledging clears the latch and the handoff flag…
+    result = acknowledge_halt_tool(ctx.state)
+    assert result["status"] == "acknowledged"
+    assert ctx.state[HALT_HANDOFF_DELIVERED_STATE_KEY] is None
+    # …so the consumer now lets the model run again.
+    assert await halt_consumer_callback(callback_context=ctx) is None
+
+    # And the guard's counter was reset: a single further identical response
+    # must not immediately re-trip the (window=2) halt.
+    await guard.after_model_callback(
+        callback_context=ctx, llm_response=_text_response("stuck")
+    )
+    assert ctx.state.get(HALT_REASON_STATE_KEY) is None
 
 
 # ── NoProgressGuard ───────────────────────────────────────────────────
