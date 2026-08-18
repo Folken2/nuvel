@@ -23,6 +23,10 @@ Subcommands:
         Open the local web dashboard over your trace logs.
     nuvel mcp serve [--skills-dir <dir>]
         Serve a skills hub to MCP clients over stdio (resources + tools).
+    nuvel bots list|create|delete|chat|info|logs|send
+        Manage and talk to Hermes-backed bots.
+    nuvel fleet deploy|list|status|destroy
+        Deploy and manage fleets of bots from a YAML manifest.
 """
 
 from __future__ import annotations
@@ -371,6 +375,10 @@ def build_parser() -> argparse.ArgumentParser:
         eval_cli.register(sub)
     except ImportError:
         pass
+
+    from nuvel.bots import cli as bots_cli
+    bots_cli.register(sub)
+    bots_cli.register_fleet(sub)
 
     return parser
 
