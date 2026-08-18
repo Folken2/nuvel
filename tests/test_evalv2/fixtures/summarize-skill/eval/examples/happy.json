@@ -1,0 +1,6 @@
+{
+  "id": "happy-01",
+  "input": "Summarize the quarterly earnings report highlighting revenue growth.",
+  "expected_output": "Revenue grew 12% QoQ driven by strong subscription sales.",
+  "tags": ["happy-path", "finance"]
+}

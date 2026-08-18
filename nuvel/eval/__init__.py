@@ -1,4 +1,16 @@
-"""nuvel eval — online trace scorer.
+"""nuvel eval — production trace scorer (v1).
+
+Two eval tools live in nuvel, doing two different jobs:
+
+    nuvel eval    (this package)  — score *production traces* written by the
+                                    trace plugins: score, report, worst, drift.
+    nuvel evalv2  (nuvel.evalv2)  — *skill evaluation*: run a skill's eval/
+                                    suite against a fresh executor: init, list,
+                                    run, compare.
+
+The A/B replay layer that once lived here (``nuvel.eval.replay``) was removed
+in favor of evalv2's full-executor runner, which replays with real tool use and
+memory rather than a single low-fidelity LLM call.
 
 Public surface:
     ScoredRun      — wire format written to scored.jsonl

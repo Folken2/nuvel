@@ -1,0 +1,14 @@
+[
+  {
+    "id": "edge-empty",
+    "input": "",
+    "expected_output": "",
+    "tags": ["edge"]
+  },
+  {
+    "id": "edge-long",
+    "input": "Summarize a 10000 word document into two sentences.",
+    "expected_output": null,
+    "tags": ["edge", "length"]
+  }
+]

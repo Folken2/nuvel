@@ -1,0 +1,17 @@
+name: {{agent_name}}-eval
+description: Initial eval suite for the {{agent_name}} agent
+skill: {{agent_name}}
+evaluators:
+  - llm-judge:
+      rubric:
+        accuracy: 0.5
+        helpfulness: 0.3
+        tone: 0.2
+      model: openai/gpt-4o-mini
+      max_cost: 0.10
+  - deterministic:
+      - { type: max-length, field: output, max_chars: 2000 }
+thresholds:
+  pass: 0.8
+  warn: 0.6
+  regression: -0.05
