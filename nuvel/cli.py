@@ -38,7 +38,9 @@ import sys
 from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk", "anthropic-managed-agents", "buzz")
+SUPPORTED_FRAMEWORKS = (
+    "adk", "claude-agent-sdk", "anthropic-managed-agents", "buzz", "hermes",
+)
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 
@@ -62,6 +64,9 @@ def _scaffold_agent_for(framework: str):
         return scaffold_agent
     if framework == "buzz":
         from nuvel.backends.buzz.scaffold import scaffold_agent
+        return scaffold_agent
+    if framework == "hermes":
+        from nuvel.backends.hermes.scaffold import scaffold_agent
         return scaffold_agent
     raise ValueError(f"Unknown framework: {framework}")
 
@@ -295,7 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_new.add_argument(
         "--with-telegram", action="store_true",
-        help="(adk only) Add a Telegram gateway (webhook + Bot API outbound).",
+        help="(adk, hermes) Add a Telegram gateway — a webhook + Bot API "
+             "sidecar for adk, the platforms.telegram config block for hermes.",
     )
     p_new.add_argument(
         "--with-teams", action="store_true",

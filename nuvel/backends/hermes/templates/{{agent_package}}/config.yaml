@@ -1,0 +1,26 @@
+# {{agent_name}} — Hermes profile configuration.
+#
+# Hermes reads this file when it loads the profile. Every key here has a
+# `hermes config set <key> <value>` equivalent (e.g. `model.default`), so this
+# is the checked-in starting point, not the only place values can come from.
+
+model:
+  # Model id as your provider names it — no LiteLLM-style provider prefix;
+  # `provider` below selects the endpoint.
+  default: {{default_model}}
+  provider: openrouter
+
+agent:
+  # Hard ceiling on model↔tool round trips in a single turn. Hitting it stops
+  # the turn with a visible message rather than truncating silently.
+  max_turns: 60
+
+platforms:
+  telegram:
+    enabled: false
+
+skills:
+  # Skill slugs from skills/ to force-load. Empty means Hermes advertises
+  # every discovered skill's description and loads bodies on demand — which is
+  # what you want unless a skill must be in context from the first token.
+  enabled: []
