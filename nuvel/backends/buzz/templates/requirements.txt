@@ -1,0 +1,9 @@
+# {{agent_name}} — runtime dependencies.
+#
+# Deliberately short: the model loop is plain HTTP against an
+# OpenAI-compatible endpoint, and the Nostr identity (secp256k1 keygen,
+# BIP-340 signing, bech32) is implemented in nostr_identity.py with no
+# crypto dependency.
+httpx>=0.27.0,<1.0.0
+websockets>=12.0,<16.0
+python-dotenv>=1.0.0,<2.0.0

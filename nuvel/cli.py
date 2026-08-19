@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk", "anthropic-managed-agents")
+SUPPORTED_FRAMEWORKS = ("adk", "claude-agent-sdk", "anthropic-managed-agents", "buzz")
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 
@@ -59,6 +59,9 @@ def _scaffold_agent_for(framework: str):
         return scaffold_agent
     if framework == "anthropic-managed-agents":
         from nuvel.backends.anthropic_managed_agents.scaffold import scaffold_agent
+        return scaffold_agent
+    if framework == "buzz":
+        from nuvel.backends.buzz.scaffold import scaffold_agent
         return scaffold_agent
     raise ValueError(f"Unknown framework: {framework}")
 
@@ -95,6 +98,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("acp")
         if result.get("with_eval"):
             flags.append("eval")
+        if result.get("with_buzz"):
+            flags.append("buzz")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
         channels = [
