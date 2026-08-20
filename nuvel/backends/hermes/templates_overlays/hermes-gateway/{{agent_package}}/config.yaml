@@ -1,0 +1,42 @@
+# {{agent_name}} — Hermes profile configuration (Telegram gateway enabled).
+#
+# This file replaces the base config.yaml when the profile is scaffolded with
+# --with-telegram. Same keys as the base, plus the platforms.telegram block.
+
+model:
+  # Model id as your provider names it — no LiteLLM-style provider prefix;
+  # `provider` below selects the endpoint.
+  default: {{default_model}}
+  provider: openrouter
+
+agent:
+  # Hard ceiling on model↔tool round trips in a single turn. Hitting it stops
+  # the turn with a visible message rather than truncating silently.
+  max_turns: 60
+
+platforms:
+  telegram:
+    enabled: true
+
+    # The @BotFather token. Left as an env reference on purpose — a bot token
+    # is a credential, and this file is meant to be committed.
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+
+    # Who the bot answers in direct messages:
+    #   allowlist  only ids in `allowed_users` (default — start here)
+    #   open       anyone who finds the bot
+    #   closed     nobody; group chats only
+    dm_policy: allowlist
+
+    # Telegram numeric user ids permitted under dm_policy: allowlist.
+    allowed_users: []
+
+    # In groups, answer only when the bot is @-mentioned or replied to.
+    # Flip to false and it answers every message — expensive and noisy.
+    mention_only: true
+
+skills:
+  # Skill slugs from skills/ to force-load. Empty means Hermes advertises
+  # every discovered skill's description and loads bodies on demand — which is
+  # what you want unless a skill must be in context from the first token.
+  enabled: []

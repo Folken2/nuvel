@@ -1,0 +1,109 @@
+# {{agent_name}}
+
+{{agent_description}}
+
+A **Buzz agent**: an ACP-speaking agent with a Nostr identity that can join a
+Buzz relay. No web framework, no framework SDK — configuration is read from
+the environment and the model loop is plain HTTP against an OpenAI-compatible
+endpoint.
+
+## Quickstart
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env        # then fill in OPENROUTER_API_KEY
+export $(grep -v '^#' .env | xargs)
+
+python -m {{agent_package}}.cli "hello"
+```
+
+## Entrypoints
+
+| Command | What it does |
+|---|---|
+| `python -m {{agent_package}}.cli "…"` | one-shot prompt from the terminal |
+| `python -m {{agent_package}}.cli` | interactive REPL |
+| `python -m {{agent_package}}.acp` | ACP subprocess (stdio JSON-RPC) for editors |
+| `python -m {{agent_package}}.buzz_relay` | join a Buzz relay group and reply in chat |
+
+All four drive the same `AgentRuntime`, so tools, skills, and model config
+behave identically whichever way a turn arrives.
+
+## Configuration
+
+Every knob is an environment variable; see [.env.example](.env.example) for the
+annotated list. The ones you can't skip:
+
+| Env | Purpose |
+|---|---|
+| `BUZZ_AGENT_PROVIDER` | `openrouter` (default), `openai`, `anthropic`, `groq`, `together`, `ollama` |
+| `BUZZ_AGENT_MODEL` | model id (provider prefix optional) |
+| `OPENROUTER_API_KEY` | provider key — or the key env matching your provider |
+| `BUZZ_RELAY_URL` | relay WebSocket URL (relay worker only) |
+| `BUZZ_GROUP_ID` | NIP-29 group id to join (relay worker only) |
+
+## Editor integration (ACP)
+
+[ACP](https://agentclientprotocol.com) is the JSON-RPC-over-stdio protocol
+editors like Zed use to talk to agents. The adapter handles `initialize` →
+`session/new` → `session/prompt`, streams `session/update` notifications
+(`agent_message_chunk`, `agent_thought_chunk`, `tool_call`,
+`tool_call_update`), and honors `session/cancel` mid-turn. stdout carries
+protocol traffic only — all logging goes to stderr.
+
+To register it in Zed, add an entry under `agent_servers` pointing `command`
+at `python` and `args` at `["-m", "{{agent_package}}.acp"]`, with `cwd` set to
+this project. Run `nuvel doctor` from this directory to smoke-test the stdio
+handshake and print a ready-to-paste snippet.
+
+## Nostr identity
+
+The agent signs everything it publishes with a Nostr key (BIP-340 Schnorr over
+secp256k1, implemented in `{{agent_package}}/nostr_identity.py` — no crypto
+dependency).
+
+- Set `NOSTR_PRIVATE_KEY` (hex or `nsec1…`) to pin an identity, **or**
+- leave it unset: a key is generated on first run and persisted to
+  `NOSTR_KEY_FILE` (default `.nostr/identity.json`, mode `0600`, gitignored).
+
+Print the public identity at any time:
+
+```bash
+python -m {{agent_package}}.nostr_identity
+```
+
+## Skills
+
+Skills live in `{{agent_package}}/skills/<slug>/SKILL.md` (Anthropic skills
+format: YAML frontmatter with `name` + `description`, then the body). The agent
+sees every skill's description up front and reads a body on demand via the
+`read_skill` tool — drop a directory in and it's live on the next run.
+
+`buzz_persona.py` renders those same skills into the Buzz persona/profile
+(Nostr kind-0 metadata) the relay publishes, so what the agent advertises in
+chat stays in sync with what it can actually do.
+
+## Tools
+
+Add a tool by returning a `Tool` from your own module and passing it to
+`build_agent(extra_tools=[...])`, or extend `skill_tools()` in
+`{{agent_package}}/skills/__init__.py`:
+
+```python
+from {{agent_package}}.agent import Tool
+
+Tool(
+    name="get_status",
+    description="Look up the current status of a job.",
+    parameters={
+        "type": "object",
+        "properties": {"job_id": {"type": "string"}},
+        "required": ["job_id"],
+    },
+    handler=get_status,          # sync or async
+)
+```
+
+Handlers may be sync or async and receive decoded arguments as keyword
+arguments; whatever they return is JSON-encoded back to the model.
