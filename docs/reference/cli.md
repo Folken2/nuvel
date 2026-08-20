@@ -2,18 +2,18 @@
 
 All `nuvel` subcommands and flags.
 
-## `nuvel new`
+## `nuvel agent create`
 
 Scaffold a new agent project.
 
 ```bash
-nuvel new <name> [options]
+nuvel agent create <name> [options]
 ```
 
 | Argument / flag | Default | Description |
 |---|---|---|
 | `<name>` | *(required)* | Kebab-case agent name. Lowercase letters, digits, single hyphens; must start with a letter; max 40 chars. |
-| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `claude-agent-sdk`, `anthropic-managed-agents`. |
+| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `buzz`, `hermes`. |
 | `--output-dir` | `./generated-agents` (or `$AGENTS_OUTPUT_DIR`) | Parent directory for the new agent. |
 | `--description` | `""` | Short agent description, baked into the README and the agent's metadata. |
 | `--system-prompt` | `""` | Inline system prompt seed. Overrides the per-overlay default frame. |
@@ -37,22 +37,19 @@ Use it when the agent's work is **genuinely multi-step with branching** — plan
 
 ```bash
 # Bare ADK agent
-nuvel new my-agent
+nuvel agent create my-agent
 
 # ADK agent with Composio tools and a Slack channel
-nuvel new my-agent --with-slack
+nuvel agent create my-agent --with-slack
 
 # Workflow-native agent: plan → execute graph with task-mode nodes
-nuvel new triage-bot --workflow --description "triage issues, route to the right team"
-
-# Claude Agent SDK agent
-nuvel new my-agent --framework claude-agent-sdk
+nuvel agent create triage-bot --workflow --description "triage issues, route to the right team"
 
 # Persona-driven agent on Telegram with ~1000 tools
-nuvel new soulful-bot --persona --with-composio --with-telegram
+nuvel agent create soulful-bot --persona --with-composio --with-telegram
 
 # Custom output dir
-nuvel new my-agent --output-dir ./agents
+nuvel agent create my-agent --output-dir ./agents
 ```
 
 ## `nuvel skills`
@@ -299,4 +296,4 @@ result = scaffold_agent(
 # on success: result["path"], result["files_created"], etc.
 ```
 
-The `claude_agent_sdk` and `anthropic_managed_agents` backends export the same function signature. Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.
+The `buzz` and `hermes` backends export the same function signature. Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.

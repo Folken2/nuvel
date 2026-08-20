@@ -10,7 +10,7 @@ ADK only. Inappropriate for stateless task bots.
 ## Scaffold
 
 ```bash
-nuvel new my-agent --framework adk --persona
+nuvel agent create my-agent --framework adk --persona
 ```
 
 The overlay adds:

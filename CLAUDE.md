@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-nuvel is a **toolkit for generating production-ready AI agents** across three frameworks: Google ADK (default), Claude Agent SDK, and Anthropic Managed Agents. It ships as three things at once:
+nuvel is a **toolkit for generating production-ready AI agents** across the frameworks that matter — Google ADK (default), Buzz, and Hermes Agent. It ships as three things at once:
 
 1. **Knowledge skills** (Anthropic skills format) under `nuvel/backends/<fw>/skills/` — portable into any compatible coding agent.
-2. **A CLI scaffolder** (`nuvel new`) that stamps out a full project skeleton from templates.
+2. **A CLI scaffolder** (`nuvel agent create`) that stamps out a full project skeleton from templates.
 3. **A meta-agent** (`nuvel run`) — itself a Google ADK `LlmAgent` defined in [nuvel/agent.py](nuvel/agent.py) — that autonomously scaffolds + iterates on agents from a natural-language description.
 
 Generated projects land in `generated-agents/<name>/` and are standalone runnable FastAPI apps.
@@ -25,7 +25,7 @@ make skills      # nuvel skills list
 
 Single test: `pytest tests/test_scaffold.py::test_name -v`. Tests are async-mode auto (see `[tool.pytest.ini_options]` in [pyproject.toml](pyproject.toml)) — no `@pytest.mark.asyncio` decorators needed.
 
-CLI surface (full table in README): `nuvel new`, `nuvel skills list|search`, `nuvel doctor`, `nuvel traces`, `nuvel pricing`, `nuvel dashboard`, `nuvel eval`, `nuvel run`, `nuvel mcp serve`.
+CLI surface (full table in README): `nuvel agent create`, `nuvel skills list|search`, `nuvel doctor`, `nuvel traces`, `nuvel pricing`, `nuvel dashboard`, `nuvel eval`, `nuvel run`, `nuvel mcp serve`.
 
 ## Architecture — the parts that span multiple files
 

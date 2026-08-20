@@ -12,7 +12,7 @@ ADK only.
 ## Scaffold
 
 ```bash
-nuvel new my-agent --framework adk --with-teams
+nuvel agent create my-agent --framework adk --with-teams
 ```
 
 The overlay drops `my_agent/gateways/teams_bridge.py` and adds these to `requirements.txt`:

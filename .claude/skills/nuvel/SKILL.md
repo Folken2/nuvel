@@ -27,7 +27,7 @@ Throughout the rest of this skill `nuvel` means "whichever invocation works on t
 
 ## Two modes — pick the right one
 
-**Mode A — Scaffold-and-edit (default for Claude Code).** You drive everything: run `nuvel new` for the skeleton, then write the tools / prompts / skills yourself, consulting `nuvel skills` for ADK conventions. This is almost always the right choice in Claude Code because *you are the smart part* — you can read files, reason, and iterate, which beats a one-shot LLM scaffold.
+**Mode A — Scaffold-and-edit (default for Claude Code).** You drive everything: run `nuvel agent create` for the skeleton, then write the tools / prompts / skills yourself, consulting `nuvel skills` for ADK conventions. This is almost always the right choice in Claude Code because *you are the smart part* — you can read files, reason, and iterate, which beats a one-shot LLM scaffold.
 
 **Mode B — Meta-agent autopilot.** Run `nuvel run --dev` to launch the meta-agent server (FastAPI on `:8000`), then talk to it via the ADK web UI or `/run_sse/`. Use this only if the user explicitly asks for the autonomous flow, or wants a demo. Requires `OPENROUTER_API_KEY` in the repo's `.env`.
 
@@ -35,7 +35,7 @@ When in doubt: Mode A.
 
 ## Feature flags — `--persona`, `--with-composio`, `--workflow`, `--with-acp`
 
-`nuvel new` ships several optional bundles. Pick them up front; they shape the scaffold meaningfully and aren't easy to retrofit.
+`nuvel agent create` ships several optional bundles. Pick them up front; they shape the scaffold meaningfully and aren't easy to retrofit.
 
 **`--persona`** — activates the self-evolving agent pattern: a self-rewriting `SOUL.md` (with `read_soul` / `update_soul` tools), a one-time `AWAKENING.md` bootstrap that the agent deletes via `complete_awakening`, and skill-authoring tools (`author_skill`, `update_skill`) so the agent grows its own SKILL.md repertoire over time. The instruction frame switches to the "act-first" persona text. Use this for **agents meant to live for months and develop a stable character** — personal assistants, long-running companions, agents that should accumulate knowledge across sessions. Do **not** use for stateless task bots, customer-support agents, or anything that should behave consistently across deploys: a support bot that rewrites its own SOUL.md mid-conversation is a regression, not a feature.
 
@@ -59,7 +59,7 @@ Treat each step as a checkpoint — verify the previous step before moving on. D
 
 Before scaffolding, get clarity on three things — silently if obvious from context, explicitly if not:
 
-- **Name** (kebab-case, ≤40 chars, must start with a letter, no consecutive hyphens — `nuvel new` validates this).
+- **Name** (kebab-case, ≤40 chars, must start with a letter, no consecutive hyphens — `nuvel agent create` validates this).
 - **One-line description** — used in the README and as a hint for prompt design.
 - **What the agent actually does** — list the tools and the trigger phrases. This is what you'll spend most of your time on; the skeleton is free.
 

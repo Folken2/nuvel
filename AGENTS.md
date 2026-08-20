@@ -7,13 +7,13 @@ Guidance for AI coding agents working in this repository.
 nuvel is a toolkit for generating production-ready AI agents across three frameworks:
 
 - Google ADK, the default framework.
-- Claude Agent SDK.
-- Anthropic Managed Agents.
+- Buzz (Nostr relay, Bitcoin/Lightning tools).
+- Hermes Agent (platform gateways).
 
 It ships as:
 
 - Knowledge skills in `nuvel/backends/<framework>/skills/`.
-- A CLI scaffolder exposed as `nuvel new`.
+- A CLI scaffolder exposed as `nuvel agent create` (deprecated alias: `nuvel new`).
 - A meta-agent exposed as `nuvel run`, implemented as a Google ADK `LlmAgent` in `nuvel/agent.py`.
 - A Skills MCP server exposed as `nuvel mcp serve`, in `nuvel/mcp/` (stdlib only).
 

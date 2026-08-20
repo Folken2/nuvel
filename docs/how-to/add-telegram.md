@@ -7,7 +7,7 @@ ADK only.
 ## Scaffold
 
 ```bash
-nuvel new my-agent --framework adk --with-telegram
+nuvel agent create my-agent --framework adk --with-telegram
 ```
 
 The overlay drops `my_agent/gateways/telegram.py` and mounts it at `POST /gateways/telegram` on the agent server. Adds `httpx>=0.27.0` to `requirements.txt`.

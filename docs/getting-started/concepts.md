@@ -34,7 +34,7 @@ nuvel skills search slack --framework adk
 
 ## Scaffolding
 
-`nuvel new` is a **template stamper**, not a runtime wrapper. It copies a per-backend template tree (under `nuvel/backends/<framework>/templates/`) into your filesystem, substitutes placeholders (`{{agent_name}}`, `{{agent_package}}`, etc.), and applies optional **overlays** (per flag) on top.
+`nuvel agent create` is a **template stamper**, not a runtime wrapper. It copies a per-backend template tree (under `nuvel/backends/<framework>/templates/`) into your filesystem, substitutes placeholders (`{{agent_name}}`, `{{agent_package}}`, etc.), and applies optional **overlays** (per flag) on top.
 
 Each overlay lives at `nuvel/backends/adk/templates_overlays/<feature>/` and is applied by `_stamp_tree` after the base template, so later overlays can override earlier files. This is how `--with-composio`, `--persona`, and the messaging-gateway flags work — small, additive overlays composed at scaffold time.
 

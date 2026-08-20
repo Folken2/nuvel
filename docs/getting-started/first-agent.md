@@ -5,7 +5,7 @@ This page scaffolds a Google ADK agent, runs it locally in dev mode, and sends i
 ## 1. Scaffold
 
 ```bash
-nuvel new my-agent --framework adk --description "A helpful assistant."
+nuvel agent create my-agent --framework adk --description "A helpful assistant."
 ```
 
 Output:

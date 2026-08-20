@@ -8,8 +8,8 @@ Skills, scaffolder, or meta-agent — build agents on **Google ADK**, the **Clau
 
 ## What nuvel gives you
 
-- **A scaffolder** — `nuvel new my-agent` drops a complete, deployable agent project into your filesystem. Pick a backend with `--framework`. No abstraction layer between you and the framework SDK.
-- **Portable skills** — 13 progressive-disclosure skills shared across the three backends (web search, file tools, memory, Composio Tool Router, persona, more). Skills load only when relevant, so they don't bloat your context.
+- **A scaffolder** — `nuvel agent create my-agent` drops a complete, deployable agent project into your filesystem. Pick a backend with `--framework`. No abstraction layer between you and the framework SDK.
+- **Portable skills** — progressive-disclosure skills shared across the backends (web search, file tools, memory, Composio Tool Router, persona, more). Skills load only when relevant, so they don't bloat your context.
 - **Optional bundles, all flag-driven** — every advanced capability is opt-in:
     - `--with-composio` — ~1000 third-party integrations via the Composio Tool Router.
     - `--persona` — a self-evolving SOUL.md / awakening pattern for agents meant to live for months.
