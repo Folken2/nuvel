@@ -4,7 +4,7 @@ Every nuvel-scaffolded ADK agent ships with `Dockerfile` + `railway.json` ready 
 
 ## What's in the box
 
-After `nuvel new my-agent --framework adk`:
+After `nuvel agent create my-agent --framework adk`:
 
 - **`Dockerfile`** — `python:3.12-slim`, installs `gcc` for C extensions, copies `requirements.txt` first for layer caching, runs `python run_adk.py`.
 - **`railway.json`** — points at the Dockerfile, sets `/health` as the healthcheck, on-failure restart with up to 3 retries.

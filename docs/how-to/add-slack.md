@@ -7,7 +7,7 @@ ADK only. Auto-enables `--with-composio`.
 ## Scaffold
 
 ```bash
-nuvel new my-agent --framework adk --with-slack
+nuvel agent create my-agent --framework adk --with-slack
 ```
 
 You'll see:

@@ -17,7 +17,7 @@ Skip it for a single-purpose tool-using agent. One `LlmAgent` with three tools d
 ## Scaffold
 
 ```bash
-nuvel new triage-bot --workflow --description "triage GitHub issues, route to the right team"
+nuvel agent create triage-bot --workflow --description "triage GitHub issues, route to the right team"
 ```
 
 You'll see `workflow` in the flags line of the output.

@@ -12,7 +12,7 @@
 
 **Production-ready agents, your way.**
 
-Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Agent SDK, or Anthropic Managed Agents with the workflow you already have.
+Skills, scaffolder, or meta-agent — build agents on Google ADK, Buzz, or Hermes Agent with the workflow you already have.
 
 [![Tests](https://github.com/Folken2/nuvel/actions/workflows/tests.yml/badge.svg)](https://github.com/Folken2/nuvel/actions/workflows/tests.yml)
 [![Docs](https://img.shields.io/badge/docs-folken2.github.io%2Fnuvel-blue)](https://folken2.github.io/nuvel/)
@@ -31,23 +31,23 @@ Skills, scaffolder, or meta-agent — build agents on Google ADK, the Claude Age
 
 ## What is nuvel?
 
-nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, the Claude Agent SDK, and Anthropic Managed Agents. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
+nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, Buzz, and Hermes Agent. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
 
-The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 17-plugin chain for ADK, a leaner setup for the Claude Agent SDK that leverages its built-in budget caps and skills loading, and a thin control-plane / data-plane proxy for Managed Agents. The meta-agent does it for you autonomously from a natural-language description.
+The skills follow the [Anthropic skills format](https://www.anthropic.com/news/skills), so they plug into the coding agent you already use: **Claude Code**, **Codex**, **Cursor**, **OpenClaw**, **Hermess Agent**, and any other agent that supports the format. The CLI stamps out a battle-tested skeleton tuned per framework — an opinionated 17-plugin chain for ADK, a leaner Buzz skeleton with Nostr relay and Bitcoin/Lightning tools, and a Hermes Agent skeleton with platform gateways. The meta-agent does it for you autonomously from a natural-language description.
 
 ## Frameworks
 
 | Framework | Flag | Knowledge skills | Where the agent runs |
 | --- | --- | --- | --- |
 | [Google ADK](https://google.github.io/adk-docs/) | `--framework adk` *(default)* | 15 skills (agent patterns, tool creation, prompt engineering, callbacks/HITL, streaming, skill design, Composio Tool Router, workflow graphs, task delegation, long-horizon guardrails/sessions, cron isolation, org memory retrieval, self-improvement) | Your server (OpenRouter + LiteLLM) |
-| [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | `--framework claude-agent-sdk` | 6 skills (tool creation, MCP integration, permissions, hooks, system prompts, deployment) | Your server (Anthropic API direct) |
-| [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | `--framework anthropic-managed-agents` | 5 skills (overview, tools, events, deployment, skills + memory) | Anthropic's infrastructure (your server is a thin proxy) |
+| [Buzz](https://github.com/Folken2/nuvel) | `--framework buzz` | Nostr relay, Bitcoin/Lightning tools, on-chain leaderboard | Your server (OpenRouter) |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | `--framework hermes` | Platform gateways (Telegram, Slack, Teams), skill-driven config | Your server (OpenRouter)
 
 ## Features
 
 - **Three shapes, one toolkit** — drop the skills into your coding agent, run the scaffolder, or let the meta-agent build the whole thing autonomously.
-- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (17-plugin chain for ADK; built-in budget + traces for the Claude Agent SDK), Dockerfile, Railway config, and tests.
-- **Portable knowledge skills** — 26 skills total across the supported frameworks, with progressive disclosure so they don't bloat your context.
+- **Production skeleton, not a toy** — every generated agent ships with FastAPI, framework-appropriate observability (17-plugin chain for ADK), Dockerfile, Railway config, and tests.
+- **Portable knowledge skills** — skills across the supported frameworks, with progressive disclosure so they don't bloat your context.
 - **Self-evolving agents** — `--persona` ships a SOUL.md / awakening pattern for agents meant to live for months and develop a stable character. Inspired by OpenClaw. *(ADK only.)*
 - **~1000 integrations** — `--with-composio` wires the Composio Tool Router for one-line access to Gmail, GitHub, Slack, Notion, Calendar, and more. *(ADK only.)*
 - **ACP-compatible & CLI-runnable** — `--with-acp` adds an [Agent Client Protocol](https://agentclientprotocol.com) adapter (JSON-RPC over stdio, the protocol editors like Zed use to drive an agent as a subprocess) plus a local terminal CLI. Run it as an editor subprocess (`python -m <pkg>.acp`) or straight from the shell (`python -m <pkg>.cli "…"` one-shot, or a REPL). The adapter honors the editor's session: `mcpServers` passed in `session/new` (stdio / HTTP / SSE) are wired in as tools, the agent reads/writes through the editor's filesystem view (unsaved buffers included) when the client supports it, and sensitive tool calls are gated by an editor approve/deny prompt (`session/request_permission`, tunable via `ACP_PERMISSION_MODE`). Both entrypoints reuse the same plugin-wired Runner as the FastAPI server. *(ADK only.)*
@@ -132,7 +132,7 @@ git clone https://github.com/Folken2/nuvel.git
 pip install nuvel-cli
 ```
 
-> The PyPI distribution is named **`nuvel-cli`** (the bare `nuvel` name was too close to an existing package). The CLI command and all imports stay `nuvel` — `pip install nuvel-cli` then `nuvel new my-agent`.
+> The PyPI distribution is named **`nuvel-cli`** (the bare `nuvel` name was too close to an existing package). The CLI command and all imports stay `nuvel` — `pip install nuvel-cli` then `nuvel agent create my-agent`.
 
 **Or install from source (always available):**
 
@@ -149,13 +149,13 @@ pip install -e .
 
 ```bash
 # Google ADK (default)
-nuvel new k8s-monitor --description "checks pod health, queries logs, alerts on anomalies"
+nuvel agent create k8s-monitor --description "checks pod health, queries logs, alerts on anomalies"
 
-# Claude Agent SDK
-nuvel new k8s-monitor --framework claude-agent-sdk --description "..."
+# Buzz
+nuvel agent create k8s-monitor --framework buzz --description "..."
 
-# Anthropic Managed Agents
-nuvel new k8s-monitor --framework anthropic-managed-agents --description "..."
+# Hermes Agent
+nuvel agent create k8s-monitor --framework hermes --description "..."
 ```
 
 You get a complete project at `generated-agents/k8s-monitor/` — package layout, FastAPI server, framework-appropriate plugins, Dockerfile, Railway config, and tests.
@@ -165,8 +165,8 @@ You get a complete project at `generated-agents/k8s-monitor/` — package layout
 The skeleton is free; the brain is yours. Edit:
 
 - **ADK**: `tools/` (one file per tool), `prompt/instructions.py`, `skills/`, `agent.py` (wire tools + `SkillToolset`).
-- **Claude Agent SDK**: `tools/example.py` (one `@tool` per file, registered in `tools/__init__.py`), `prompt/system_prompt.md`, `.claude/skills/`, `agent.py` (`build_options()` returning `ClaudeAgentOptions`).
-- **Anthropic Managed Agents**: `agent.yaml` (model, system, tools, MCP servers, skills), `environment.yaml` (container config), custom-tool handlers in `tools/`. Run `python setup.py` to apply the YAMLs to Anthropic's control plane.
+- **Buzz**: `tools/` (Nostr + Lightning tools), `prompt/instructions.py`, `skills/`, `agent.py`.
+- **Hermes Agent**: `tools/`, `prompt/instructions.py`, `skills/`, `agent.py` (wire platform gateways).
 
 If you're driving Claude Code, the bundled skill at [.claude/skills/nuvel/SKILL.md](.claude/skills/nuvel/SKILL.md) walks Claude through this step-by-step.
 
@@ -174,17 +174,16 @@ If you're driving Claude Code, the bundled skill at [.claude/skills/nuvel/SKILL.
 
 ```bash
 cd generated-agents/k8s-monitor
-cp .env.example .env       # add OPENROUTER_API_KEY (ADK) or ANTHROPIC_API_KEY (Claude Agent SDK / Managed Agents)
+cp .env.example .env       # add OPENROUTER_API_KEY
 pip install -r requirements.txt
 
 # ADK
 DEV_MODE=true python run_adk.py
 
-# Claude Agent SDK
+# Buzz
 python server.py            # or `python run_dev.py "<prompt>"` for a quick local test
 
-# Anthropic Managed Agents (one-time setup, then server)
-python setup.py             # applies agent.yaml + environment.yaml; persists IDs to .env
+# Hermes Agent
 python server.py            # or `python run_dev.py "<prompt>"` for a quick local test
 ```
 
@@ -202,18 +201,18 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 
 | Command | Description |
 | ------- | ----------- |
-| `nuvel new <name>` | Scaffold a new agent (default framework: `adk`) |
-| `nuvel new <name> --framework <fw>` | Pick framework: `adk`, `claude-agent-sdk`, or `anthropic-managed-agents` |
-| `nuvel new <name> --description "..."` | Scaffold with a one-liner description |
-| `nuvel new <name> --persona` | *(adk only)* Self-evolving agent (SOUL.md, awakening flow) |
-| `nuvel new <name> --with-composio` | *(adk only)* Bundle ~1000 integrations via Composio Tool Router |
-| `nuvel new <name> --with-slack` | *(adk only)* Add a Slack Events API gateway (auto-enables `--with-composio`) |
-| `nuvel new <name> --with-telegram` | *(adk only)* Add a Telegram Bot webhook gateway |
-| `nuvel new <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
-| `nuvel new <name> --workflow` | *(adk only)* Workflow-native root agent — an ADK 2.0 `Workflow` graph with task-mode nodes, typed contracts, and conditional routing |
-| `nuvel new <name> --with-acp` | *(adk only)* Make the agent ACP-compatible (Agent Client Protocol over stdio, `python -m <pkg>.acp`) and CLI-runnable (`python -m <pkg>.cli`) |
-| `nuvel new <name> --with-eval` | *(adk only)* Stamp a starter evalv2 suite into the agent (`skills/default/eval/suite.yaml` + a sample example) |
-| `nuvel new <name> --output-dir ./agents` | Override the output directory |
+| `nuvel agent create <name>` | Scaffold a new agent (default framework: `adk`) |
+| `nuvel agent create <name> --framework <fw>` | Pick framework: `adk`, `buzz`, or `hermes` |
+| `nuvel agent create <name> --description "..."` | Scaffold with a one-liner description |
+| `nuvel agent create <name> --persona` | *(adk only)* Self-evolving agent (SOUL.md, awakening flow) |
+| `nuvel agent create <name> --with-composio` | *(adk only)* Bundle ~1000 integrations via Composio Tool Router |
+| `nuvel agent create <name> --with-slack` | *(adk only)* Add a Slack Events API gateway (auto-enables `--with-composio`) |
+| `nuvel agent create <name> --with-telegram` | *(adk only)* Add a Telegram Bot webhook gateway |
+| `nuvel agent create <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
+| `nuvel agent create <name> --workflow` | *(adk only)* Workflow-native root agent — an ADK 2.0 `Workflow` graph with task-mode nodes, typed contracts, and conditional routing |
+| `nuvel agent create <name> --with-acp` | *(adk only)* Make the agent ACP-compatible (Agent Client Protocol over stdio, `python -m <pkg>.acp`) and CLI-runnable (`python -m <pkg>.cli`) |
+| `nuvel agent create <name> --with-eval` | *(adk only)* Stamp a starter evalv2 suite into the agent (`skills/default/eval/suite.yaml` + a sample example) |
+| `nuvel agent create <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
 | `nuvel doctor [--path <dir>]` | Diagnose the install and the agent in cwd (env, deps, pricing) |
@@ -261,15 +260,15 @@ nuvel/
 │       ├── adk/               # Google ADK backend
 │       │   ├── scaffold.py
 │       │   ├── templates/     # Production skeleton for ADK agents
-│       │   └── skills/        # 15 ADK knowledge skills
-│       ├── claude_agent_sdk/  # Claude Agent SDK backend
+│       │   └── skills/        # ADK knowledge skills
+│       ├── buzz/              # Buzz backend (Nostr relay + Lightning)
 │       │   ├── scaffold.py
-│       │   ├── templates/     # FastAPI + SDK skeleton
-│       │   └── skills/        # 6 Claude Agent SDK knowledge skills
-│       └── anthropic_managed_agents/  # Managed Agents backend
+│       │   ├── templates/
+│       │   └── skills/
+│       └── hermes/            # Hermes Agent backend
 │           ├── scaffold.py
-│           ├── templates/     # YAML control plane + thin FastAPI proxy
-│           └── skills/        # 5 Managed Agents knowledge skills
+│           ├── templates/     # Platform gateway skeleton
+│           └── skills/
 ├── .claude/skills/nuvel/      # Claude Code SKILL.md for driving the CLI
 ├── pyproject.toml             # Packaging + `nuvel` console script
 └── generated-agents/          # Output directory

@@ -7,7 +7,7 @@ Available on **ADK only** today. Other backends accept the flag but error out.
 ## Scaffold with Composio
 
 ```bash
-nuvel new my-agent --framework adk --with-composio
+nuvel agent create my-agent --framework adk --with-composio
 ```
 
 The overlay drops:

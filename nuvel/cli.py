@@ -1,7 +1,7 @@
 """nuvel — command-line interface.
 
 Subcommands:
-    nuvel new <name> --framework <fw>
+    nuvel agent create <name> --framework <fw>
         Scaffold a new agent. Default framework: adk.
     nuvel skills list [--framework <fw>]
         List bundled knowledge skills for a framework.
@@ -38,9 +38,8 @@ import sys
 from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = (
-    "adk", "claude-agent-sdk", "anthropic-managed-agents", "buzz", "hermes",
-)
+SUPPORTED_FRAMEWORKS = ("adk", "buzz", "hermes")
+DEPRECATED_FRAMEWORKS = ("claude-agent-sdk", "anthropic-managed-agents")
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 
@@ -53,6 +52,12 @@ def _skills_dir(framework: str) -> Path:
 
 
 def _scaffold_agent_for(framework: str):
+    if framework in DEPRECATED_FRAMEWORKS:
+        print(
+            f"\u26a0  Warning: '{framework}' is deprecated and will be removed in a "
+            f"future version. Use 'adk', 'buzz', or 'hermes' instead.",
+            file=sys.stderr,
+        )
     if framework == "adk":
         from nuvel.backends.adk.scaffold import scaffold_agent
         return scaffold_agent
@@ -262,11 +267,66 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _add_framework_flag(parser: argparse.ArgumentParser) -> None:
+    _all_frameworks = SUPPORTED_FRAMEWORKS + DEPRECATED_FRAMEWORKS
     parser.add_argument(
         "--framework", "-f",
-        choices=SUPPORTED_FRAMEWORKS,
+        choices=_all_frameworks,
         default=DEFAULT_FRAMEWORK,
-        help=f"Agent framework (default: {DEFAULT_FRAMEWORK}).",
+        help=(
+            f"Agent framework (default: {DEFAULT_FRAMEWORK}). "
+            f"Supported: {', '.join(SUPPORTED_FRAMEWORKS)}. "
+            f"Deprecated: {', '.join(DEPRECATED_FRAMEWORKS)}."
+        ),
+    )
+
+
+def _add_new_agent_args(parser: argparse.ArgumentParser) -> None:
+    """Add common arguments for `nuvel agent create` / `nuvel new`."""
+    parser.add_argument("name", help="Kebab-case agent name (e.g. my-agent).")
+    _add_framework_flag(parser)
+    parser.add_argument("--output-dir", default=None, help="Parent directory for the new agent.")
+    parser.add_argument("--description", default="", help="Short agent description.")
+    parser.add_argument("--system-prompt", default="", help="System prompt for the new agent.")
+    parser.add_argument(
+        "--persona", action="store_true",
+        help="(adk only) Activate the persona overlay: self-rewriting SOUL.md, "
+             "AWAKENING.md, author_skill, complete_awakening. For agents meant "
+             "to live and grow over time. Inappropriate for stateless task bots.",
+    )
+    parser.add_argument(
+        "--with-composio", action="store_true",
+        help="(adk only) Wire the Composio Tool Router MCP "
+             "(~1000 toolkits via one hosted endpoint).",
+    )
+    parser.add_argument(
+        "--with-slack", action="store_true",
+        help="(adk only) Add a Slack gateway via Composio Slackbot. Implies --with-composio.",
+    )
+    parser.add_argument(
+        "--with-telegram", action="store_true",
+        help="(adk only) Add a Telegram gateway (webhook + Bot API outbound).",
+    )
+    parser.add_argument(
+        "--with-teams", action="store_true",
+        help="(adk only) Add an MS Teams gateway (aiohttp sidecar via Microsoft 365 Agents SDK).",
+    )
+    parser.add_argument(
+        "--workflow", action="store_true",
+        help="(adk only) Generate a workflow-native agent: the root agent is an "
+             "ADK 2.0 Workflow graph (agent_workflow.py) with task-mode nodes, "
+             "typed contracts, and conditional routing, instead of a single LlmAgent.",
+    )
+    parser.add_argument(
+        "--with-acp", action="store_true",
+        help="(adk only) Make the agent ACP-compatible and CLI-runnable: add an "
+             "Agent Client Protocol adapter (stdio JSON-RPC, python -m <pkg>.acp) "
+             "plus a local terminal CLI (python -m <pkg>.cli).",
+    )
+    parser.add_argument(
+        "--with-eval", action="store_true",
+        help="(adk only) Stamp a starter evalv2 suite into the agent "
+             "(skills/default/eval/suite.yaml + a sample example). Run it with "
+             "`nuvel evalv2 run`.",
     )
 
 
@@ -277,54 +337,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_new = sub.add_parser("new", help="Scaffold a new agent.")
-    p_new.add_argument("name", help="Kebab-case agent name (e.g. my-agent).")
-    _add_framework_flag(p_new)
-    p_new.add_argument("--output-dir", default=None, help="Parent directory for the new agent.")
-    p_new.add_argument("--description", default="", help="Short agent description.")
-    p_new.add_argument("--system-prompt", default="", help="System prompt for the new agent.")
-    p_new.add_argument(
-        "--persona", action="store_true",
-        help="(adk only) Activate the persona overlay: self-rewriting SOUL.md, "
-             "AWAKENING.md, author_skill, complete_awakening. For agents meant "
-             "to live and grow over time. Inappropriate for stateless task bots.",
-    )
-    p_new.add_argument(
-        "--with-composio", action="store_true",
-        help="(adk only) Wire the Composio Tool Router MCP "
-             "(~1000 toolkits via one hosted endpoint).",
-    )
-    p_new.add_argument(
-        "--with-slack", action="store_true",
-        help="(adk only) Add a Slack gateway via Composio Slackbot. Implies --with-composio.",
-    )
-    p_new.add_argument(
-        "--with-telegram", action="store_true",
-        help="(adk, hermes) Add a Telegram gateway — a webhook + Bot API "
-             "sidecar for adk, the platforms.telegram config block for hermes.",
-    )
-    p_new.add_argument(
-        "--with-teams", action="store_true",
-        help="(adk only) Add an MS Teams gateway (aiohttp sidecar via Microsoft 365 Agents SDK).",
-    )
-    p_new.add_argument(
-        "--workflow", action="store_true",
-        help="(adk only) Generate a workflow-native agent: the root agent is an "
-             "ADK 2.0 Workflow graph (agent_workflow.py) with task-mode nodes, "
-             "typed contracts, and conditional routing, instead of a single LlmAgent.",
-    )
-    p_new.add_argument(
-        "--with-acp", action="store_true",
-        help="(adk only) Make the agent ACP-compatible and CLI-runnable: add an "
-             "Agent Client Protocol adapter (stdio JSON-RPC, python -m <pkg>.acp) "
-             "plus a local terminal CLI (python -m <pkg>.cli).",
-    )
-    p_new.add_argument(
-        "--with-eval", action="store_true",
-        help="(adk only) Stamp a starter evalv2 suite into the agent "
-             "(skills/default/eval/suite.yaml + a sample example). Run it with "
-             "`nuvel evalv2 run`.",
-    )
+# ── agent create (primary) ──────────────────────────────────────────
+    p_agent = sub.add_parser("agent", help="Manage agents.")
+    agent_sub = p_agent.add_subparsers(dest="agent_command", required=True)
+
+    p_create = agent_sub.add_parser("create", help="Scaffold a new agent.")
+    _add_new_agent_args(p_create)
+    p_create.set_defaults(func=_cmd_new)
+
+    # ── new (deprecated alias for `agent create`) ───────────────────────
+    p_new = sub.add_parser("new", help="[Deprecated] Use `nuvel agent create` instead.")
+    _add_new_agent_args(p_new)
     p_new.set_defaults(func=_cmd_new)
 
     p_skills = sub.add_parser("skills", help="Inspect bundled skills.")

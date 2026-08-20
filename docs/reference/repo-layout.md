@@ -55,7 +55,7 @@ docs/                                   # this site (reader-facing) +
     ├── specs/                          # design docs (one per feature)
     └── plans/                          # implementation plans (one per feature)
 
-generated-agents/                       # default output dir for `nuvel new` (gitignored)
+generated-agents/                       # default output dir for `nuvel agent create` (gitignored)
 .worktrees/                             # git worktrees for parallel feature work (gitignored)
 ```
 

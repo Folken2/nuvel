@@ -4,7 +4,7 @@ Three backends, three different sweet spots.
 
 | Backend | Pick it when… |
 |---|---|
-| **Google ADK** *(default)* | You want production session storage out of the box (Postgres), FastAPI surface, plugin system, ADK's WebSocket streaming. Most batteries included. Default for `nuvel new`. |
+| **Google ADK** *(default)* | You want production session storage out of the box (Postgres), FastAPI surface, plugin system, ADK's WebSocket streaming. Most batteries included. Default for `nuvel agent create`. |
 | **Claude Agent SDK** | You want Anthropic's first-party agent loop, async streaming via `receive_response()`, fewer infra primitives, lower-level control over the agent's turn cycle. |
 | **Anthropic Managed Agents** | You don't want to operate session state at all — Anthropic owns the runtime. Smallest infra footprint; least flexibility. |
 
@@ -41,7 +41,7 @@ Three backends, three different sweet spots.
 | Production Postgres sessions | ✅ | manual | server-side |
 | Railway-ready Dockerfile | ✅ | ✅ | ✅ |
 
-The advanced bundles (persona, composio, channels) are ADK-only today because that's where the runtime primitives are richest. The other two backends accept the flags but exit with a "not yet supported" error, so a future you can find them via `nuvel new --help`.
+The advanced bundles (persona, composio, channels) are ADK-only today because that's where the runtime primitives are richest. The other backends accept the flags but exit with a "not yet supported" error, so a future you can find them via `nuvel agent create --help`.
 
 ## When to switch
 
