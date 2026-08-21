@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "nuvel-orgmemory": {
+      "type": "streamable-http",
+      "url": "https://api.nuvel.dev/mcp/orgmemory",
+      "description": "Nuvel OrgMemory — Semantica-based knowledge graph for team architecture decisions, coding standards, component documentation, and past incidents.",
+      "headers": {
+        "Authorization": "Bearer ${NUVEL_API_KEY}",
+        "X-Nuvel-Org-Id": "${NUVEL_ORG_ID}"
+      },
+      "tools": {
+        "search_knowledge": "Search OrgMemory for architecture decisions, standards, component docs, and incidents by keyword or topic.",
+        "get_decision": "Retrieve a specific Architecture Decision Record (ADR) by ID.",
+        "list_decisions": "List all ADRs, optionally filtered by component, status, or date range.",
+        "get_standard": "Retrieve a specific coding standard or convention document.",
+        "list_standards": "List all coding standards, optionally filtered by language or category.",
+        "get_component": "Retrieve detailed documentation for a specific component.",
+        "search_incidents": "Search past incident reports by keyword, component, or date.",
+        "create_decision": "Record a new Architecture Decision Record (ADR) in OrgMemory.",
+        "update_component": "Update component documentation in OrgMemory.",
+        "log_incident": "Log a new incident or learning in OrgMemory."
+      },
+      "retry": {
+        "max_retries": 3,
+        "backoff_ms": 1000
+      }
+    }
+  }
+}

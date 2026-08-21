@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "chatgpt",
+  "version": "1.0.0",
+  "description": "Nuvel integration plugin for OpenAI ChatGPT (web/app)",
+  "author": { "name": "Nuvel", "email": "mark@folch.ai" },
+  "homepage": "https://nuvel.dev",
+  "repository": "https://github.com/folken2/chatgpt-plugin",
+  "license": "MIT",
+  "keywords": ["agent-plugin", "nuvel", "chatgpt"]
+}

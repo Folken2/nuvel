@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "claude-code",
+  "version": "1.0.0",
+  "description": "Nuvel integration plugin for Anthropic Claude Code CLI",
+  "author": { "name": "Nuvel", "email": "mark@folch.ai" },
+  "homepage": "https://nuvel.dev",
+  "repository": "https://github.com/folken2/claude-code-plugin",
+  "license": "MIT",
+  "keywords": ["agent-plugin", "nuvel", "claude-code"]
+}
