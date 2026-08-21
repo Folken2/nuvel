@@ -1,0 +1,33 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(npm:*)",
+      "Bash(yarn:*)",
+      "Bash(python:*)",
+      "Bash(gh:*)",
+      "Bash(go:*)",
+      "Bash(cargo:*)",
+      "Read",
+      "Write",
+      "WebSearch",
+      "WebFetch"
+    ],
+    "deny": [
+      "Bash(rm:-rf)",
+      "Bash(sudo:*)",
+      "Bash(curl:*|sh)"
+    ]
+  },
+  "mcp_servers": {
+    "nuvel-orgmemory": {
+      "command": "npx",
+      "args": ["-y", "@nuvel/mcp-server-orgmemory"],
+      "env": {
+        "NUVEL_API_KEY": "${NUVEL_API_KEY}",
+        "NUVEL_ORG_ID": "${NUVEL_ORG_ID}"
+      }
+    }
+  }
+}
