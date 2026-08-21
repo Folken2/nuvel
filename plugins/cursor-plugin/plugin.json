@@ -3,9 +3,16 @@
   "name": "cursor",
   "version": "1.0.0",
   "description": "Nuvel integration plugin for Cursor IDE",
-  "author": { "name": "Nuvel", "email": "mark@folch.ai" },
+  "author": {
+    "name": "Nuvel",
+    "email": "mark@folch.ai"
+  },
   "homepage": "https://nuvel.dev",
-  "repository": "https://github.com/folken2/cursor-plugin",
+  "repository": "https://github.com/Folken2/nuvel/tree/main/plugins/cursor-plugin",
   "license": "MIT",
-  "keywords": ["agent-plugin", "nuvel", "cursor"]
+  "keywords": [
+    "agent-plugin",
+    "nuvel",
+    "cursor"
+  ]
 }
