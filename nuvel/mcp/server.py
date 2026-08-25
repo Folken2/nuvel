@@ -24,6 +24,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import IO
 
 from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
@@ -227,6 +228,7 @@ class SkillsMCPServer:
         theme: str | None = None,
         require_filter: list[str] | None = None,
         with_org_memory: str | None = None,
+        feedback_dir: str | None = None,
     ):
         self.loader = loader
         # When set, discovery (resources/list, search_skills, get_skill) is
@@ -242,6 +244,16 @@ class SkillsMCPServer:
         # resolution. Imported lazily so the default (stdlib-only) path never
         # touches ADK or asyncio.
         self.with_org_memory = with_org_memory
+        # Directory where skill feedback is written. When unset, feedback goes
+        # under ``{skills_dir}/feedback`` (backward compatible); when set, the
+        # path is used directly so a read-only skills hub can keep feedback
+        # out-of-tree (e.g. ``~/.nuvel/feedback/``).
+        if feedback_dir is not None:
+            feedback_path = Path(feedback_dir).expanduser()
+            feedback_path.mkdir(parents=True, exist_ok=True)
+            self._feedback_dir = feedback_path
+        else:
+            self._feedback_dir = Path(self.loader.skills_dir) / "feedback"
         self._methods = {
             "initialize": self.handle_initialize,
             "resources/list": self.handle_resources_list,
@@ -599,7 +611,7 @@ class SkillsMCPServer:
             result["section"] = section
 
         # Health signals from feedback history (best-effort, no feedback = "ok").
-        result["health"] = feedback.compute_health(self.loader.skills_dir, entry["name"])
+        result["health"] = feedback.compute_health(self._feedback_dir, entry["name"])
 
         # Optional OrgMemoryService resolution (ADK-backed, best-effort).
         if variables and self.with_org_memory:
@@ -621,14 +633,14 @@ class SkillsMCPServer:
 
     def tool_record_feedback(self, args):
         """Record structured feedback after a skill is used."""
-        return feedback.write_feedback(self.loader.skills_dir, args)
+        return feedback.write_feedback(self._feedback_dir, args)
 
     def tool_check_skill_health(self, args):
         """Check a skill's health from its feedback history."""
         skill_name = (args.get("skill_name") or "").strip()
         if not skill_name:
             raise McpError(INVALID_PARAMS, "Missing required argument 'skill_name'")
-        return feedback.compute_health(self.loader.skills_dir, skill_name)
+        return feedback.compute_health(self._feedback_dir, skill_name)
 
     def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
         """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.

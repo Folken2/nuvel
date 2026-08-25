@@ -1,7 +1,7 @@
 """Feedback storage and health computation for Nuvel Skills MCP server.
 
 Stdlib-only — no asyncio, no third-party deps. Writes structured feedback as
-JSON files under ``{skills_dir}/feedback/{skill_name}/`` and computes health
+JSON files under ``{feedback_dir}/{skill_name}/`` and computes health
 signals from that history.
 """
 
@@ -13,15 +13,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-FEEDBACK_DIR_NAME = "feedback"
 
 OUTCOME_VALUES = {"success", "partial", "failure", "blocked"}
 SEVERITY_VALUES = {"blocking", "misleading", "minor"}
 
 
-def _feedback_dir(skills_dir: Path, skill_name: str) -> Path:
+def _feedback_dir(feedback_dir: Path, skill_name: str) -> Path:
     """Return the feedback directory for a skill, without creating it."""
-    return skills_dir / FEEDBACK_DIR_NAME / skill_name
+    return feedback_dir / skill_name
 
 
 def _compute_dedup_key(skill_name: str, section: str, what_didnt: str) -> str:
@@ -39,7 +38,7 @@ def _compute_dedup_key(skill_name: str, section: str, what_didnt: str) -> str:
     return digest[:16]
 
 
-def write_feedback(skills_dir: Path, data: dict) -> dict:
+def write_feedback(feedback_dir: Path, data: dict) -> dict:
     """Write a feedback entry to disk.
 
     *data* must contain at least: ``skill_name``, ``skill_version``, ``outcome``,
@@ -99,7 +98,7 @@ def write_feedback(skills_dir: Path, data: dict) -> dict:
     }
 
     try:
-        dest_dir = _feedback_dir(skills_dir, skill_name)
+        dest_dir = _feedback_dir(feedback_dir, skill_name)
         dest_dir.mkdir(parents=True, exist_ok=True)
         file_path = dest_dir / f"{feedback_id}.json"
         file_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -113,13 +112,13 @@ def write_feedback(skills_dir: Path, data: dict) -> dict:
     }
 
 
-def read_feedback(skills_dir: Path, skill_name: str) -> list[dict]:
+def read_feedback(feedback_dir: Path, skill_name: str) -> list[dict]:
     """Return all feedback files for *skill_name*, sorted newest-first.
 
     Returns ``[]`` when the skill has no feedback (or the feedback directory
     doesn't exist).
     """
-    fdir = _feedback_dir(skills_dir, skill_name)
+    fdir = _feedback_dir(feedback_dir, skill_name)
     if not fdir.is_dir():
         return []
     entries: list[dict] = []
@@ -135,7 +134,7 @@ def read_feedback(skills_dir: Path, skill_name: str) -> list[dict]:
     return entries
 
 
-def compute_health(skills_dir: Path, skill_name: str) -> dict:
+def compute_health(feedback_dir: Path, skill_name: str) -> dict:
     """Compute health signals for a skill from its feedback history.
 
     Returns a dict with keys: ``total_feedback``, ``recent_30d`` (counts by
@@ -143,7 +142,7 @@ def compute_health(skills_dir: Path, skill_name: str) -> dict:
     ``recommendation``.  When there is no feedback the response is minimal:
     ``{"total_feedback": 0, "recommendation": "ok"}``.
     """
-    feedback = read_feedback(skills_dir, skill_name)
+    feedback = read_feedback(feedback_dir, skill_name)
     if not feedback:
         return {"total_feedback": 0, "recommendation": "ok"}
 

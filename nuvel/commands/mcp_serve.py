@@ -60,6 +60,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
              "'://') or a path to an org-graph YAML file; otherwise falls back "
              "to NUVEL_ORG_MEMORY_DSN / NUVEL_ORG_GRAPH_PATH.",
     )
+    p_serve.add_argument(
+        "--feedback-dir",
+        default="~/.nuvel/feedback/",
+        metavar="DIR",
+        help="Directory to store skill feedback (record_feedback / "
+             "check_skill_health). Kept out of the skills hub so a read-only "
+             "git clone still works. Default: ~/.nuvel/feedback/.",
+    )
     p_serve.set_defaults(func=_cmd_mcp_serve)
 
 
@@ -85,6 +93,7 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         theme=args.theme,
         require_filter=require_filter,
         with_org_memory=args.with_org_memory,
+        feedback_dir=args.feedback_dir,
     )
     server.serve()
     return 0
