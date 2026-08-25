@@ -133,6 +133,10 @@ class ACPAgent:
                 await self._dispatch(msg)
         finally:
             await self._runtime.aclose()
+            # Drain + flush the cancel-safe writer so no final frame (e.g. a
+            # cancelled stopReason) is lost when the loop tears down.
+            self._t.close()
+            await self._t.wait_closed()
 
     # ── agent→client requests ────────────────────────────────────────
 
@@ -268,6 +272,13 @@ class ACPAgent:
         return {"sessionId": session_id}
 
     def _start_prompt(self, msg_id: Any, params: dict) -> None:
+        """Start a prompt turn as a tracked task.
+
+        The turn's writes go through the cancel-safe :class:`StdinWriter`
+        (via ``self._t.write``), so a later ``session/cancel`` can safely
+        :meth:`~asyncio.Task.cancel` this task mid-stream without leaving a
+        partial NDJSON frame on the pipe.
+        """
         session_id = params.get("sessionId")
         if not isinstance(session_id, str):
             asyncio.ensure_future(
@@ -288,6 +299,10 @@ class ACPAgent:
             ):
                 await self._emit_update(session_id, update)
         except asyncio.CancelledError:
+            # The cancelled stopReason goes through the StdinWriter actor,
+            # which writes it as a complete frame after any in-flight
+            # session/update finishes — so the cancel and response frames
+            # can never fuse into a corrupt byte stream.
             await self._t.write(make_response(msg_id, {"stopReason": "cancelled"}))
             raise
         except Exception as exc:  # noqa: BLE001
@@ -300,6 +315,9 @@ class ACPAgent:
         session_id = params.get("sessionId")
         task = self._active.get(session_id) if isinstance(session_id, str) else None
         if task is not None and not task.done():
+            # Safe to cancel mid-write: every frame goes through the
+            # StdinWriter actor, so the cancelled turn's response can't
+            # truncate or fuse with an in-flight session/update frame.
             task.cancel()
 
     # ── session/update emitters ──────────────────────────────────────
