@@ -23,4 +23,4 @@ from __future__ import annotations
 __all__ = ["PROTOCOL_VERSION"]
 
 # ACP protocol version this adapter implements.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
