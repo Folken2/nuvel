@@ -121,6 +121,12 @@ class _FakeTransport:
     async def read(self):
         return None
 
+    def close(self):
+        pass
+
+    async def wait_closed(self):
+        pass
+
 
 # ── mcpServers parsing ───────────────────────────────────────────────
 
