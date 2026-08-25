@@ -27,6 +27,7 @@ import urllib.request
 from typing import IO
 
 from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
+from nuvel.mcp import feedback
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "nuvel-skills", "version": "1.0.0"}
@@ -253,6 +254,8 @@ class SkillsMCPServer:
             "get_skill": self.tool_get_skill,
             "propose_improvement": self.tool_propose_improvement,
             "fence_value": self.tool_fence_value,
+            "record_feedback": self.tool_record_feedback,
+            "check_skill_health": self.tool_check_skill_health,
         }
 
     # --- Scoping helpers -----------------------------------------------------
@@ -422,6 +425,88 @@ class SkillsMCPServer:
                         "required": ["skill_name", "current_version", "issue", "suggested_fix"],
                     },
                 },
+                {
+                    "name": "record_feedback",
+                    "description": (
+                        "Record structured feedback after using a skill in the field. "
+                        "Tracks outcome, severity, what worked and what didn't — used "
+                        "by check_skill_health to surface quality trends."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "skill_name": {
+                                "type": "string",
+                                "description": "Name of the skill this feedback is for.",
+                            },
+                            "skill_version": {
+                                "type": "string",
+                                "description": "Version from the SKILL.md frontmatter (or 'unknown').",
+                            },
+                            "outcome": {
+                                "type": "string",
+                                "enum": ["success", "partial", "failure", "blocked"],
+                                "description": "How well the skill worked: success (completed task), partial (needed tweaks), failure (wrong), blocked (couldn't proceed).",
+                            },
+                            "severity": {
+                                "type": "string",
+                                "enum": ["blocking", "misleading", "minor"],
+                                "description": "Impact: blocking (can't use skill), misleading (wrong info), minor (cosmetic).",
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": "Which ## heading(s) the feedback applies to, comma-separated.",
+                            },
+                            "what_worked": {
+                                "type": "string",
+                                "description": "What the skill got right (optional).",
+                            },
+                            "what_didnt": {
+                                "type": "string",
+                                "description": "What went wrong — missing steps, outdated commands, wrong assumptions.",
+                            },
+                            "proposed_patch": {
+                                "type": "string",
+                                "description": "Suggested fix or replacement text (optional).",
+                            },
+                            "harness": {
+                                "type": "string",
+                                "description": "Agent/harness you're running (e.g. 'hermes', 'claude-code'). Defaults to 'unknown'.",
+                            },
+                            "user_corrected": {
+                                "type": "boolean",
+                                "description": "Whether the user had to manually correct the skill's output.",
+                            },
+                            "attribution": {
+                                "type": "string",
+                                "description": "Who or what triggered the feedback (optional).",
+                            },
+                            "correlation_id": {
+                                "type": "string",
+                                "description": "External correlation id linking this feedback to a run/task (optional).",
+                            },
+                        },
+                        "required": ["skill_name", "skill_version", "outcome", "severity", "what_didnt"],
+                    },
+                },
+                {
+                    "name": "check_skill_health",
+                    "description": (
+                        "Check a skill's health from its feedback history: outcome "
+                        "counts, trend, flagged sections, and a recommendation "
+                        "('ok', 'review_before_use', or 'use_cautiously')."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "skill_name": {
+                                "type": "string",
+                                "description": "Name of the skill to check.",
+                            },
+                        },
+                        "required": ["skill_name"],
+                    },
+                },
             ]
         }
 
@@ -513,6 +598,9 @@ class SkillsMCPServer:
         if section is not None:
             result["section"] = section
 
+        # Health signals from feedback history (best-effort, no feedback = "ok").
+        result["health"] = feedback.compute_health(self.loader.skills_dir, entry["name"])
+
         # Optional OrgMemoryService resolution (ADK-backed, best-effort).
         if variables and self.with_org_memory:
             resolved = self._resolve_templates(body, variables)
@@ -530,6 +618,17 @@ class SkillsMCPServer:
             "value": fence_value(value, source),
             "source": source,
         }
+
+    def tool_record_feedback(self, args):
+        """Record structured feedback after a skill is used."""
+        return feedback.write_feedback(self.loader.skills_dir, args)
+
+    def tool_check_skill_health(self, args):
+        """Check a skill's health from its feedback history."""
+        skill_name = (args.get("skill_name") or "").strip()
+        if not skill_name:
+            raise McpError(INVALID_PARAMS, "Missing required argument 'skill_name'")
+        return feedback.compute_health(self.loader.skills_dir, skill_name)
 
     def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
         """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.

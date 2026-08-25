@@ -16,6 +16,7 @@ from nuvel.mcp.skills_loader import (
     parse_frontmatter,
     resolve_skills_dir,
 )
+from nuvel.mcp import feedback
 
 
 def _make_hub(root: Path) -> Path:
@@ -375,6 +376,227 @@ class TestAirbyteFeatures(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
         )
         self.assertEqual(resp["result"]["resources"], [])
+
+
+class TestFeedbackTools(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.skills = _make_hub(Path(self._tmp.name))
+        self.server = SkillsMCPServer(SkillsLoader(self.skills))
+
+    def _tool(self, name, arguments):
+        resp = self.server.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+        self.assertNotIn("error", resp)
+        return json.loads(resp["result"]["content"][0]["text"])
+
+    def _call(self, method, params=None, msg_id=1):
+        return self.server.dispatch(
+            {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}}
+        )
+
+    def _feedback_args(self, **overrides):
+        base = {
+            "skill_name": "onboarding",
+            "skill_version": "1.0.0",
+            "outcome": "success",
+            "severity": "minor",
+            "what_didnt": "step 3 uses deprecated flag",
+            "section": "Step-by-step instructions",
+            "what_worked": "steps 1-2 were correct",
+            "proposed_patch": "replace --old with --new",
+            "harness": "hermes",
+            "user_corrected": False,
+            "attribution": "test-suite",
+            "correlation_id": "corr-123",
+        }
+        base.update(overrides)
+        return base
+
+    # ------------------------------------------------------------------
+    # record_feedback
+    # ------------------------------------------------------------------
+
+    def test_record_feedback_success(self):
+        result = self._tool("record_feedback", self._feedback_args())
+        self.assertEqual(result["status"], "recorded")
+        self.assertIn("feedback_id", result)
+        # Verify the file exists on disk.
+        fdir = self.skills / "feedback" / "onboarding"
+        self.assertTrue(fdir.is_dir())
+        files = list(fdir.glob("*.json"))
+        self.assertEqual(len(files), 1)
+
+    def test_record_feedback_missing_required(self):
+        # Missing skill_name should return error status.
+        result = self._tool("record_feedback", {"what_didnt": "broken"})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("skill_name", result["message"])
+
+    def test_record_feedback_missing_what_didnt(self):
+        result = self._tool("record_feedback", {"skill_name": "onboarding"})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("what_didnt", result["message"])
+
+    def test_record_feedback_invalid_outcome(self):
+        result = self._tool(
+            "record_feedback",
+            self._feedback_args(outcome="invalid"),
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("outcome", result["message"])
+
+    def test_record_feedback_invalid_severity(self):
+        result = self._tool(
+            "record_feedback",
+            self._feedback_args(severity="critical"),
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("severity", result["message"])
+
+    def test_feedback_dir_created_lazily(self):
+        fdir = self.skills / "feedback" / "onboarding"
+        self.assertFalse(fdir.exists())
+        self._tool("record_feedback", self._feedback_args())
+        self.assertTrue(fdir.is_dir())
+
+    def test_feedback_file_format(self):
+        self._tool("record_feedback", self._feedback_args())
+        fdir = self.skills / "feedback" / "onboarding"
+        files = list(fdir.glob("*.json"))
+        self.assertEqual(len(files), 1)
+        data = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual(data["schema_version"], 1)
+        self.assertIn("timestamp", data)
+        self.assertEqual(data["skill_name"], "onboarding")
+        self.assertEqual(data["skill_version"], "1.0.0")
+        self.assertEqual(data["outcome"], "success")
+        self.assertEqual(data["severity"], "minor")
+        self.assertEqual(data["harness"], "hermes")
+        self.assertEqual(data["what_didnt"], "step 3 uses deprecated flag")
+        self.assertFalse(data["user_corrected"])
+        self.assertFalse(data["issue_filed"])
+
+    # ------------------------------------------------------------------
+    # check_skill_health
+    # ------------------------------------------------------------------
+
+    def test_check_skill_health_no_feedback(self):
+        result = self._tool("check_skill_health", {"skill_name": "onboarding"})
+        self.assertEqual(result["total_feedback"], 0)
+        self.assertEqual(result["recommendation"], "ok")
+
+    def test_check_skill_health_with_feedback(self):
+        # Write 2 success + 1 failure for onboarding.
+        self._tool("record_feedback", self._feedback_args(outcome="success"))
+        self._tool("record_feedback", self._feedback_args(outcome="success"))
+        self._tool("record_feedback", self._feedback_args(outcome="failure"))
+        result = self._tool("check_skill_health", {"skill_name": "onboarding"})
+        self.assertEqual(result["total_feedback"], 3)
+        self.assertIn("recent_30d", result)
+        self.assertEqual(result["recent_30d"]["success"], 2)
+        self.assertEqual(result["recent_30d"]["failure"], 1)
+
+    def test_check_skill_health_with_flagged_sections(self):
+        # 2 entries for same section with blocking severity → flagged.
+        self._tool(
+            "record_feedback",
+            self._feedback_args(
+                section="Step-by-step instructions",
+                severity="blocking",
+                what_didnt="step 2 references removed API",
+            ),
+        )
+        self._tool(
+            "record_feedback",
+            self._feedback_args(
+                section="Step-by-step instructions",
+                severity="blocking",
+                what_didnt="step 2 references removed API",
+            ),
+        )
+        result = self._tool("check_skill_health", {"skill_name": "onboarding"})
+        self.assertGreaterEqual(len(result["flagged_sections"]), 1)
+        self.assertEqual(result["recommendation"], "use_cautiously")
+        fs = result["flagged_sections"][0]
+        self.assertEqual(fs["section"], "Step-by-step instructions")
+        self.assertEqual(fs["severity"], "blocking")
+        self.assertEqual(fs["count"], 2)
+
+    def test_check_skill_health_review_before_use(self):
+        # 2 entries for same section with misleading severity → review.
+        self._tool(
+            "record_feedback",
+            self._feedback_args(
+                section="Prerequisites",
+                severity="misleading",
+                what_didnt="dependency listed is wrong",
+            ),
+        )
+        self._tool(
+            "record_feedback",
+            self._feedback_args(
+                section="Prerequisites",
+                severity="misleading",
+                what_didnt="dependency listed is wrong",
+            ),
+        )
+        result = self._tool("check_skill_health", {"skill_name": "onboarding"})
+        self.assertEqual(result["recommendation"], "review_before_use")
+
+    # ------------------------------------------------------------------
+    # health in get_skill
+    # ------------------------------------------------------------------
+
+    def test_health_in_get_skill(self):
+        result = self._tool("get_skill", {"name": "onboarding"})
+        self.assertIn("health", result)
+        self.assertEqual(result["health"]["total_feedback"], 0)
+        self.assertEqual(result["health"]["recommendation"], "ok")
+
+    def test_health_in_get_skill_after_feedback(self):
+        self._tool(
+            "record_feedback",
+            self._feedback_args(outcome="failure", severity="blocking"),
+        )
+        result = self._tool("get_skill", {"name": "onboarding"})
+        self.assertIn("health", result)
+        self.assertGreater(result["health"]["total_feedback"], 0)
+
+    # ------------------------------------------------------------------
+    # trend
+    # ------------------------------------------------------------------
+
+    def test_health_trend_insufficient_data(self):
+        # Fewer than 5 entries → insufficient_data.
+        self._tool("record_feedback", self._feedback_args(outcome="success"))
+        self._tool("record_feedback", self._feedback_args(outcome="failure"))
+        result = self._tool("check_skill_health", {"skill_name": "onboarding"})
+        self.assertEqual(result["trend"], "insufficient_data")
+
+    # ------------------------------------------------------------------
+    # feedback id format
+    # ------------------------------------------------------------------
+
+    def test_feedback_id_format(self):
+        result = self._tool("record_feedback", self._feedback_args())
+        fid = result["feedback_id"]
+        # Format: yyyy-mm-dd-hex-micro
+        parts = fid.split("-")
+        self.assertEqual(len(parts[0]), 4)  # year
+        self.assertEqual(len(parts[1]), 2)  # month
+        self.assertEqual(len(parts[2]), 2)  # day
+        # The dedup prefix is 16 hex chars.
+        self.assertEqual(len(parts[3]), 16)
+        # Remainder is the microsecond suffix.
+        self.assertGreater(len("-".join(parts[4:])), 4)
 
 
 if __name__ == "__main__":
