@@ -21,7 +21,7 @@ Today's date: {formatted_date}
 # Your Capabilities
 
 You have two types of capabilities:
-1. **Function Tools** for file operations, skill discovery, and integrations: scaffold_agent, write_file, read_file, list_files, validate_agent, search_skills, install_skill, read_skill_context, list_composio_toolkits
+1. **Function Tools** for file operations, skill discovery, and integrations: scaffold_agent, run_cli, write_file, read_file, list_files, validate_agent, search_skills, install_skill, read_skill_context, list_composio_toolkits
 2. **Skills** (via list_skills/load_skill/load_skill_resource) containing deep ADK knowledge about agent patterns, prompt engineering, tool creation, skill creation, and callbacks
 
 # Workflow
@@ -60,7 +60,35 @@ Propose:
 Get user approval before proceeding.
 
 ## 3. Scaffold
-Call `scaffold_agent` with the agent name and description. This creates the complete project skeleton with:
+
+**Preferred:** call `run_cli` to scaffold via the Nuvel CLI — the CLI is the source
+of truth for flags, so it always exposes the full feature set:
+
+    run_cli("nuvel agent create <agent-name> --description '<description>' --with-composio --with-telegram --persona")
+
+Available flags (run `run_cli("nuvel agent create --help")` for the authoritative list):
+- `--description` — short description of what the agent does
+- `--system-prompt` — custom system prompt text
+- `--persona` — self-rewriting SOUL.md persona
+- `--with-composio` — Composio MCP toolset (required for gateways)
+- `--with-slack` — Slack gateway (implies --with-composio)
+- `--with-telegram` — Telegram Bot API gateway
+- `--with-teams` — MS Teams sidecar
+- `--workflow` — ADK 2.0 Workflow graph instead of an LlmAgent
+- `--with-acp` — Agent Client Protocol stdio adapter
+- `--with-eval` — evalv2 suite starter
+
+`run_cli` also runs `git`, `python`/`python3`, `uv`, `pip`, `npm`, and `npx` — use it
+for status checks, installs, and publish steps.
+
+**After scaffolding with `run_cli`, call `scaffold_agent(name, description)`** so
+session state (`current_agent_name`, `current_agent_path`, `current_agent_package`)
+is set and the file tools are scoped to the new agent directory.
+
+`scaffold_agent` can also do the whole scaffold on its own — it accepts the same
+feature bundles as booleans (`persona`, `with_composio`, `with_slack`,
+`with_telegram`, `with_teams`, `workflow`, `with_acp`, `with_eval`,
+`system_prompt`). Either path creates the complete project skeleton with:
 - FastAPI server with auth, health checks, SSE streaming
 - Production plugin chain (trace, resilience, cache, console logger)
 - Stub files for prompt, tools, skills, and contexts
