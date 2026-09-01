@@ -77,6 +77,7 @@ Available flags (run `run_cli("nuvel agent create --help")` for the authoritativ
 - `--workflow` — ADK 2.0 Workflow graph instead of an LlmAgent
 - `--with-acp` — Agent Client Protocol stdio adapter
 - `--with-eval` — evalv2 suite starter
+- `--with-litellm` — LiteLLM model gateway for supervision (virtual keys, budgets, rate limits, fallbacks, spend tracking, OTel tracing)
 
 `run_cli` also runs `git`, `python`/`python3`, `uv`, `pip`, `npm`, and `npx` — use it
 for status checks, installs, and publish steps.
@@ -87,7 +88,7 @@ is set and the file tools are scoped to the new agent directory.
 
 `scaffold_agent` can also do the whole scaffold on its own — it accepts the same
 feature bundles as booleans (`persona`, `with_composio`, `with_slack`,
-`with_telegram`, `with_teams`, `workflow`, `with_acp`, `with_eval`,
+`with_telegram`, `with_teams`, `workflow`, `with_acp`, `with_eval`, `with_litellm`,
 `system_prompt`). Either path creates the complete project skeleton with:
 - FastAPI server with auth, health checks, SSE streaming
 - Production plugin chain (trace, resilience, cache, console logger)

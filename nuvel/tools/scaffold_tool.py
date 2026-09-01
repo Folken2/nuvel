@@ -22,6 +22,7 @@ def scaffold_agent(
     workflow: bool = False,
     with_acp: bool = False,
     with_eval: bool = False,
+    with_litellm: bool = False,
     system_prompt: str = "",
     tool_context=None,
 ) -> dict:
@@ -61,6 +62,7 @@ def scaffold_agent(
         workflow=workflow,
         with_acp=with_acp,
         with_eval=with_eval,
+        with_litellm=with_litellm,
     )
 
     if result.get("status") == "ok" and tool_context is not None:
