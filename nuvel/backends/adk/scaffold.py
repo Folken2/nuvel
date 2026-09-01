@@ -403,6 +403,67 @@ _ACP_README_BLOCK = (
 )
 
 
+_LITELLM_ENV_BLOCK = (
+    "# ── LiteLLM Model Gateway ──────────────────────────────────────\n"
+    "# When using the LiteLLM overlay, the agent routes LLM calls\n"
+    "# through a LiteLLM proxy instead of calling providers directly.\n"
+    "# Set the proxy base URL and the master key defined in\n"
+    "# {{agent_package}}/litellm/config.yaml:\n"
+    "LITELLM_BASE_URL=http://localhost:4000/v1\n"
+    "LITELLM_API_KEY=sk-litellm-master-{{agent_name}}\n"
+    "# LiteLLM routes to OpenRouter by default. The agent never touches\n"
+    "# provider keys directly — all LLM calls go through the proxy.\n"
+    "# Provider keys (OPENAI_API_KEY, etc.) are set in LiteLLM's .env\n"
+    "# if you use direct provider entries instead of OpenRouter.\n"
+    "\n"
+)
+
+_LITELLM_README_BLOCK = (
+    "\n## LiteLLM Model Gateway\n"
+    "\n"
+    "This agent includes a ready-to-run [LiteLLM](https://docs.litellm.ai/) proxy\n"
+    "gateway at `{{agent_package}}/litellm/`. LiteLLM sits between the agent and\n"
+    "LLM providers, providing supervision without touching agent code:\n"
+    "\n"
+    "- **Virtual keys** — issue scoped API keys to different users/teams\n"
+    "- **Budgets & rate limits** — cap spend and throughput per key\n"
+    "- **Fallbacks** — retry failed calls across providers automatically\n"
+    "- **Spend tracking** — per-key, per-model cost dashboards\n"
+    "- **OpenTelemetry tracing** — ship traces to your OTLP backend\n"
+    "\n"
+    "### Two-Tier Architecture\n"
+    "\n"
+    "```\n"
+    "Agent → LiteLLM (supervision) → OpenRouter (routing) → Providers\n"
+    "```\n"
+    "\n"
+    "Default routing goes through **OpenRouter**, which handles provider\n"
+    "fallbacks, redundancy, and consolidated billing — you only need a\n"
+    "single `OPENROUTER_API_KEY`. To bypass OpenRouter for specific models\n"
+    "(lower latency, direct billing), uncomment the direct provider entries\n"
+    "in `config.yaml` and add the corresponding API keys to `.env`.\n"
+    "\n"
+    "### Quick Start\n"
+    "\n"
+    "```bash\n"
+    "cd {{agent_package}}/litellm\n"
+    "cp .env.example .env\n"
+    "# Edit .env — add your OPENROUTER_API_KEY\n"
+    "docker compose up -d\n"
+    "```\n"
+    "\n"
+    "The proxy listens on `http://localhost:4000`. The agent connects via\n"
+    "`LITELLM_BASE_URL` and `LITELLM_API_KEY` (set in the agent's `.env`).\n"
+    "\n"
+    "### Postgres (virtual keys)\n"
+    "\n"
+    "The bundled `docker-compose.yaml` includes an optional Postgres sidecar\n"
+    "for virtual key storage. To use an external database instead (e.g. Neon),\n"
+    "comment out the `postgres` service and set `LITELLM_DATABASE_URL` in\n"
+    "`{{agent_package}}/litellm/.env` to your connection string.\n"
+)
+
+
 # ── Placeholder replacement ─────────────────────────────────────────
 
 
@@ -417,6 +478,7 @@ def _build_replacements(
     with_telegram: bool = False,
     with_teams: bool = False,
     with_acp: bool = False,
+    with_litellm: bool = False,
 ) -> dict[str, str]:
     # Frame priority: user's --system-prompt wins, else persona-aware default.
     if system_prompt:
@@ -523,6 +585,17 @@ def _build_replacements(
         "{{acp_readme_section}}": (
             _ACP_README_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
         ),
+        # LiteLLM model gateway. The blocks embed "{{agent_package}}" and
+        # "{{agent_name}}", which are pre-substituted here since _substitute
+        # won't re-process values injected into the replacements dict.
+        "{{litellm_env_block}}": (
+            _LITELLM_ENV_BLOCK.replace("{{agent_package}}", package)
+                               .replace("{{agent_name}}", name) if with_litellm else ""
+        ),
+        "{{litellm_readme_section}}": (
+            _LITELLM_README_BLOCK.replace("{{agent_package}}", package)
+                                 .replace("{{agent_name}}", name) if with_litellm else ""
+        ),
     }
 
 
@@ -599,6 +672,7 @@ def scaffold_agent(
     workflow: bool = False,
     with_acp: bool = False,
     with_eval: bool = False,
+    with_litellm: bool = False,
 ) -> dict:
     """Scaffold a new agent from the template skeleton.
 
@@ -655,7 +729,7 @@ def scaffold_agent(
 
     replacements = _build_replacements(
         name, package, description, system_prompt, persona, with_composio,
-        with_slack, with_telegram, with_teams, with_acp,
+        with_slack, with_telegram, with_teams, with_acp, with_litellm,
     )
     files_created: list[str] = []
 
@@ -692,6 +766,8 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "acp", target, replacements, files_created)
         if with_eval:
             _stamp_tree(OVERLAYS_DIR / "eval", target, replacements, files_created)
+        if with_litellm:
+            _stamp_tree(OVERLAYS_DIR / "litellm", target, replacements, files_created)
 
         return {
             "status": "ok",
@@ -708,6 +784,7 @@ def scaffold_agent(
             "workflow": workflow,
             "with_acp": with_acp,
             "with_eval": with_eval,
+            "with_litellm": with_litellm,
         }
 
     except Exception as exc:
@@ -747,6 +824,13 @@ def main() -> None:
              "local terminal CLI, so the agent is runnable as an editor "
              "subprocess and from the command line.",
     )
+    parser.add_argument(
+        "--with-litellm", action="store_true",
+        help="Generate a ready-to-run LiteLLM proxy alongside the agent "
+             "for model gateway supervision: virtual keys, budgets, "
+             "rate limits, fallbacks, spend tracking, and OpenTelemetry "
+             "tracing.",
+    )
     args = parser.parse_args()
 
     result = scaffold_agent(
@@ -757,6 +841,7 @@ def main() -> None:
         with_composio=args.with_composio,
         workflow=args.workflow,
         with_acp=args.with_acp,
+        with_litellm=args.with_litellm,
     )
 
     if result["status"] == "ok":
@@ -769,6 +854,8 @@ def main() -> None:
             flags.append("composio")
         if result.get("with_acp"):
             flags.append("acp")
+        if result.get("with_litellm"):
+            flags.append("litellm")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
     else:
