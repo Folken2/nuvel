@@ -38,6 +38,33 @@ class LazySkillToolset(BaseToolset):
     rebuilds the underlying SkillToolset if anything was added/changed/removed.
     Lets the agent self-author skills (via author_skill, when --persona is on)
     that become queryable on the *next* invocation — no process restart.
+
+    Not redundant with google-adk 2.10's native "notice that a loaded skill has
+    changed". Verified against google-adk 2.10.0; pinned by
+    tests/test_skill_hot_reload.py in the nuvel repo. Line numbers below are in
+    ``google/adk/tools/skill_toolset.py`` unless noted:
+
+    - ``SkillToolset.get_tools()`` (:1879) never touches the filesystem. The
+      catalog is frozen into ``self._skills`` at construction (:1790) and
+      ``_list_skills()`` (:2010) just returns it, so a toolset built once and
+      reused — this agent's pattern — never sees a skill directory that was
+      added, edited or deleted afterwards.
+    - The native change detection is ``_restate_changed_skills`` (:2394), gated
+      on ``SkillLifecycleConfig.revalidate_skills``, which defaults to False
+      (:168, applied at :1776). It only re-states skills the model has already
+      loaded, and resolves them through ``_get_or_fetch_skill`` (:1968), which
+      returns the in-memory copy before consulting a registry (:1976). With no
+      registry — our case — it compares in-memory against in-memory and can
+      never fire. It is a registry-freshness check, not a disk watcher.
+    - The surrounding lifecycle surface (``unload_skill`` et al.) requires the
+      experimental ``ADK_ENABLE_SKILL_LIFECYCLE=1`` flag
+      (``google/adk/features/_feature_registry.py``:209, ``default_on=False``).
+      A generated agent must not depend on an experimental flag.
+
+    Known gap, accepted: the scan covers SKILL.md mtimes plus the top-level
+    skills dir mtime, so add/edit/remove of a skill is caught but editing only a
+    skill's ``references/`` or ``scripts/`` file is not. Touch its SKILL.md to
+    force a rebuild.
     """
 
     def __init__(self) -> None:
