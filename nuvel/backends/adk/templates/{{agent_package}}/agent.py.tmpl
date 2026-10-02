@@ -65,6 +65,26 @@ class LazySkillToolset(BaseToolset):
     skills dir mtime, so add/edit/remove of a skill is caught but editing only a
     skill's ``references/`` or ``scripts/`` file is not. Touch its SKILL.md to
     force a rebuild.
+
+    Two consequences of wrapping rather than subclassing ``SkillToolset``, both
+    verified against google-adk 2.10.0 and pinned by
+    tests/test_skill_discovery_mode.py in the nuvel repo:
+
+    - ``process_llm_request`` must be forwarded explicitly. The flow calls it on
+      whatever sits in ``agent.tools``
+      (``google/adk/flows/llm_flows/tools/_agent_tools.py``:107-112), which is
+      this wrapper, and ``BaseToolset.process_llm_request``
+      (``google/adk/tools/base_toolset.py``:231-246) is a no-op. Without the
+      override below the model gets the skill *tools* but none of the skill
+      *guidance* (~1.8k chars telling it to call ``load_skill`` at all).
+    - ``_rebuild_if_needed`` constructs a fresh default-configured
+      ``SkillToolset``, so any non-default constructor argument has to be set
+      there to survive a rebuild. Today there are none: ``discovery_mode``
+      defaults to ``SkillDiscoveryMode.LAZY`` (:1730), which is already the
+      on-demand disclosure this agent wants — the catalog stays out of the
+      system instruction and reaches the model only when it calls
+      ``list_skills``. ``EAGER`` is the opposite trade and measured ~7k chars
+      (~1.8k tokens) more per request for our 15-skill catalog.
     """
 
     def __init__(self) -> None:
@@ -106,6 +126,19 @@ class LazySkillToolset(BaseToolset):
         if self._inner is None:
             return []
         return await self._inner.get_tools(readonly_context)
+
+    async def process_llm_request(self, *, tool_context, llm_request):
+        """Forwards to the inner toolset so skill guidance reaches the model.
+
+        ``BaseToolset``'s implementation is a no-op, and the flow calls this on
+        the wrapper, not on the inner toolset. See the class docstring.
+        """
+        self._rebuild_if_needed()
+        if self._inner is None:
+            return
+        await self._inner.process_llm_request(
+            tool_context=tool_context, llm_request=llm_request
+        )
 
     async def close(self):
         if self._inner is not None:
