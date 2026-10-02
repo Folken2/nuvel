@@ -10,7 +10,12 @@ from pathlib import Path
 from unittest import mock
 
 from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, resolve_skills_dir
+from nuvel.mcp.skills_loader import (
+    SkillsError,
+    SkillsLoader,
+    parse_frontmatter,
+    resolve_skills_dir,
+)
 
 
 def _make_hub(root: Path) -> Path:
@@ -243,6 +248,132 @@ class TestThemeScoping(unittest.TestCase):
 
     def test_unknown_theme_returns_empty(self):
         resp = self._call(self._server(theme="nope"), "resources/list")
+        self.assertEqual(resp["result"]["resources"], [])
+
+
+def _make_feature_hub(root: Path) -> Path:
+    """Create a hub with sections, ``requires``, and template variables."""
+    skills = root / "skills"
+    (skills / "sales" / "pricing").mkdir(parents=True)
+    (skills / "sales" / "pricing" / "SKILL.md").write_text(
+        "---\n"
+        "name: pricing\n"
+        "requires: [api_key, salesforce_connected]\n"
+        "---\n\n"
+        "# Pricing\n\n"
+        "## Overview\n"
+        "Summary uses {{ fiscal_year_summary }}.\n\n"
+        "## Details\n"
+        "Needs {{ api_key }} to run.\n",
+        encoding="utf-8",
+    )
+    index = {
+        "themes": {
+            "sales": [
+                {
+                    "name": "pricing",
+                    "description": "Pricing guidance",
+                    "author": "Sales",
+                    "path": "skills/sales/pricing/SKILL.md",
+                },
+            ]
+        }
+    }
+    (skills / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    return skills
+
+
+class TestParseFrontmatterLists(unittest.TestCase):
+    def test_inline_list(self):
+        meta = parse_frontmatter("---\nrequires: [a, b]\n---\n")
+        self.assertEqual(meta["requires"], ["a", "b"])
+
+    def test_block_list(self):
+        meta = parse_frontmatter("---\nrequires:\n  - a\n  - b\n---\n")
+        self.assertEqual(meta["requires"], ["a", "b"])
+
+    def test_scalar_still_string(self):
+        meta = parse_frontmatter("---\nversion: 1.0.0\n---\n")
+        self.assertEqual(meta["version"], "1.0.0")
+
+
+class TestAirbyteFeatures(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.skills = _make_feature_hub(Path(self._tmp.name))
+        self.server = SkillsMCPServer(SkillsLoader(self.skills))
+
+    def _tool(self, name, arguments):
+        resp = self.server.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+        self.assertNotIn("error", resp)
+        return json.loads(resp["result"]["content"][0]["text"])
+
+    def test_get_skill_section(self):
+        result = self._tool("get_skill", {"name": "pricing", "section": "Overview"})
+        self.assertEqual(result["section"], "Overview")
+        self.assertIn("fiscal_year_summary", result["content"])
+        self.assertNotIn("Details", result["content"])
+
+    def test_get_skill_unknown_section_errors(self):
+        resp = self.server.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "get_skill", "arguments": {"name": "pricing", "section": "Nope"}},
+            }
+        )
+        self.assertIn("error", resp)
+
+    def test_get_skill_template_variables(self):
+        result = self._tool("get_skill", {"name": "pricing"})
+        self.assertEqual(
+            set(result["metadata"]["template_variables"]),
+            {"fiscal_year_summary", "api_key"},
+        )
+
+    def test_fence_value(self):
+        result = self._tool(
+            "fence_value",
+            {"value": "ACV in Incremental_ACV__c", "source": "machine-discovered"},
+        )
+        self.assertEqual(
+            result["value"],
+            "[begin customer-specific data (machine-discovered, unverified)]\n"
+            "ACV in Incremental_ACV__c\n"
+            "[end customer-specific data]",
+        )
+
+    def test_fence_value_default_source(self):
+        result = self._tool("fence_value", {"value": "x"})
+        self.assertIn("machine-discovered", result["value"])
+
+    def test_require_filter(self):
+        gated = SkillsMCPServer(
+            SkillsLoader(self.skills),
+            require_filter=["api_key", "salesforce_connected"],
+        )
+        resp = gated.dispatch(
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
+        )
+        self.assertEqual(len(resp["result"]["resources"]), 1)
+
+    def test_require_filter_hides_unmet(self):
+        partial = SkillsMCPServer(
+            SkillsLoader(self.skills),
+            require_filter=["api_key", "unknown_capability"],
+        )
+        resp = partial.dispatch(
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
+        )
         self.assertEqual(resp["result"]["resources"], [])
 
 
