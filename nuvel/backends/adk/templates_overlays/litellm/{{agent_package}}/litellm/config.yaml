@@ -1,0 +1,51 @@
+# ── LiteLLM Proxy Configuration ─────────────────────────────────────
+# LiteLLM puts a supervision gateway between your agent and the LLM
+# providers: virtual keys, budgets, rate limits, fallbacks, spend
+# tracking, and OpenTelemetry tracing — all without touching agent code.
+#
+# Architecture: Agent → LiteLLM (supervision) → OpenRouter (routing) → Providers
+#   - LiteLLM handles per-customer policy (keys, budgets, rate limits)
+#   - OpenRouter handles provider routing (fallbacks, redundancy, billing)
+#   - Add direct provider entries below to bypass OpenRouter for specific models
+
+model_list:
+  # ── Default: route everything through OpenRouter ───────────────────
+  # One entry pass-through for all OpenRouter models. Add OPENROUTER_API_KEY
+  # to .env and LiteLLM forwards every model to OpenRouter automatically.
+  - model_name: openrouter/*
+    litellm_params:
+      model: openrouter/*
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ── Direct providers (optional, uncomment to bypass OpenRouter) ────
+  # Use these when you want direct billing or lower latency for specific
+  # models. Requires the corresponding API key in .env.
+  #
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+  # - model_name: claude-sonnet-4-20250514
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-4-20250514
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  # - model_name: gemini-2.5-flash
+  #   litellm_params:
+  #     model: gemini/gemini-2.5-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+
+general_settings:
+  master_key: sk-litellm-master-{{agent_name}}
+  database_url: os.environ/DATABASE_URL                # Postgres connection (virtual key storage)
+
+litellm_settings:
+  # ── OpenTelemetry ─────────────────────────────────────────────────
+  callbacks: ["otel"]                                   # generic OTel exporter
+  otel: true
+  service_name: litellm-{{agent_name}}
+
+# ── Router settings ─────────────────────────────────────────────────
+router_settings:
+  num_retries: 2
+  allowed_fails: 3
+  enable_pre_call_checks: true
