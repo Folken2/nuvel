@@ -23,6 +23,8 @@ Subcommands:
         Open the local web dashboard over your trace logs.
     nuvel mcp serve [--skills-dir <dir>]
         Serve a skills hub to MCP clients over stdio (resources + tools).
+    nuvel acp serve [--dev]
+        Run the meta-agent as an ACP v2 subprocess over stdio.
     nuvel bots list|create|delete|chat|info|logs|send
         Manage and talk to Hermes-backed bots.
     nuvel fleet deploy|list|status|destroy
@@ -403,6 +405,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     from nuvel.commands import mcp_serve
     mcp_serve.register(sub)
+
+    from nuvel.commands import acp_serve
+    acp_serve.register(sub)
 
     # These subcommands pull optional third-party deps (fastapi/uvicorn, the
     # eval stack). Register them when importable; skip cleanly when they're not,
