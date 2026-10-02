@@ -41,6 +41,25 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Scope to a single theme/role (e.g. 'hr', 'sales'). "
              "When set, only skills in that theme are exposed.",
     )
+    p_serve.add_argument(
+        "--require",
+        action="append",
+        default=None,
+        metavar="CAPABILITY",
+        help="Only expose skills whose 'requires' frontmatter declares every "
+             "listed capability (Airbyte-style gating). Repeatable, and each "
+             "value may be comma-separated (e.g. --require api_key "
+             "--require salesforce_connected).",
+    )
+    p_serve.add_argument(
+        "--with-org-memory",
+        default=None,
+        metavar="DSN_OR_PATH",
+        help="Resolve {{ var_name }} placeholders in skills against "
+             "OrgMemoryService. Accepts a Postgres connection string (contains "
+             "'://') or a path to an org-graph YAML file; otherwise falls back "
+             "to NUVEL_ORG_MEMORY_DSN / NUVEL_ORG_GRAPH_PATH.",
+    )
     p_serve.set_defaults(func=_cmd_mcp_serve)
 
 
@@ -55,6 +74,17 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    server = SkillsMCPServer(loader, theme=args.theme)
+    require_filter = None
+    if args.require:
+        require_filter = []
+        for value in args.require:
+            require_filter.extend(v.strip() for v in value.split(",") if v.strip())
+
+    server = SkillsMCPServer(
+        loader,
+        theme=args.theme,
+        require_filter=require_filter,
+        with_org_memory=args.with_org_memory,
+    )
     server.serve()
     return 0

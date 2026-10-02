@@ -10,7 +10,9 @@ Resources:
 
 Tools:
     search_skills        Search skills by keyword in name/description.
-    get_skill            Fetch a skill's full content + metadata by name.
+    get_skill            Fetch a skill's full content + metadata by name, or a
+                         single ``## section`` (section-scoped reading).
+    fence_value          Wrap a value in provenance-fencing markers.
     propose_improvement  File a structured GitHub issue proposing a skill fix.
 """
 
@@ -18,12 +20,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 from typing import IO
 
 from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
+from nuvel.mcp import feedback
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "nuvel-skills", "version": "1.0.0"}
@@ -72,6 +76,119 @@ def _summarize(text: str, limit: int = 60) -> str:
     return first
 
 
+# Airbyte-style template placeholder: {{ fiscal_year_summary }}.
+TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*\}\}")
+
+
+def detect_template_variables(text: str) -> list[str]:
+    """Return the unique ``{{ var_name }}`` placeholders found in ``text``."""
+    seen: list[str] = []
+    for match in TEMPLATE_VAR_RE.finditer(text):
+        name = match.group(1)
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def fence_value(value: str, source: str) -> str:
+    """Wrap a value in Airbyte-style provenance-fencing markers.
+
+    The markers tell a reading agent that the enclosed value is a
+    machine-discovered / user-supplied fact, not an instruction, so a poisoned
+    value can't be mistaken for a directive.
+    """
+    begin = f"[begin customer-specific data ({source}, unverified)]"
+    end = "[end customer-specific data]"
+    return f"{begin}\n{value}\n{end}"
+
+
+def extract_section(content: str, section: str) -> str | None:
+    """Return the ``## {section}`` subsection of a SKILL.md body.
+
+    Includes the heading and any sub-headings/body up to (but not including)
+    the next ``##`` heading of the same level. Returns ``None`` when the
+    section heading isn't found.
+    """
+    target = f"## {section}"
+    lines = content.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.strip() == target:
+            start = i
+            break
+    if start is None:
+        return None
+    collected: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("## ") and stripped != target:
+            break
+        collected.append(line)
+    return "\n".join(collected).strip()
+
+
+def _substitute(content: str, var: str, value: str) -> str:
+    """Replace ``{{ var }}`` (any whitespace) with ``value`` in ``content``."""
+    pattern = re.compile(r"\{\{\s*" + re.escape(var) + r"\s*\}\}")
+    return pattern.sub(value, content)
+
+
+def _memory_app_name() -> str:
+    return os.environ.get("NUVEL_MCP_APP_NAME", "nuvel-skills")
+
+
+def _memory_user_id() -> str:
+    return os.environ.get("NUVEL_MCP_USER_ID", "default")
+
+
+def _memory_kwargs(flag_value: str | None) -> dict:
+    """Map the ``--with-org-memory`` value to OrgMemoryService factory kwargs.
+
+    A value containing ``://`` is treated as a Postgres DSN; anything else is
+    treated as an org-graph YAML path. ``None`` for a key lets the factory fall
+    back to the corresponding environment variable.
+    """
+    if not flag_value:
+        return {"dsn": None, "org_graph_path": None}
+    if "://" in flag_value:
+        return {"dsn": flag_value, "org_graph_path": None}
+    return {"dsn": None, "org_graph_path": flag_value}
+
+
+def _memory_response_text(response) -> str | None:
+    """Best-effort plain-text extraction from an ADK SearchMemoryResponse.
+
+    Uses ``getattr`` throughout so the stdlib-only module never has to import
+    ``google.genai`` types directly.
+    """
+    memories = getattr(response, "memories", None) or []
+    for memory in memories:
+        content = getattr(memory, "content", None)
+        parts = getattr(content, "parts", None) or []
+        texts = [getattr(p, "text", "") for p in parts if getattr(p, "text", None)]
+        joined = "\n".join(t for t in texts if t).strip()
+        if joined:
+            return joined
+    return None
+
+
+async def _resolve_templates_async(content, variables, build_service, kwargs):
+    """Resolve placeholders against a freshly-built OrgMemoryService (async)."""
+    service = await build_service(migrate=False, **kwargs)
+    resolved = content
+    for var in variables:
+        response = await service.search_memory(
+            app_name=_memory_app_name(),
+            user_id=_memory_user_id(),
+            query=var.replace("_", " ").replace("-", " "),
+            synthesize=False,
+        )
+        value = _memory_response_text(response)
+        if value:
+            resolved = _substitute(resolved, var, value)
+    return resolved
+
+
 def _improvement_issue(skill_name, current_version, issue, suggested_fix, harness):
     """Build the (title, body) for a skill-improvement GitHub issue."""
     title = "[Skill Improvement] {} v{} — {}".format(
@@ -104,12 +221,27 @@ def _improvement_issue(skill_name, current_version, issue, suggested_fix, harnes
 class SkillsMCPServer:
     """MCP JSON-RPC server backed by a :class:`SkillsLoader`."""
 
-    def __init__(self, loader: SkillsLoader, theme: str | None = None):
+    def __init__(
+        self,
+        loader: SkillsLoader,
+        theme: str | None = None,
+        require_filter: list[str] | None = None,
+        with_org_memory: str | None = None,
+    ):
         self.loader = loader
         # When set, discovery (resources/list, search_skills, get_skill) is
         # scoped to this single theme. resources/read is unaffected — scoping
         # is about discovery, not access control.
         self.theme = theme
+        # When set, discovery filters to skills whose ``requires`` frontmatter
+        # declares every capability in the list (Airbyte-style gating). A skill
+        # with no ``requires`` is hidden when the filter is active because it
+        # can't demonstrate the required capabilities.
+        self.require_filter = require_filter
+        # Optional DSN / org-graph path enabling OrgMemoryService template
+        # resolution. Imported lazily so the default (stdlib-only) path never
+        # touches ADK or asyncio.
+        self.with_org_memory = with_org_memory
         self._methods = {
             "initialize": self.handle_initialize,
             "resources/list": self.handle_resources_list,
@@ -121,14 +253,26 @@ class SkillsMCPServer:
             "search_skills": self.tool_search_skills,
             "get_skill": self.tool_get_skill,
             "propose_improvement": self.tool_propose_improvement,
+            "fence_value": self.tool_fence_value,
+            "record_feedback": self.tool_record_feedback,
+            "check_skill_health": self.tool_check_skill_health,
         }
 
     # --- Scoping helpers -----------------------------------------------------
 
+    def _satisfies_requirements(self, theme: str, entry: dict) -> bool:
+        """True when the entry's ``requires`` cover every gating capability."""
+        if not self.require_filter:
+            return True
+        required = set(self.loader.entry_requires(theme, entry))
+        return set(self.require_filter).issubset(required)
+
     def _scoped_entries(self):
-        """Yield ``(theme, entry)`` honoring the configured theme scope."""
+        """Yield ``(theme, entry)`` honoring theme scope and requirements."""
         for theme, entry in self.loader.iter_entries():
             if self.theme is not None and theme != self.theme:
+                continue
+            if not self._satisfies_requirements(theme, entry):
                 continue
             yield theme, entry
 
@@ -207,9 +351,43 @@ class SkillsMCPServer:
                             "name": {
                                 "type": "string",
                                 "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
-                            }
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": (
+                                    "Optional section heading to read instead of the whole "
+                                    "SKILL.md (e.g. 'Step-by-step instructions'). Returns "
+                                    "only that subsection."
+                                ),
+                            },
                         },
                         "required": ["name"],
+                    },
+                },
+                {
+                    "name": "fence_value",
+                    "description": (
+                        "Wrap a value in provenance-fencing markers so a "
+                        "machine-discovered or user-supplied fact can't be mistaken "
+                        "for an instruction."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "description": "The value to fence.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": (
+                                    "Where the value came from "
+                                    "(e.g. 'machine-discovered', 'user-supplied')."
+                                ),
+                                "default": "machine-discovered",
+                            },
+                        },
+                        "required": ["value"],
                     },
                 },
                 {
@@ -245,6 +423,88 @@ class SkillsMCPServer:
                             },
                         },
                         "required": ["skill_name", "current_version", "issue", "suggested_fix"],
+                    },
+                },
+                {
+                    "name": "record_feedback",
+                    "description": (
+                        "Record structured feedback after using a skill in the field. "
+                        "Tracks outcome, severity, what worked and what didn't — used "
+                        "by check_skill_health to surface quality trends."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "skill_name": {
+                                "type": "string",
+                                "description": "Name of the skill this feedback is for.",
+                            },
+                            "skill_version": {
+                                "type": "string",
+                                "description": "Version from the SKILL.md frontmatter (or 'unknown').",
+                            },
+                            "outcome": {
+                                "type": "string",
+                                "enum": ["success", "partial", "failure", "blocked"],
+                                "description": "How well the skill worked: success (completed task), partial (needed tweaks), failure (wrong), blocked (couldn't proceed).",
+                            },
+                            "severity": {
+                                "type": "string",
+                                "enum": ["blocking", "misleading", "minor"],
+                                "description": "Impact: blocking (can't use skill), misleading (wrong info), minor (cosmetic).",
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": "Which ## heading(s) the feedback applies to, comma-separated.",
+                            },
+                            "what_worked": {
+                                "type": "string",
+                                "description": "What the skill got right (optional).",
+                            },
+                            "what_didnt": {
+                                "type": "string",
+                                "description": "What went wrong — missing steps, outdated commands, wrong assumptions.",
+                            },
+                            "proposed_patch": {
+                                "type": "string",
+                                "description": "Suggested fix or replacement text (optional).",
+                            },
+                            "harness": {
+                                "type": "string",
+                                "description": "Agent/harness you're running (e.g. 'hermes', 'claude-code'). Defaults to 'unknown'.",
+                            },
+                            "user_corrected": {
+                                "type": "boolean",
+                                "description": "Whether the user had to manually correct the skill's output.",
+                            },
+                            "attribution": {
+                                "type": "string",
+                                "description": "Who or what triggered the feedback (optional).",
+                            },
+                            "correlation_id": {
+                                "type": "string",
+                                "description": "External correlation id linking this feedback to a run/task (optional).",
+                            },
+                        },
+                        "required": ["skill_name", "skill_version", "outcome", "severity", "what_didnt"],
+                    },
+                },
+                {
+                    "name": "check_skill_health",
+                    "description": (
+                        "Check a skill's health from its feedback history: outcome "
+                        "counts, trend, flagged sections, and a recommendation "
+                        "('ok', 'review_before_use', or 'use_cautiously')."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "skill_name": {
+                                "type": "string",
+                                "description": "Name of the skill to check.",
+                            },
+                        },
+                        "required": ["skill_name"],
                     },
                 },
             ]
@@ -291,6 +551,7 @@ class SkillsMCPServer:
         name = (args.get("name") or "").strip()
         if not name:
             raise McpError(INVALID_PARAMS, "Missing required argument 'name'")
+        section = (args.get("section") or "").strip() or None
 
         wanted_theme, wanted_name = (None, name)
         if "/" in name:
@@ -311,15 +572,89 @@ class SkillsMCPServer:
         except SkillsError:
             raise McpError(INVALID_PARAMS, f"SKILL.md not available for {name}")
 
-        return {
+        metadata = parse_frontmatter(content)
+
+        # Section-scoped reading: return only the requested subsection.
+        body = content
+        if section is not None:
+            scoped = extract_section(content, section)
+            if scoped is None:
+                raise McpError(INVALID_PARAMS, f"Section not found: {section}")
+            body = scoped
+
+        # Template-variable detection (progressive disclosure of placeholders).
+        variables = detect_template_variables(body)
+        metadata["template_variables"] = variables
+
+        result = {
             "uri": f"skill://{theme}/{entry['name']}",
             "theme": theme,
             "name": entry["name"],
             "description": entry.get("description", ""),
             "author": entry.get("author", ""),
-            "metadata": parse_frontmatter(content),
-            "content": content,
+            "metadata": metadata,
+            "content": body,
         }
+        if section is not None:
+            result["section"] = section
+
+        # Health signals from feedback history (best-effort, no feedback = "ok").
+        result["health"] = feedback.compute_health(self.loader.skills_dir, entry["name"])
+
+        # Optional OrgMemoryService resolution (ADK-backed, best-effort).
+        if variables and self.with_org_memory:
+            resolved = self._resolve_templates(body, variables)
+            if resolved is not None:
+                result["resolved_content"] = resolved
+
+        return result
+
+    def tool_fence_value(self, args):
+        value = args.get("value")
+        if not isinstance(value, str) or not value.strip():
+            raise McpError(INVALID_PARAMS, "Missing required argument 'value'")
+        source = (args.get("source") or "machine-discovered").strip()
+        return {
+            "value": fence_value(value, source),
+            "source": source,
+        }
+
+    def tool_record_feedback(self, args):
+        """Record structured feedback after a skill is used."""
+        return feedback.write_feedback(self.loader.skills_dir, args)
+
+    def tool_check_skill_health(self, args):
+        """Check a skill's health from its feedback history."""
+        skill_name = (args.get("skill_name") or "").strip()
+        if not skill_name:
+            raise McpError(INVALID_PARAMS, "Missing required argument 'skill_name'")
+        return feedback.compute_health(self.loader.skills_dir, skill_name)
+
+    def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
+        """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.
+
+        Imports ADK/``asyncio`` lazily so the default (stdlib-only) path never
+        touches them. Returns the resolved content, or ``None`` when resolution
+        can't run (missing dependencies / memory not configured), in which case
+        the caller falls back to raw content plus the ``template_variables``
+        hint.
+        """
+        try:
+            import asyncio
+
+            from nuvel.memory.factory import build_default_service
+        except Exception as exc:  # ADK stack not installed
+            log(f"OrgMemoryService unavailable (--with-org-memory): {exc}")
+            return None
+
+        kwargs = _memory_kwargs(self.with_org_memory)
+        try:
+            return asyncio.run(
+                _resolve_templates_async(content, variables, build_default_service, kwargs)
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort resolution
+            log(f"OrgMemoryService resolution failed: {exc}")
+            return None
 
     def tool_propose_improvement(self, args):
         skill_name = (args.get("skill_name") or "").strip()
