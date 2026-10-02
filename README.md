@@ -117,6 +117,21 @@ bots:
         task: "Review yesterday's logs"
 ```
 
+## Agent Plugins
+
+Agent Plugins ([agent-plugins.org](https://agent-plugins.org) v1.0.0) for integrating Nuvel OrgMemory into major AI coding and chat harnesses. Six plugins live under `plugins/`:
+
+| Plugin | Harness | MCP Support | Skills |
+|--------|---------|-------------|--------|
+| [codex-plugin](./plugins/codex-plugin/) | OpenAI Codex CLI | ✅ streamable-http | setup, agent, review |
+| [claude-code-plugin](./plugins/claude-code-plugin/) | Anthropic Claude Code CLI | ✅ stdio | setup, agent, review |
+| [chatgpt-plugin](./plugins/chatgpt-plugin/) | OpenAI ChatGPT (web/app) | ❌ | setup, workflows |
+| [claude-plugin](./plugins/claude-plugin/) | Anthropic Claude (web/app) | ❌ | setup, workflows |
+| [grokbot-plugin](./plugins/grokbot-plugin/) | xAI GrokBot (web/app/API) | ❌ | setup, workflows |
+| [cursor-plugin](./plugins/cursor-plugin/) | Cursor IDE | ✅ stdio | setup, agent, review |
+
+Drop a plugin into your agent's plugin directory, or reference the skills from your agent's skill loader — each is self-contained, independently versioned, and follows the agent-plugins.org packaging standard. See `plugins/README.md` for full docs.
+
 ## Quick Install
 
 **Use the skills with Claude Code:**

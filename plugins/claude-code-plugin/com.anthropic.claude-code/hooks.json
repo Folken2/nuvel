@@ -1,0 +1,57 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @nuvel/claude-code-hook check-patterns"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash(git:commit:*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @nuvel/claude-code-hook update-orgmemory --auto"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash(gh:pr:create:*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @nuvel/claude-code-hook log-pr-orgmemory"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @nuvel/claude-code-hook heartbeat"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @nuvel/claude-code-hook session-summary --orgmemory"
+          }
+        ]
+      }
+    ]
+  }
+}

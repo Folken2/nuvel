@@ -1,0 +1,35 @@
+# Nuvel Integration
+You are connected to Nuvel OrgMemory via the nuvel-orgmemory MCP server.
+This provides access to our team's knowledge graph: architecture decisions, 
+coding standards, component docs, and past incidents.
+
+## Core Directives
+1. **Before implementing**: Check nuvel-orgmemory for existing architecture 
+   decisions and patterns relevant to the task.
+2. **During implementation**: Follow coding standards from OrgMemory. 
+   If the standard is unclear, query OrgMemory for clarification.
+3. **After implementation**: Update OrgMemory with new decisions, patterns, 
+   or learnings. Flag if a new ADR is needed.
+
+## Code Style
+- Error handling: Always handle errors explicitly. No silent failures.
+- Type safety: Use strict types. No `any` without justification.
+- Testing: Every new function/module requires tests.
+- Naming: Follow project conventions (check OrgMemory > Coding Standards).
+
+## Project Architecture
+<!-- Keep this section in sync with OrgMemory component docs -->
+
+## MCP Tools Available
+- **nuvel-orgmemory**: Query team knowledge, search ADRs, retrieve coding standards
+
+## Response Pattern
+When I ask you to implement something:
+1. First, silently query OrgMemory for relevant context
+2. Implement following documented patterns
+3. After completion, note what should be updated in OrgMemory
+
+## Commit Conventions
+- Format: <type>(<scope>): <description>
+- Reference ADRs in body: "Refs ADR-[N] ([description])"
+- Types: feat, fix, refactor, docs, test, chore, perf, security

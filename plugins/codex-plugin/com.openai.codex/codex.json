@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openai/codex/main/schemas/config.schema.json",
+  "model": "gpt-5",
+  "approval_policy": "on-request",
+  "mcp_servers": {
+    "nuvel-orgmemory": {
+      "type": "streamable-http",
+      "url": "https://api.nuvel.dev/mcp/orgmemory",
+      "headers": {
+        "Authorization": "Bearer ${NUVEL_API_KEY}",
+        "X-Nuvel-Org-Id": "${NUVEL_ORG_ID}"
+      }
+    }
+  },
+  "instructions": {
+    "path": ".codex/instructions.md"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash(git:commit:*)",
+        "command": "echo 'Nuvel: Remember to update OrgMemory with new decisions or patterns from this commit.'"
+      }
+    ]
+  }
+}
