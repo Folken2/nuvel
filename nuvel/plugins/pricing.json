@@ -37,6 +37,10 @@
     "input": 0.00000015,
     "output": 0.0000006
   },
+  "google/gemini-3-flash-preview": {
+    "input": 0.0000005,
+    "output": 0.000003
+  },
   "deepseek/deepseek-r1": {
     "input": 0.00000055,
     "output": 0.0000022
