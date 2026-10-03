@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `validate_agent` now compiles every Python file in the agent (syntax only, nothing runs) and reports syntax errors with file and line.
+- Public names for embedding nuvel's builder tools in another ADK app: `nuvel.tools.validate_tool.validate_agent_dir` and `nuvel.tools.file_tools.resolve_safe_path`. The old private names stay as aliases.
+
+### Fixed
+
+- `CostGuardPlugin` kept the running cost on the plugin instance, which a server shares across every session: `session_cost_usd` summed all users, and `COST_GUARD_BUDGET` blocked everyone once the server-wide total passed it. The total now lives in each session's state. Fixed in the meta-agent chain and in the generated-agent template.
+- `CostGuardPlugin` and `ContextWindowPlugin` kept the model of the call in flight on the instance, so concurrent sessions could price or size a call against another session's model. The model is now keyed by invocation and agent.
+- The meta-agent `CachePlugin` served `read_file`, `list_files` and `validate_agent` results from before a `write_file`, `scaffold_agent` or `install_skill` call for up to five minutes; those tools now clear the session's cache.
+- `plugins/context_windows.json` was missing from the wheel, so an installed `ContextWindowPlugin` had no window sizes.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added

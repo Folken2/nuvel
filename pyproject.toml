@@ -78,6 +78,7 @@ include = ["nuvel*"]
     "config/*",
     "prompt/*",
     "plugins/pricing.json",
+    "plugins/context_windows.json",
 ]
 "nuvel.dashboard" = ["fixtures/*.jsonl", "templates/*.html", "static/*"]
 
