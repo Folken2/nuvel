@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `validate_agent` now compiles every Python file in the agent (syntax only, nothing runs) and reports syntax errors with file and line.
+- Public names for embedding nuvel's builder tools in another ADK app: `nuvel.tools.validate_tool.validate_agent_dir` and `nuvel.tools.file_tools.resolve_safe_path`. The old private names stay as aliases.
+
+### Fixed
+
+- `CostGuardPlugin` kept the running cost on the plugin instance, which a server shares across every session: `session_cost_usd` summed all users, and `COST_GUARD_BUDGET` blocked everyone once the server-wide total passed it. The total now lives in each session's state. Fixed in the meta-agent chain and in the generated-agent template.
+- `CostGuardPlugin` and `ContextWindowPlugin` kept the model of the call in flight on the instance, so concurrent sessions could price or size a call against another session's model. The model is now keyed by invocation and agent.
+- The meta-agent `CachePlugin` served `read_file`, `list_files` and `validate_agent` results from before a `write_file`, `scaffold_agent` or `install_skill` call for up to five minutes; those tools now clear the session's cache.
+- A latched guardrail halt never cleared: the model is short-circuited while latched, so it could never call `acknowledge_halt`, and every later turn in the session came back `[halted: …]`. The halt now stops the turn it fired in, and the user's next message clears it and resets the guard counters. Fixed in `nuvel/guardrails/` and the generated-agent template.
+- Scaffolds made from an installed nuvel (PyPI or git) had no `.env.example`, `.dockerignore`, `.gitignore` or `.gitkeep` files, because the `package-data` globs never match a leading dot. Added dotfile patterns and `tests/test_packaging.py`, which checks every template and skill file is covered.
+- `plugins/context_windows.json` was missing from the wheel, so an installed `ContextWindowPlugin` had no window sizes.
+- `google/gemini-3-flash-preview` had no entry in `pricing.json` or `context_windows.json`, so CostGuard never counted its cost (and a budget never triggered) and ContextWindow reported no percentages for it. Added to the meta-agent and template copies, priced from OpenRouter.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added

@@ -20,7 +20,8 @@ from google.genai.types import Content, Part
 # The latched halt reason (falsy/absent means "not halted").
 HALT_REASON_STATE_KEY = "halt_reason"
 # Once-per-halt flag: set the first time the halt envelope is handed back so a
-# wrapper can tell a fresh halt from one already surfaced to the user.
+# wrapper can tell a fresh halt from one already surfaced to the user. Holds
+# the id of the invocation that surfaced it (``True`` when none is known).
 HALT_HANDOFF_DELIVERED_STATE_KEY = "__halt_handoff_delivered__"
 
 
@@ -39,12 +40,23 @@ async def halt_consumer_callback(
     Returns the halt envelope (an ``LlmResponse``) so ADK skips the actual
     model invocation; returns ``None`` when nothing is latched, letting the
     normal model call proceed.
+
+    The halt stops the turn it fired in. Once its envelope has reached the user,
+    their next message (a new invocation) is the acknowledgement: the latch and
+    the guards' counters are cleared and the model runs again. Without this the
+    session could never recover, since the model never runs while latched and
+    so can never call the ``acknowledge_halt`` tool itself.
     """
     state = callback_context.state
     reason = state.get(HALT_REASON_STATE_KEY)
     if not reason:
         return None
-    state[HALT_HANDOFF_DELIVERED_STATE_KEY] = True
+    invocation_id = getattr(callback_context, "invocation_id", None) or None
+    delivered_in = state.get(HALT_HANDOFF_DELIVERED_STATE_KEY)
+    if invocation_id and isinstance(delivered_in, str) and delivered_in != invocation_id:
+        acknowledge_halt_tool(state)
+        return None
+    state[HALT_HANDOFF_DELIVERED_STATE_KEY] = invocation_id or True
     return LlmResponse(content=halt_content(reason))
 
 
