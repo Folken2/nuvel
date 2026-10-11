@@ -505,6 +505,43 @@ def test_keyed_rate_limiter_is_bounded(utils_pkg, request):
     assert not limiter.allow("c")
 
 
+@pytest.mark.parametrize("utils_pkg", ["nuvel.utils", "template"])
+def test_keyed_rate_limiter_caps_the_total_across_keys(utils_pkg, request):
+    """Per-key buckets alone let a caller mint fresh keys (sessions) for a
+    full bucket each; a total bucket bounds the server-wide rate anyway."""
+    if utils_pkg == "template":
+        utils_pkg = request.getfixturevalue("template_pkg") + ".utils"
+    resilience = _mod(utils_pkg, "resilience")
+    limiter = resilience.KeyedRateLimiter(
+        rate=0.001, burst=1, total_rate=0.001, total_burst=3
+    )
+    allowed = [limiter.allow(f"key-{i}") for i in range(10)]
+    assert allowed.count(True) == 3
+    # A denial by the total cap leaves the key's own bucket untouched.
+    assert resilience.KeyedRateLimiter(
+        rate=0.001, burst=1, total_rate=0.001, total_burst=0
+    ).allow("k") is False
+
+
+async def test_rate_limit_caps_fresh_sessions_server_wide(plugins_pkg, monkeypatch):
+    plugin_mod = _mod(plugins_pkg, "resilience_plugin")
+    resilience = importlib.import_module(plugin_mod.__name__.rsplit(".", 2)[0] + ".utils.resilience")
+    assert resilience.tool_rate_limiter.total is not None  # shipped with a cap
+    monkeypatch.setattr(
+        plugin_mod,
+        "tool_rate_limiter",
+        resilience.KeyedRateLimiter(rate=0.001, burst=5, total_rate=0.001, total_burst=10),
+    )
+    plugin = plugin_mod.ResiliencePlugin()
+    results = [
+        await plugin.before_tool_callback(
+            tool=_tool(), tool_args={}, tool_context=_tool_ctx(_inv(f"fresh-{i}"))
+        )
+        for i in range(50)
+    ]
+    assert sum(r is None for r in results) == 10
+
+
 # ── Both chains stay in sync ─────────────────────────────────────────
 
 _IDENTICAL_FILES = [

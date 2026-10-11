@@ -462,6 +462,8 @@ The consolidated JSON includes: full system prompt, user input, LLM thinking/rea
 |----------|---------|-------------|
 | `TOOL_RATE_LIMIT` | `5.0` | Tool calls per second, per session (token bucket) |
 | `TOOL_RATE_BURST` | `20` | Burst capacity for tool rate limiting, per session |
+| `TOOL_RATE_LIMIT_TOTAL` | `50.0` | Tool calls per second across all sessions (caps callers who open many sessions) |
+| `TOOL_RATE_BURST_TOTAL` | `200` | Burst capacity across all sessions |
 | `PROTECTED_TOOLS` | (none) | Comma-separated tools with circuit breaker |
 | `CONTEXT_FILTER_KEEP` | `10` | Prior invocations to keep in context window |
 
