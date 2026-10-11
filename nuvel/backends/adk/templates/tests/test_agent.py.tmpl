@@ -11,7 +11,8 @@ Usage:
 How it works:
     - RecordingsPlugin captures LLM requests/responses and tool calls to YAML
     - ReplayPlugin replays those recordings deterministically
-    - Both are activated via session state keys (dormant otherwise)
+    - Both are activated via session state keys, and only while
+      NUVEL_RECORD_REPLAY=1 (this module sets it; servers leave it off)
 
 Adding new test cases:
     1. Add a new test method with a unique recording directory
@@ -42,6 +43,11 @@ from google.genai import types
 
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 IS_RECORD_MODE = os.getenv("RECORD", "").lower() in ("true", "1", "yes")
+
+# The chain's record/replay plugins ignore their session-state config unless
+# this is set, because on a server that state is client input. A test run is
+# a trusted caller, so switch them on here.
+os.environ.setdefault("NUVEL_RECORD_REPLAY", "1")
 
 # Import the agent
 from {{agent_package}}.agent import root_agent

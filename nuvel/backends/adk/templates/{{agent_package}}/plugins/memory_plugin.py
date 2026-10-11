@@ -14,9 +14,10 @@ import logging
 import os
 from typing import Optional
 
-from google.adk.agents import LlmAgent
-from google.adk.models import LlmRequest
+from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.plugins.base_plugin import BasePlugin
+from google.genai import types
 
 from ..state.memory import load_all_memory, memory_stats
 
@@ -34,9 +35,9 @@ class MemoryPlugin(BasePlugin):
     async def before_agent_callback(
         self,
         *,
-        invocation_context,
-        **kwargs,
-    ) -> Optional[dict]:
+        agent: BaseAgent,
+        callback_context: CallbackContext,
+    ) -> Optional[types.Content]:
         """Log memory stats at the start of each agent invocation."""
         if not _MEMORY_ENABLED:
             return None

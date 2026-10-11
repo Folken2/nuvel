@@ -20,10 +20,9 @@ from google.adk.plugins.reflect_retry_tool_plugin import (
 from google.adk.plugins.save_files_as_artifacts_plugin import (
     SaveFilesAsArtifactsPlugin,
 )
-from google.adk.cli.plugins.recordings_plugin import RecordingsPlugin
-from google.adk.cli.plugins.replay_plugin import ReplayPlugin
 
 from .cache_plugin import CachePlugin
+from .record_replay_plugin import GatedRecordingsPlugin, GatedReplayPlugin
 from .console_logger_plugin import ConsoleLoggerPlugin
 from .tool_events import ToolEventsPlugin
 from .resilience_plugin import ResiliencePlugin
@@ -56,8 +55,10 @@ self_healing = ReflectAndRetryToolPlugin(
     tracking_scope=TrackingScope.INVOCATION,
 )
 save_files = SaveFilesAsArtifactsPlugin()
-recordings = RecordingsPlugin()
-replay = ReplayPlugin()
+# ADK conformance record/replay. Inert unless NUVEL_RECORD_REPLAY=1: the
+# config they act on is session state, which any API caller can set.
+recordings = GatedRecordingsPlugin()
+replay = GatedReplayPlugin()
 skill_curator = SkillCuratorPlugin()
 # Owns the fire-and-forget lifecycle for the memory review fork and drains
 # in-flight forks at shutdown. No-op when nothing has been spawned.

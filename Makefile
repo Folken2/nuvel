@@ -22,7 +22,7 @@ install:
 
 # ADK dev UI with all plugins loaded
 dev-ui:
-	adk web $(PLUGIN_FLAGS) .
+	NUVEL_RECORD_REPLAY=1 adk web $(PLUGIN_FLAGS) .
 
 # Development mode (DEV_MODE=true) via the nuvel CLI
 dev:

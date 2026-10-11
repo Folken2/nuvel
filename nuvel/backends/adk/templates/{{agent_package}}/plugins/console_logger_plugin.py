@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -134,27 +135,55 @@ def _out(*parts: str) -> None:
         print(safe, file=sys.stderr, flush=True)
 
 
+def _call_key(tool: BaseTool, tool_context: "ToolContext") -> str:
+    """Identifies one tool call, so parallel calls of a tool time separately."""
+    return getattr(tool_context, "function_call_id", None) or tool.name
+
+
 # ── Plugin ──────────────────────────────────────────────────────────
 
 
+# Runs whose after_run never fired are dropped oldest-first past this many.
+_MAX_OPEN_RUNS = 1024
+
+
+@dataclass
+class _ConsoleRun:
+    """Counters for one invocation's DONE line."""
+
+    start: float = 0.0
+    tool_count: int = 0
+    llm_count: int = 0
+    tool_starts: dict[str, float] = field(default_factory=dict)
+
+
 class ConsoleLoggerPlugin(BasePlugin):
-    """Pretty-prints all agent lifecycle events to the terminal."""
+    """Pretty-prints all agent lifecycle events to the terminal.
+
+    One instance serves every session on a server, so counters are kept
+    per invocation.
+    """
 
     def __init__(self) -> None:
         super().__init__(name="console_logger")
-        self._run_start: float = 0
-        self._tool_count: int = 0
-        self._llm_count: int = 0
-        self._current_agent: str = ""
+        self._runs: dict[str, _ConsoleRun] = {}
+
+    def _run_for(self, context: Any) -> _ConsoleRun:
+        invocation_id = getattr(context, "invocation_id", None)
+        run = self._runs.get(invocation_id)
+        if run is None:
+            run = self._runs[invocation_id] = _ConsoleRun(start=time.time())
+            while len(self._runs) > _MAX_OPEN_RUNS:
+                self._runs.pop(next(iter(self._runs)))
+        return run
 
     # ── Run lifecycle ───────────────────────────────────────────────
 
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> Optional[types.Content]:
-        self._run_start = time.time()
-        self._tool_count = 0
-        self._llm_count = 0
+        self._runs.pop(invocation_context.invocation_id, None)
+        self._run_for(invocation_context)
 
         session_id = invocation_context.session.id if invocation_context.session else "?"
         short_id = session_id[:8] if len(session_id) > 8 else session_id
@@ -172,14 +201,15 @@ class ConsoleLoggerPlugin(BasePlugin):
     async def after_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> None:
-        elapsed = time.time() - self._run_start if self._run_start else 0
+        run = self._runs.pop(invocation_context.invocation_id, None) or _ConsoleRun()
+        elapsed = time.time() - run.start if run.start else 0
 
         _out("")
         _out(_dim(_hr(_CH_HLINE_BOLD)))
         _out(
             f"  {_bold(_green(f'{_CH_CHECK} DONE'))}"
-            f"  {_dim(_CH_VLINE)}  tools: {_white(str(self._tool_count))}"
-            f"  {_dim(_CH_VLINE)}  llm calls: {_white(str(self._llm_count))}"
+            f"  {_dim(_CH_VLINE)}  tools: {_white(str(run.tool_count))}"
+            f"  {_dim(_CH_VLINE)}  llm calls: {_white(str(run.llm_count))}"
             f"  {_dim(_CH_VLINE)}  {_white(_ms(elapsed))}"
             f"  {_dim(_CH_VLINE)}  {_dim(_ts())}"
         )
@@ -191,7 +221,6 @@ class ConsoleLoggerPlugin(BasePlugin):
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
-        self._current_agent = agent.name
         _out(f"\n  {_magenta(_CH_ARROW_R)} {_bold('Agent')}: {_magenta(agent.name)}")
         return None
 
@@ -205,7 +234,7 @@ class ConsoleLoggerPlugin(BasePlugin):
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> Optional[LlmResponse]:
-        self._llm_count += 1
+        self._run_for(callback_context).llm_count += 1
         model = llm_request.model or "unknown"
         # Shorten long model names (e.g. openrouter/anthropic/claude-sonnet-4.6 -> claude-sonnet-4.6)
         short_model = model.rsplit("/", 1)[-1] if "/" in model else model
@@ -233,7 +262,7 @@ class ConsoleLoggerPlugin(BasePlugin):
             turn = _green(" (final)")
 
         _out(
-            f"  {_blue(_CH_DIAMOND_F)} {_bold('LLM Response')} {_dim('<-')} {_blue(self._current_agent)}"
+            f"  {_blue(_CH_DIAMOND_F)} {_bold('LLM Response')} {_dim('<-')} {_blue(callback_context.agent_name)}"
             f"{turn}  {parts_info}"
         )
         return None
@@ -261,7 +290,7 @@ class ConsoleLoggerPlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
     ) -> Optional[dict]:
-        tool_context.state[f"_tool_start_{tool.name}"] = time.time()
+        self._run_for(tool_context).tool_starts[_call_key(tool, tool_context)] = time.time()
         _out(f"\n  {_yellow(_CH_BOLT)} {_bold('Tool Call')} {_dim('->')} {_cyan(tool.name)}")
         if tool_args:
             _out(_format_args(tool_args))
@@ -275,11 +304,11 @@ class ConsoleLoggerPlugin(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> Optional[dict]:
-        self._tool_count += 1
+        run = self._run_for(tool_context)
+        run.tool_count += 1
         is_error = isinstance(result, dict) and result.get("status") == "error"
 
-        # Get duration from state
-        start = tool_context.state.get(f"_tool_start_{tool.name}")
+        start = run.tool_starts.pop(_call_key(tool, tool_context), None)
         duration = ""
         if start:
             duration = f"  {_dim(_ms(time.time() - start))}"
