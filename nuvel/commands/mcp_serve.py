@@ -25,8 +25,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         description=(
             "Start an MCP stdio server that exposes a skills hub as MCP "
             "resources (skill://{theme}/{name}) and tools (search_skills, "
-            "get_skill, propose_improvement). Set GITHUB_TOKEN to let "
-            "propose_improvement file issues against github.com/Folken2/skills."
+            "list_skills, list_themes, get_skill, install_skill, "
+            "propose_improvement). propose_improvement files issues against "
+            "github.com/Folken2/skills when GITHUB_TOKEN is set, otherwise "
+            "POSTs to NUVEL_FEEDBACK_URL, otherwise queues to "
+            "NUVEL_FEEDBACK_QUEUE (~/.nuvel/feedback-queue.jsonl)."
         ),
     )
     p_serve.add_argument(
