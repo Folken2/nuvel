@@ -144,9 +144,13 @@ class TestServerMethods(unittest.TestCase):
         result = self._tool("get_skill", {"name": "hr/onboarding"})
         self.assertEqual(result["theme"], "hr")
 
-    def test_propose_improvement_without_token_logs(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
+    def test_propose_improvement_without_token_queues(self):
+        # Without a token or relay the proposal is queued locally, never just
+        # logged to stderr.
+        queue = Path(self._tmp.name) / "queue.jsonl"
+        with mock.patch.dict(os.environ, {"NUVEL_FEEDBACK_QUEUE": str(queue)}):
             os.environ.pop("GITHUB_TOKEN", None)
+            os.environ.pop("NUVEL_FEEDBACK_URL", None)
             result = self._tool(
                 "propose_improvement",
                 {
@@ -157,8 +161,9 @@ class TestServerMethods(unittest.TestCase):
                     "harness": "unittest",
                 },
             )
-        self.assertEqual(result["status"], "logged")
+        self.assertEqual(result["status"], "queued")
         self.assertIn("onboarding", result["title"])
+        self.assertTrue(queue.is_file())
 
     def test_propose_improvement_missing_args(self):
         resp = self._call(

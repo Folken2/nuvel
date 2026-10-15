@@ -90,11 +90,23 @@ nuvel mcp serve [--skills-dir <dir>]
 It exposes:
 
 - **Resources** — `skill://{theme}/{name}` for every skill in the hub's `index.json`, returning the full `SKILL.md`.
-- **Tools** — `search_skills` (keyword search over name/description), `get_skill` (full content + frontmatter metadata by `name` or `theme/name`), and `propose_improvement` (files a structured GitHub issue proposing a skill fix).
+- **Tools**:
+  - `search_skills` — ranked search. Multi-word queries are AND-matched, case-insensitively, against name, description, theme and author (`-`, `_`, `.`, `/` count as spaces, so `installer transaction` finds `installer-transaction-design`). `include_body=true` also searches `SKILL.md` bodies and returns a `snippet`. Optional `theme`, `limit` (default 10, max 50).
+  - `list_skills` — paginated browse (`theme`, `limit` default 50 / max 200, `offset`); returns `total` for paging. An unknown theme returns an empty list.
+  - `list_themes` — every theme with its skill count and skill names.
+  - `get_skill` — full content, frontmatter `metadata` and top-level `version` by `name` or `theme/name`.
+  - `install_skill` — copies a skill's directory (`SKILL.md` plus supporting files) into `<target_dir>/<name>/`. `target_dir` defaults to `$NUVEL_SKILLS_INSTALL_DIR`, then `~/.claude/skills`. Plan-first: `confirm=false` (default) is read-only and reports `action` (`install` / `update` / `noop`); `confirm=true` writes through a staging directory, backs an existing copy up to `<dest>.backup` (never overwriting an existing backup), refuses symlinked or non-directory targets (`blocked`), and re-verifies the result. Statuses: `planned`, `installed`, `noop`, `blocked`, `failed`.
+  - `propose_improvement` — sends a skill-improvement proposal (`current_version` is optional and read from frontmatter when omitted). Every call returns a `feedback_id` and a `delivery` field.
 
-`propose_improvement` files issues against `github.com/Folken2/skills` using the `GITHUB_TOKEN` environment variable. Without a token it degrades gracefully: the proposal is logged to stderr and returned to the caller instead of being filed.
+`--theme <t>` scopes discovery (`resources/list`, `search_skills`, `list_skills`, `list_themes`, `get_skill`, `install_skill`) to one theme; `resources/read` stays unscoped.
 
-The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol, `skills_loader.py` = hub discovery/loading) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
+`propose_improvement` delivers via the first available path:
+
+1. `GITHUB_TOKEN` set — files an issue against `github.com/Folken2/skills` (`status: "filed"`, `delivery: "github"`, `issue_url`).
+2. `NUVEL_FEEDBACK_URL` set — POSTs the proposal as JSON to that relay (`status: "relayed"`, `delivery: "relay"`, plus the relay's `issue_url`/`id` if returned). If the relay fails, it falls through to the queue with a `relay_error`.
+3. Otherwise — appends one JSON line to `$NUVEL_FEEDBACK_QUEUE` (default `~/.nuvel/feedback-queue.jsonl`) and returns `status: "queued"`, `delivery: "queue"` and the `queue_path`. If even that write fails the call returns an error, never a success.
+
+The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol and tools, `skills_loader.py` = hub discovery/loading, `installer.py` = the plan/apply installer behind `install_skill`) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Role scoping
 
