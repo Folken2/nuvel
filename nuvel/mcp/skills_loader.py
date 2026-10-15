@@ -37,25 +37,90 @@ def resolve_skills_dir(base: str | os.PathLike[str] | None) -> Path:
     )
 
 
-def parse_frontmatter(text: str) -> dict:
-    """Minimal YAML-frontmatter parser for simple ``key: value`` pairs.
+def _parse_inline_list(value: str) -> list[str]:
+    """Parse a YAML flow list like ``[api_key, salesforce_connected]``.
+
+    Handles quoted items and empty lists. Used by :func:`parse_frontmatter` to
+    support ``requires: [a, b]`` without a YAML dependency.
+    """
+    inner = value[1:-1].strip()
+    if not inner:
+        return []
+    items: list[str] = []
+    for part in inner.split(","):
+        part = part.strip()
+        if part:
+            items.append(part.strip("\"'"))
+    return items
+
+
+def _next_content_index(lines: list[str], start: int) -> int:
+    """Index of the next non-blank, non-comment line at or after ``start``."""
+    i = start
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped and not stripped.startswith("#"):
+            return i
+        i += 1
+    return -1
+
+
+def parse_frontmatter(text: str) -> dict[str, object]:
+    """Minimal YAML-frontmatter parser for ``key: value`` pairs and lists.
 
     Returns a dict of the leading ``---`` fenced block (empty if none). Avoids a
-    YAML dependency; nested structures are ignored.
+    YAML dependency. Scalar values are returned as strings; list values — either
+    inline (``requires: [a, b]``) or block (``requires:`` followed by ``- a``
+    lines) — are returned as ``list[str]``. Nested mappings are not supported.
     """
-    meta: dict[str, str] = {}
+    meta: dict[str, object] = {}
     if not text.startswith("---"):
         return meta
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return meta
-    for line in lines[1:]:
-        if line.strip() == "---":
+
+    list_key: str | None = None
+    i = 1
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == "---":
             break
-        if ":" not in line or line.startswith((" ", "\t", "-")):
+        if not stripped or stripped.startswith("#"):
+            i += 1
             continue
-        key, _, value = line.partition(":")
-        meta[key.strip()] = value.strip()
+        # Continuation of a block list (e.g. "- item" under a preceding key).
+        if stripped.startswith("- ") and list_key is not None:
+            target = meta.get(list_key)
+            if isinstance(target, list):
+                target.append(stripped[2:].strip())
+            i += 1
+            continue
+        if ":" not in lines[i] or lines[i].startswith((" ", "\t")):
+            i += 1
+            continue
+        key, _, value = lines[i].partition(":")
+        key = key.strip()
+        if not key:
+            i += 1
+            continue
+        value = value.strip()
+        if value == "":
+            # An empty value followed by "- item" lines is a block list.
+            nxt = _next_content_index(lines, i + 1)
+            if nxt != -1 and lines[nxt].strip().startswith("- "):
+                meta[key] = []
+                list_key = key
+            else:
+                meta[key] = ""
+                list_key = None
+        elif value.startswith("[") and value.endswith("]"):
+            meta[key] = _parse_inline_list(value)
+            list_key = None
+        else:
+            meta[key] = value
+            list_key = None
+        i += 1
     return meta
 
 
@@ -129,3 +194,35 @@ class SkillsLoader:
             raise SkillsError(
                 f"SKILL.md not available for {theme}/{entry.get('name')}: {exc}"
             )
+
+    def read_frontmatter(self, theme: str, entry: dict) -> dict[str, object]:
+        """Parse an entry's SKILL.md frontmatter, tolerant of missing files.
+
+        Returns an empty dict when the SKILL.md isn't vendored locally (e.g. a
+        ``dependency`` entry), so requirement gating treats it as having no
+        declared requirements.
+        """
+        try:
+            content = self.read_skill(theme, entry)
+        except SkillsError:
+            return {}
+        return parse_frontmatter(content)
+
+    def entry_requires(self, theme: str, entry: dict) -> list[str]:
+        """Return the ``requires`` capability list declared for an entry.
+
+        Checks the index entry first (cheap), then the SKILL.md frontmatter.
+        Returns ``[]`` when no requirements are declared.
+        """
+        inline = entry.get("requires")
+        if isinstance(inline, list):
+            return [str(x) for x in inline]
+        if isinstance(inline, str) and inline.strip():
+            return [inline.strip()]
+        frontmatter = self.read_frontmatter(theme, entry)
+        requires = frontmatter.get("requires", [])
+        if isinstance(requires, list):
+            return [str(x) for x in requires]
+        if isinstance(requires, str) and requires.strip():
+            return [requires.strip()]
+        return []

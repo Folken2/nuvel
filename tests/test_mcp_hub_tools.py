@@ -44,7 +44,8 @@ def _isolated_env(monkeypatch, tmp_path):
     """Keep every test away from real tokens, relays and the home directory."""
     for var in ("GITHUB_TOKEN", "NUVEL_FEEDBACK_URL", "NUVEL_SKILLS_INSTALL_DIR"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("NUVEL_FEEDBACK_QUEUE", str(tmp_path / "queue.jsonl"))
+    monkeypatch.delenv("NUVEL_FEEDBACK_QUEUE", raising=False)
+    monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(tmp_path / "feedback"))
 
 
 @pytest.fixture
@@ -118,6 +119,7 @@ def test_tools_list_has_full_tool_set(server):
     assert set(tools) == {
         "search_skills", "list_skills", "list_themes",
         "get_skill", "install_skill", "propose_improvement",
+        "fence_value", "record_feedback", "check_skill_health",
     }
     assert "confirm=true" in tools["install_skill"]["description"]
     assert tools["propose_improvement"]["inputSchema"]["required"] == [
@@ -524,7 +526,7 @@ def test_propose_queues_without_token_or_relay(server, tmp_path):
     assert result["status"] == "queued"
     assert result["delivery"] == "queue"
     assert re.fullmatch(r"[0-9a-f]{16}", result["feedback_id"])
-    queue = tmp_path / "queue.jsonl"
+    queue = tmp_path / "feedback" / "feedback-queue.jsonl"
     assert result["queue_path"] == str(queue)
     lines = queue.read_text().splitlines()
     assert len(lines) == 1
@@ -536,8 +538,8 @@ def test_propose_queues_without_token_or_relay(server, tmp_path):
 
 
 def test_propose_queue_creates_parent_dirs(server, tmp_path, monkeypatch):
-    queue = tmp_path / "deep" / "er" / "q.jsonl"
-    monkeypatch.setenv("NUVEL_FEEDBACK_QUEUE", str(queue))
+    queue = tmp_path / "deep" / "er" / "feedback-queue.jsonl"
+    monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(queue.parent))
     result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
     assert result["queue_path"] == str(queue)
     assert queue.is_file()
@@ -549,7 +551,7 @@ def test_propose_feedback_id_is_stable(server, tmp_path):
     other = call(server, "propose_improvement", skill_name=SKILL,
                  **dict(PROPOSAL, issue="something else"))
     assert first["feedback_id"] == second["feedback_id"] != other["feedback_id"]
-    assert len((tmp_path / "queue.jsonl").read_text().splitlines()) == 3
+    assert len((tmp_path / "feedback" / "feedback-queue.jsonl").read_text().splitlines()) == 3
 
 
 def test_propose_current_version_from_frontmatter(server):
@@ -594,7 +596,7 @@ def test_propose_relays_when_url_set(server, tmp_path, monkeypatch):
     assert sent["skill_name"] == SKILL
     assert sent["current_version"] == "2.1.0"
     assert sent["feedback_id"] == result["feedback_id"]
-    assert not (tmp_path / "queue.jsonl").exists()
+    assert not (tmp_path / "feedback" / "feedback-queue.jsonl").exists()
 
 
 def test_propose_relay_failure_falls_back_to_queue(server, tmp_path, monkeypatch):
@@ -604,7 +606,7 @@ def test_propose_relay_failure_falls_back_to_queue(server, tmp_path, monkeypatch
     result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
     assert result["status"] == "queued"
     assert "unreachable" in result["relay_error"]
-    assert (tmp_path / "queue.jsonl").is_file()
+    assert (tmp_path / "feedback" / "feedback-queue.jsonl").is_file()
 
 
 def test_propose_relay_rejects_non_http_url(server, tmp_path, monkeypatch):
@@ -625,13 +627,13 @@ def test_propose_github_path_reports_delivery(server, tmp_path, monkeypatch):
     assert result["delivery"] == "github"
     assert result["issue_url"] == "https://github.com/x/1"
     assert fake.requests[0].full_url == server_mod.GITHUB_ISSUES_URL
-    assert not (tmp_path / "queue.jsonl").exists()
+    assert not (tmp_path / "feedback" / "feedback-queue.jsonl").exists()
 
 
 def test_propose_unqueueable_is_an_error_not_success(server, tmp_path, monkeypatch):
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
-    monkeypatch.setenv("NUVEL_FEEDBACK_QUEUE", str(blocker / "q.jsonl"))
+    monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(blocker / "store"))
     err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
     assert err["code"] == server_mod.INTERNAL_ERROR
 
