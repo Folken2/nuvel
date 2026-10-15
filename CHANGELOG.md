@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `validate_agent` now compiles every Python file in the agent (syntax only, nothing runs) and reports syntax errors with file and line.
 - Public names for embedding nuvel's builder tools in another ADK app: `nuvel.tools.validate_tool.validate_agent_dir` and `nuvel.tools.file_tools.resolve_safe_path`. The old private names stay as aliases.
+- Skills MCP server (`nuvel mcp serve`): `record_feedback` and `check_skill_health` tools over a local feedback store, with the same health report embedded in `get_skill`; `get_skill(section=...)` reads one `## ` section; `get_skill` lists `{{ var }}` template placeholders (resolved against `OrgMemoryService` with `--with-org-memory`); a `fence_value` tool for provenance-fencing values; and `--require` gating on a skill's `requires` frontmatter.
+
+### Changed
+
+- Skills MCP server: `propose_improvement`'s local fallback now queues into the feedback store (`--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback`) at `feedback-queue.jsonl`, so `check_skill_health` sees queued proposals. `NUVEL_FEEDBACK_QUEUE` is no longer read.
 
 ### Fixed
 
