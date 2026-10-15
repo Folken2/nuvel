@@ -15,7 +15,7 @@ It ships as:
 - Knowledge skills in `nuvel/backends/<framework>/skills/`.
 - A CLI scaffolder exposed as `nuvel agent create` (deprecated alias: `nuvel new`).
 - A meta-agent exposed as `nuvel run`, implemented as a Google ADK `LlmAgent` in `nuvel/agent.py`.
-- A Skills MCP server exposed as `nuvel mcp serve`, in `nuvel/mcp/` (stdlib only).
+- A Skills MCP server exposed as `nuvel mcp serve` (stdio or HTTP), in `nuvel/mcp/` (stdlib only).
 
 Generated projects are written to `generated-agents/<name>/` and are standalone runnable FastAPI apps. They should not depend on importing the local `nuvel` package at runtime.
 
@@ -78,14 +78,70 @@ Keep `.claude/skills/nuvel/SKILL.md` in sync with CLI flags, scaffold behavior, 
 
 ## Skills MCP Server
 
-`nuvel mcp serve` starts a stdlib-only MCP (Model Context Protocol) stdio server that exposes a skills hub — the [Nuvel Skills](https://github.com/Folken2/skills) repo, or any directory laid out the same way — to MCP clients such as Claude Code, Cursor, and Codex.
+`nuvel mcp serve` starts a stdlib-only MCP (Model Context Protocol) server that exposes a skills hub — the [Nuvel Skills](https://github.com/Folken2/skills) repo, or any directory laid out the same way — to MCP clients such as Claude Code, Cursor, and Codex. It speaks stdio by default, or HTTP so clients can point at a URL with nothing installed locally.
 
 ```bash
 nuvel mcp serve [--skills-dir <dir>] [--theme <t>] [--require <cap>]... [--with-org-memory <dsn|path>] [--feedback-dir <dir>]
+                [--transport stdio|http] [--host 127.0.0.1] [--port 8080] [--allow-remote]
+                [--no-auth] [--require-auth]
+nuvel mcp client create --name <n> [--redirect-uri <u>]...
+nuvel mcp client list [--json]
+nuvel mcp client delete <client-id>
+nuvel mcp token revoke <token-or-client-id>
 ```
 
 - `--skills-dir` (default: current directory) points at a skills hub. It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
-- The server speaks JSON-RPC 2.0 over stdio: protocol messages on stdout (one JSON object per line), diagnostics on stderr.
+- `--transport stdio` (default) speaks JSON-RPC 2.0 over stdio: protocol messages on stdout (one JSON object per line), diagnostics on stderr.
+- `--transport http` serves the same dispatcher over HTTP (diagnostics still on stderr; request bodies are never logged). `--host` defaults to `127.0.0.1`; binding a non-loopback address (e.g. `0.0.0.0`) exits with an error unless `--allow-remote` is passed. `--port 0` picks a free port. Every MCP method over HTTP requires an OAuth 2.1 access token (see **Authentication** below).
+
+HTTP endpoints:
+
+| Endpoint | Transport | Behaviour |
+| --- | --- | --- |
+| `POST /mcp` | Streamable HTTP (2025-03-26) | JSON-RPC request or batch. Replies `application/json`, or `text/event-stream` (SSE-framed) when `Accept` ranks it above JSON. `initialize` returns an `Mcp-Session-Id` header that every later request must echo; a missing/unknown id → `404`. Notifications only → `202`, empty body. |
+| `GET /mcp` | Streamable HTTP | `Accept: text/event-stream` + session id → SSE stream for server→client messages, with `: ping` comments every 15s; closed when the session ends. |
+| `DELETE /mcp` | Streamable HTTP | Terminates the session → `204`. |
+| `GET /sse` | Legacy HTTP+SSE (2024-11-05) | Opens an SSE stream whose first event is `endpoint` with `/messages?sessionId=<id>`. The session lives as long as the stream. |
+| `POST /messages?sessionId=<id>` | Legacy HTTP+SSE | JSON-RPC in → `202`; responses arrive on the `/sse` stream. |
+| `GET /healthz` | — | `{"status": "ok", "transport": "http", "skills": N, "themes": N, "tools": N}`: counts only, no auth, never the catalog. |
+| `GET /.well-known/oauth-protected-resource` | OAuth (RFC 9728) | `resource`, `authorization_servers`, `scopes_supported`, `bearer_methods_supported`. No auth. |
+| `GET /.well-known/oauth-authorization-server` | OAuth (RFC 8414) | Issuer, endpoints, `S256`, grant types and client auth methods. No auth. |
+| `POST /register` | OAuth (RFC 7591) | Dynamic client registration, rate-limited per IP (20/h) and globally (200/h). No auth. |
+| `GET /authorize`, `POST /authorize` | OAuth | Authorization code + PKCE: validates the request, shows a consent page, then sends the user to log in. |
+| `GET /oauth/callback` | OAuth | GitHub's redirect back; exchanges GitHub's code for the user's login. |
+| `POST /oauth/dev-login` | OAuth | Only with `NUVEL_OAUTH_DEV_LOGIN=1`: a clearly-labelled username-only login for tests. |
+| `POST /token` | OAuth | `authorization_code`, `refresh_token` and `client_credentials` grants. |
+
+HTTP security defaults and settings:
+
+- **Origin check (DNS-rebinding protection)** — requests carrying an `Origin` must come from a loopback origin (`http://localhost:*`, `http://127.0.0.1:*`, `[::1]`) or one listed in `NUVEL_MCP_ALLOWED_ORIGINS` (comma-separated, exact match); otherwise `403`. Requests without `Origin` (curl, native clients) are allowed. `OPTIONS` answers CORS preflights, echoing the allowed origin (never `*`) and exposing `Mcp-Session-Id`.
+- `NUVEL_MCP_MAX_BODY_BYTES` (default 1 MiB) → `413` above it. `NUVEL_MCP_MAX_SESSIONS` (default 64) → `503` when full. `NUVEL_MCP_SESSION_TTL` (default 3600s) expires idle sessions; an open SSE stream keeps its session alive.
+- `install_skill` with `confirm=true` writes to the **server host's** filesystem (`target_dir`, default `$NUVEL_SKILLS_INSTALL_DIR` or `~/.claude/skills`), not the client's. On a shared host, set `NUVEL_SKILLS_INSTALL_DIR` to a scratch path or don't expose the server publicly.
+
+### Authentication (OAuth 2.1)
+
+**Everything over HTTP is gated.** `initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call` (all nine tools, read-only ones included), the `GET /mcp` and `/sse` streams, and `DELETE /mcp` all require `Authorization: Bearer <access token>`. The only unauthenticated surfaces are `/healthz`, the two `/.well-known/` documents, `/register`, `/authorize`, `/oauth/callback` (and `/oauth/dev-login`), `/token`, and CORS preflights. Without a valid token the server answers `401` with `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource", scope="skills:read skills:write"` (plus `error="invalid_token"` when a token was presented). That lets MCP clients run discovery → registration → authorization → retry on their own. Every token failure (unknown, expired, revoked, wrong client, wrong resource) gets the same `401`. `403` is reserved for a valid token that isn't allowed: a missing scope, or a user since removed from the allowlist.
+
+The server is its own authorization server, in `nuvel/mcp/oauth.py`, stdlib only:
+
+- **Scopes**: `skills:read` covers every MCP method and the read-only tools. `skills:write` covers `install_skill`, `propose_improvement`, `record_feedback`, and any unknown tool, so it fails closed. Clients get both unless they ask for less.
+- **Dynamic registration** (`POST /register`) accepts `redirect_uris`, `client_name` and `token_endpoint_auth_method` (`none`, `client_secret_basic` or `client_secret_post`; only confidential clients get a `client_secret`). Redirect URIs must be `http://localhost:*` or `http://127.0.0.1:*`, or listed exactly in `NUVEL_OAUTH_REDIRECT_ALLOWLIST` (comma-separated); anything else is `invalid_redirect_uri`. Registered clients can only use `authorization_code` + `refresh_token`. Because registration is open, `client_credentials` is reserved for operator-issued clients (`nuvel mcp client create`).
+- **Authorization code + PKCE**: `S256` only, `state` required, `resource` (RFC 8707) checked if present. The consent page leads to a GitHub login (`NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET`, a GitHub OAuth app whose callback URL is `<origin>/oauth/callback`). The login is then checked against `NUVEL_OAUTH_ALLOWED_USERS` (comma-separated GitHub logins). If that is unset, any GitHub user may log in, and the server warns at startup. The pending login is bound to an HttpOnly `SameSite=Lax` cookie, so a login link opened in another browser can't complete it. Codes are single-use and live 60s. Replaying a code revokes the tokens the first redemption issued.
+- **Token endpoint**: access tokens last 1h. Refresh tokens last 30 days and rotate on every use; presenting a rotated-out refresh token revokes its whole grant. `client_credentials` (confidential, operator-issued clients only) returns an access token without a refresh token; this is the path for services such as our own fleet. `resource`, if sent, must name this server (its origin, or `<origin>/mcp` or `<origin>/sse`), and tokens are only accepted for the resource they were issued for.
+- **Origin / issuer**: `NUVEL_MCP_PUBLIC_URL` (e.g. `https://skills.example.com`) is the issuer and token audience. It is required for a non-loopback bind. On loopback it defaults to the request's `Host`.
+- **Storage**: one JSON file at `$NUVEL_MCP_OAUTH_STORE` (default `~/.nuvel/oauth.json`) holding `clients`, `codes`, `access_tokens` and `refresh_tokens`. Tokens, codes and client secrets are kept only as SHA-256 hashes, with metadata (client, subject, scope, resource, issued/expiry, revoked). The file is mode `0600`, written atomically (temp file + `os.replace`), and its parent dirs are created `0700`. A running server picks up CLI changes on its next request. An unreadable store fails closed. Tokens, codes and verifiers are never logged.
+- **Login setup**: with neither GitHub credentials nor `NUVEL_OAUTH_DEV_LOGIN=1` set, `--transport http` refuses to start. `NUVEL_OAUTH_DEV_LOGIN=1` swaps GitHub for a clearly-labelled page that accepts any username; it is for tests and is refused on a non-loopback bind.
+
+Operator escape hatches:
+
+- `--require-auth` (stdio) gates the stdio transport too: every message must be backed by the access token in `NUVEL_MCP_ACCESS_TOKEN`, re-validated against the store per message (expiry and revocation apply mid-session; `resource` is checked when `NUVEL_MCP_PUBLIC_URL` is set). **By default stdio stays ungated.** It is a local subprocess that the user's own MCP client launched, with the user's own privileges and filesystem access, so a token would protect nothing the process can't already reach.
+- `--no-auth` (HTTP) disables OAuth for local development. It prints a loud one-line `WARNING` on stderr at startup and is refused unless `--host` is loopback.
+- `nuvel mcp client create --name <n> [--redirect-uri <u>]` issues a confidential client (`client_credentials`, plus the code flow when a redirect URI is given) and prints its `client_secret` once; only the hash is stored. `nuvel mcp client list [--json]` shows clients without secrets, and `nuvel mcp client delete <id>` removes one and revokes its tokens.
+- `nuvel mcp token revoke <token-or-client-id>` revokes one access or refresh token (a refresh token takes its whole grant with it), or every token issued to a client id.
+
+A service fetches a token with `curl -u "$CLIENT_ID:$CLIENT_SECRET" -d grant_type=client_credentials <origin>/token`.
+
+Point a client at it, e.g. Claude Code: `claude mcp add --transport http nuvel-skills http://127.0.0.1:8080/mcp` (the client runs the OAuth flow itself on the first `401`).
 
 It exposes:
 
@@ -111,7 +167,7 @@ It exposes:
 
 **The feedback store.** All local skill feedback lands in one directory: `--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback` (kept out of the skills hub so a read-only clone works). It holds `<skill>/<id>.json` per `record_feedback` report plus `feedback-queue.jsonl` for queued proposals. `check_skill_health` and `get_skill`'s `health` read both, so a queued proposal is visible immediately (repeat submissions of the same proposal share a `feedback_id` and count once). `theme/name` and `name` address the same skill. The former `NUVEL_FEEDBACK_QUEUE` variable is no longer read; the server logs a warning if it is set.
 
-The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol and tools, `skills_loader.py` = hub discovery/loading, `installer.py` = the plan/apply installer behind `install_skill`, `feedback.py` = the feedback store and health computation) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
+The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol and tools, shared by both transports via `SkillsMCPServer.dispatch`; `http_transport.py` = the HTTP transports, sessions and OAuth routes; `oauth.py` = the OAuth 2.1 store, authorization server and token validation; `skills_loader.py` = hub discovery/loading; `installer.py` = the plan/apply installer behind `install_skill`; `feedback.py` = the feedback store and health computation) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Role scoping
 

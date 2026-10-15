@@ -1,14 +1,20 @@
-"""``nuvel mcp serve`` — start the Nuvel Skills MCP stdio server.
+"""``nuvel mcp serve`` — start the Nuvel Skills MCP server.
 
 Serves a skills hub (a directory with ``index.json`` and
-``<theme>/<name>/SKILL.md`` files) to MCP clients over stdio. Stdlib only, so
-it runs without the framework's heavier agent dependencies.
+``<theme>/<name>/SKILL.md`` files) to MCP clients over stdio (default) or HTTP
+(``--transport http``: Streamable HTTP on ``/mcp`` plus legacy SSE on ``/sse``,
+gated by OAuth 2.1). ``nuvel mcp client`` and ``nuvel mcp token`` manage the
+OAuth store. Stdlib only, so it runs without the framework's heavier agent
+dependencies.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
+import time
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -21,9 +27,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_serve = sub.add_parser(
         "serve",
-        help="Start the Nuvel Skills MCP stdio server.",
+        help="Start the Nuvel Skills MCP server (stdio or HTTP).",
         description=(
-            "Start an MCP stdio server that exposes a skills hub as MCP "
+            "Start an MCP server (stdio by default, or HTTP with --transport "
+            "http) that exposes a skills hub as MCP "
             "resources (skill://{theme}/{name}) and tools (search_skills, "
             "list_skills, list_themes, get_skill, install_skill, fence_value, "
             "propose_improvement, record_feedback, check_skill_health). "
@@ -75,7 +82,72 @@ def register(subparsers: argparse._SubParsersAction) -> None:
              "read-only git clone still works. Default: $NUVEL_FEEDBACK_DIR, "
              "then ~/.nuvel/feedback.",
     )
+    p_serve.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="stdio (default) or http: Streamable HTTP on /mcp, legacy "
+             "HTTP+SSE on /sse + /messages, and GET /healthz.",
+    )
+    p_serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP bind address (default 127.0.0.1). A non-loopback address "
+             "requires --allow-remote.",
+    )
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="HTTP port (default 8080; 0 picks a free port).",
+    )
+    p_serve.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow binding a non-loopback --host (e.g. 0.0.0.0). Requires "
+             "NUVEL_MCP_PUBLIC_URL (the OAuth issuer) and GitHub OAuth credentials.",
+    )
+    p_serve.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="HTTP only: disable OAuth for local development. Refused unless "
+             "--host is loopback.",
+    )
+    p_serve.add_argument(
+        "--require-auth",
+        action="store_true",
+        help="stdio only: gate every request on the access token in "
+             "NUVEL_MCP_ACCESS_TOKEN (HTTP is always gated).",
+    )
     p_serve.set_defaults(func=_cmd_mcp_serve)
+
+    p_client = sub.add_parser("client", help="Manage OAuth clients of the HTTP server.")
+    client_sub = p_client.add_subparsers(dest="client_command", required=True)
+    p_create = client_sub.add_parser(
+        "create",
+        help="Issue a confidential client (client_credentials; plus the "
+             "authorization code flow when --redirect-uri is given).",
+    )
+    p_create.add_argument("--name", required=True, help="Human-readable client name.")
+    p_create.add_argument("--redirect-uri", action="append", default=None, metavar="URI",
+                          help="Allowed redirect URI (https://, or http:// on loopback). "
+                               "Repeatable.")
+    p_create.set_defaults(func=_cmd_client_create)
+    p_list = client_sub.add_parser("list", help="List registered clients (no secrets).")
+    p_list.add_argument("--json", action="store_true", help="Print JSON.")
+    p_list.set_defaults(func=_cmd_client_list)
+    p_delete = client_sub.add_parser("delete", help="Delete a client and revoke its tokens.")
+    p_delete.add_argument("client_id")
+    p_delete.set_defaults(func=_cmd_client_delete)
+
+    p_token = sub.add_parser("token", help="Manage OAuth tokens of the HTTP server.")
+    token_sub = p_token.add_subparsers(dest="token_command", required=True)
+    p_revoke = token_sub.add_parser(
+        "revoke",
+        help="Revoke an access/refresh token, or every token of a client id.",
+    )
+    p_revoke.add_argument("value", metavar="TOKEN_OR_CLIENT_ID")
+    p_revoke.set_defaults(func=_cmd_token_revoke)
 
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
@@ -102,5 +174,188 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         with_org_memory=args.with_org_memory,
         feedback_dir=args.feedback_dir,
     )
-    server.serve()
+    if args.require_auth and args.no_auth:
+        print("Error: --require-auth and --no-auth are mutually exclusive.", file=sys.stderr)
+        return 2
+    if args.transport == "stdio":
+        if args.no_auth:
+            print("Error: --no-auth applies to --transport http; stdio is ungated "
+                  "unless --require-auth is set.", file=sys.stderr)
+            return 2
+        if args.require_auth:
+            error = _gate_stdio(server)
+            if error:
+                print(f"Error: {error}", file=sys.stderr)
+                return 2
+        server.serve()
+        return 0
+
+    from nuvel.mcp.http_transport import HttpConfig, is_loopback_host, serve_http
+
+    loopback = is_loopback_host(args.host)
+    if not loopback and not args.allow_remote:
+        print(
+            f"Error: refusing to bind non-loopback address {args.host!r} without "
+            "--allow-remote. The HTTP transport is meant to stay on 127.0.0.1 "
+            "unless you deliberately expose it.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        config = HttpConfig.from_env()
+    except ValueError as exc:
+        print(f"Error: invalid NUVEL_MCP_* setting: {exc}", file=sys.stderr)
+        return 2
+
+    if args.no_auth:
+        if not loopback:
+            print(f"Error: --no-auth is refused on non-loopback address {args.host!r}; "
+                  "it is for local development only.", file=sys.stderr)
+            return 2
+        print("WARNING: --no-auth: OAuth is OFF, every MCP method and tool (writes "
+              f"included) is open to anything that can reach {args.host}:{args.port}.",
+              file=sys.stderr)
+        provider = None
+    else:
+        provider, error = _oauth_provider_for_http(loopback, config.public_url)
+        if error:
+            print(f"Error: {error}", file=sys.stderr)
+            return 2
+    try:
+        serve_http(server, args.host, args.port, config, provider, no_auth=args.no_auth)
+    except OSError as exc:
+        print(f"Error: cannot bind {args.host}:{args.port}: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _oauth_provider_for_http(loopback: bool, public_url: str | None):
+    """Build the provider for gated HTTP, or return (None, error)."""
+    from nuvel.mcp.oauth import OAuthConfig, OAuthProvider, OAuthStoreError
+
+    config = OAuthConfig.from_env()
+    mode = config.login_mode
+    if mode is None:
+        return None, ("the HTTP transport is gated by OAuth and needs a login provider: set "
+                      "NUVEL_OAUTH_GITHUB_CLIENT_ID and NUVEL_OAUTH_GITHUB_CLIENT_SECRET "
+                      "(a GitHub OAuth app whose callback is <origin>/oauth/callback), or "
+                      "NUVEL_OAUTH_DEV_LOGIN=1 for local tests, or pass --no-auth on loopback.")
+    if mode == "dev" and not loopback:
+        return None, "NUVEL_OAUTH_DEV_LOGIN=1 is for local tests and is refused on a non-loopback bind."
+    if not loopback and not public_url:
+        return None, ("a non-loopback bind needs NUVEL_MCP_PUBLIC_URL (e.g. "
+                      "https://skills.example.com): it is the OAuth issuer and token audience.")
+    provider = OAuthProvider(config)
+    try:
+        with provider.store.reading():
+            pass  # fail fast on an unreadable store
+    except OAuthStoreError as exc:
+        return None, str(exc)
+    if config.dev_login and mode == "github":
+        print("Warning: NUVEL_OAUTH_DEV_LOGIN is ignored because GitHub credentials are set.",
+              file=sys.stderr)
+    if mode == "dev":
+        print("WARNING: NUVEL_OAUTH_DEV_LOGIN=1: the login page accepts any username without "
+              "a password. For local tests only.", file=sys.stderr)
+    if config.allowed_users is None:
+        print("Warning: NUVEL_OAUTH_ALLOWED_USERS is not set, so ANY user who completes "
+              "the login can get a token. Set it to a comma-separated list of GitHub logins.",
+              file=sys.stderr)
+    return provider, None
+
+
+def _gate_stdio(server) -> str | None:
+    from nuvel.mcp.oauth import OAuthConfig, OAuthProvider, public_url_from_env, stdio_gate
+
+    try:
+        resource = public_url_from_env()
+    except ValueError as exc:
+        return str(exc)
+    provider = OAuthProvider(OAuthConfig.from_env())
+    token = os.environ.get("NUVEL_MCP_ACCESS_TOKEN", "").strip() or None
+    if token is None:
+        print("Warning: --require-auth without NUVEL_MCP_ACCESS_TOKEN: every request "
+              "will be refused.", file=sys.stderr)
+    server.gate = stdio_gate(provider, token, resource)
+    return None
+
+
+def _provider():
+    from nuvel.mcp.oauth import OAuthConfig, OAuthProvider
+
+    return OAuthProvider(OAuthConfig.from_env())
+
+
+def _store_errors(func):
+    """Report an unreadable OAuth store as an error instead of a traceback."""
+
+    def wrapper(args: argparse.Namespace) -> int:
+        from nuvel.mcp.oauth import OAuthStoreError
+
+        try:
+            return func(args)
+        except OAuthStoreError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
+    return wrapper
+
+
+@_store_errors
+def _cmd_client_create(args: argparse.Namespace) -> int:
+    provider = _provider()
+    try:
+        record, secret = provider.create_client(args.name, args.redirect_uri)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps({
+        "client_id": record["client_id"],
+        "client_secret": secret,
+        "client_name": record["client_name"],
+        "grant_types": record["grant_types"],
+        "redirect_uris": record["redirect_uris"],
+        "token_endpoint_auth_method": record["token_endpoint_auth_method"],
+    }, indent=2))
+    print(f"Store the client_secret now: only its hash is kept in {provider.store.path}.",
+          file=sys.stderr)
+    return 0
+
+
+@_store_errors
+def _cmd_client_list(args: argparse.Namespace) -> int:
+    clients = _provider().list_clients()
+    if args.json:
+        print(json.dumps(clients, indent=2))
+        return 0
+    if not clients:
+        print("No clients registered.")
+        return 0
+    print(f"{'CLIENT_ID':<28} {'NAME':<24} {'TYPE':<12} {'SOURCE':<6} {'TOKENS':>6}  CREATED")
+    for c in clients:
+        created = time.strftime("%Y-%m-%d %H:%M", time.gmtime(c.get("client_id_issued_at", 0)))
+        kind = "confidential" if c["confidential"] else "public"
+        print(f"{c['client_id']:<28} {(c.get('client_name') or '-')[:24]:<24} {kind:<12} "
+              f"{c.get('source', '?'):<6} {c['active_access_tokens']:>6}  {created}")
+    return 0
+
+
+@_store_errors
+def _cmd_client_delete(args: argparse.Namespace) -> int:
+    if not _provider().delete_client(args.client_id):
+        print(f"Error: no client {args.client_id!r}.", file=sys.stderr)
+        return 1
+    print(f"Deleted client {args.client_id} and revoked its tokens.")
+    return 0
+
+
+@_store_errors
+def _cmd_token_revoke(args: argparse.Namespace) -> int:
+    result = _provider().revoke(args.value)
+    if result is None:
+        print("Error: no matching token or client id.", file=sys.stderr)
+        return 1
+    print(f"Revoked {result['access_tokens']} access token(s) and "
+          f"{result['refresh_tokens']} refresh token(s) "
+          f"({result['kind']}, client {result['client_id']}).")
     return 0

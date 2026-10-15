@@ -21,8 +21,11 @@ Subcommands:
         Inspect and sync model pricing.json against OpenRouter.
     nuvel dashboard
         Open the local web dashboard over your trace logs.
-    nuvel mcp serve [--skills-dir <dir>]
-        Serve a skills hub to MCP clients over stdio (resources + tools).
+    nuvel mcp serve [--skills-dir <dir>] [--transport stdio|http] [--host H] [--port P] [--allow-remote]
+        Serve a skills hub to MCP clients over stdio or HTTP (resources + tools).
+        HTTP is gated by OAuth 2.1 (--no-auth for loopback dev); stdio by --require-auth.
+    nuvel mcp client create|list|delete, nuvel mcp token revoke
+        Manage the MCP server's OAuth clients and tokens.
     nuvel bots list|create|delete|chat|info|logs|send
         Manage and talk to Hermes-backed bots.
     nuvel fleet deploy|list|status|destroy
