@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nuvel-cli"
-version = "0.3.1"
+version = "0.4.0"
 description = "Production-ready agents, your way \u2014 skills, scaffolder, and meta-agent for Google ADK, Buzz, and Hermes Agent."
 readme = "README.md"
 requires-python = ">=3.11"
