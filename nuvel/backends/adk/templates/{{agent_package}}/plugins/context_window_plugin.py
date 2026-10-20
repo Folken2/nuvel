@@ -23,7 +23,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from google.genai import types
 
@@ -147,7 +147,9 @@ class ContextWindowPlugin(BasePlugin):
         self._windows = _load_windows(os.getenv("CONTEXT_WINDOW_CONFIG"))
         self._default_max = int(os.getenv("CONTEXT_WINDOW_DEFAULT", "0"))
         self._warn_pct = float(os.getenv("CONTEXT_WINDOW_WARN_PCT", "0"))
-        self._model: str = ""
+        # One instance serves every session: the model of an in-flight call
+        # is keyed by (invocation_id, agent_name) rather than kept on self.
+        self._models: dict[tuple[str, str], str] = {}
         self._warned: bool = False
 
         if self._windows:
@@ -176,28 +178,38 @@ class ContextWindowPlugin(BasePlugin):
         completion = usage.candidates_token_count or 0
         return prompt + completion
 
-    async def before_run_callback(
+    @staticmethod
+    def _call_key(callback_context: Any) -> tuple[str, str]:
+        return (
+            getattr(callback_context, "invocation_id", "") or "",
+            getattr(callback_context, "agent_name", "") or "",
+        )
+
+    async def after_run_callback(
         self, *, invocation_context: InvocationContext
-    ) -> Optional[types.Content]:
-        self._model = ""
-        return None
+    ) -> None:
+        # Drop models left behind by calls that never reached after_model.
+        invocation_id = getattr(invocation_context, "invocation_id", "")
+        for key in [k for k in self._models if k[0] == invocation_id]:
+            self._models.pop(key, None)
 
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> Optional[LlmResponse]:
-        self._model = llm_request.model or ""
+        self._models[self._call_key(callback_context)] = llm_request.model or ""
         return None
 
     async def after_model_callback(
         self, *, callback_context: CallbackContext, llm_response: LlmResponse
     ) -> Optional[LlmResponse]:
+        model = self._models.pop(self._call_key(callback_context), "")
         usage = llm_response.usage_metadata
         if not usage:
             return None
 
         used_tokens = self._used_tokens(usage)
         snapshot = compute_context_usage(
-            self._model, used_tokens, self._windows, self._default_max
+            model, used_tokens, self._windows, self._default_max
         )
         snapshot["prompt_tokens"] = usage.prompt_token_count or 0
         snapshot["completion_tokens"] = usage.candidates_token_count or 0
@@ -208,7 +220,7 @@ class ContextWindowPlugin(BasePlugin):
         used_pct = snapshot.get("used_pct")
         logger.info(
             "[ContextWindow] %s: %d tokens used%s",
-            self._model or "unknown",
+            model or "unknown",
             used_tokens,
             f" ({used_pct}% of {snapshot['max_tokens']})"
             if used_pct is not None
@@ -226,7 +238,7 @@ class ContextWindowPlugin(BasePlugin):
                 "for model %s — consider compacting the conversation",
                 used_pct,
                 self._warn_pct,
-                self._model,
+                model,
             )
             self._warned = True
 

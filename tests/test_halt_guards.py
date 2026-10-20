@@ -69,6 +69,39 @@ async def test_halt_consumer_short_circuits_when_latched():
     assert state[HALT_HANDOFF_DELIVERED_STATE_KEY] is True
 
 
+async def test_halt_consumer_resumes_on_the_next_user_turn():
+    guard = NoProgressGuard(window=2)
+    state = {}
+    turn1 = SimpleNamespace(state=state, invocation_id="inv-1")
+    for _ in range(2):
+        await guard.after_model_callback(
+            callback_context=turn1, llm_response=_text_response("stuck")
+        )
+    # The turn that latched is halted, however many model calls it attempts.
+    assert await halt_consumer_callback(callback_context=turn1) is not None
+    assert await halt_consumer_callback(callback_context=turn1) is not None
+    assert state[HALT_HANDOFF_DELIVERED_STATE_KEY] == "inv-1"
+
+    # The user's next message resumes the session with fresh guard counters.
+    turn2 = SimpleNamespace(state=state, invocation_id="inv-2")
+    assert await halt_consumer_callback(callback_context=turn2) is None
+    assert state.get(HALT_REASON_STATE_KEY) is None
+    assert state.get(HALT_HANDOFF_DELIVERED_STATE_KEY) is None
+    await guard.after_model_callback(
+        callback_context=turn2, llm_response=_text_response("stuck")
+    )
+    assert state.get(HALT_REASON_STATE_KEY) is None
+
+
+async def test_halt_consumer_stays_halted_until_surfaced():
+    # Latched but never handed back (e.g. after a tool call): a new invocation
+    # still gets the envelope first, so the user sees why it stopped.
+    state = {HALT_REASON_STATE_KEY: "tool failing"}
+    ctx = SimpleNamespace(state=state, invocation_id="inv-9")
+    assert await halt_consumer_callback(callback_context=ctx) is not None
+    assert state[HALT_HANDOFF_DELIVERED_STATE_KEY] == "inv-9"
+
+
 # ── acknowledge_halt_tool (session recovery) ──────────────────────────
 
 def test_acknowledge_halt_tool_clears_latch_and_reports_reason():

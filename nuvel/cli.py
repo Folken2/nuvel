@@ -21,8 +21,11 @@ Subcommands:
         Inspect and sync model pricing.json against OpenRouter.
     nuvel dashboard
         Open the local web dashboard over your trace logs.
-    nuvel mcp serve [--skills-dir <dir>]
-        Serve a skills hub to MCP clients over stdio (resources + tools).
+    nuvel mcp serve [--skills-dir <dir>] [--transport stdio|http] [--host H] [--port P] [--allow-remote]
+        Serve a skills hub to MCP clients over stdio or HTTP (resources + tools).
+        HTTP is gated by OAuth 2.1 (--no-auth for loopback dev); stdio by --require-auth.
+    nuvel mcp client create|list|delete, nuvel mcp token revoke
+        Manage the MCP server's OAuth clients and tokens.
     nuvel acp serve [--dev]
         Run the meta-agent as an ACP v2 subprocess over stdio.
     nuvel bots list|create|delete|chat|info|logs|send
@@ -94,6 +97,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         workflow=args.workflow,
         with_acp=args.with_acp,
         with_eval=args.with_eval,
+        with_litellm=args.with_litellm,
     )
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
@@ -110,6 +114,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("acp")
         if result.get("with_eval"):
             flags.append("eval")
+        if result.get("with_litellm"):
+            flags.append("litellm")
         if result.get("with_buzz"):
             flags.append("buzz")
         if flags:
@@ -329,6 +335,14 @@ def _add_new_agent_args(parser: argparse.ArgumentParser) -> None:
         help="(adk only) Stamp a starter evalv2 suite into the agent "
              "(skills/default/eval/suite.yaml + a sample example). Run it with "
              "`nuvel evalv2 run`.",
+    )
+    parser.add_argument(
+        "--with-litellm", action="store_true",
+        help="(adk only) Generate a ready-to-run LiteLLM proxy alongside the agent. "
+             "LiteLLM acts as a model gateway for supervision: virtual keys, budgets, "
+             "rate limits, fallbacks, spend tracking, and OpenTelemetry tracing. "
+             "The agent routes LLM calls through the proxy instead of calling providers "
+             "directly.",
     )
 
 

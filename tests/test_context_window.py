@@ -1,8 +1,13 @@
 """Tests for ContextWindowPlugin usage calculation."""
 
+import asyncio
 import unittest
+from types import SimpleNamespace
+
+from google.genai import types
 
 from nuvel.plugins.context_window_plugin import (
+    ContextWindowPlugin,
     compute_context_usage,
     _find_window,
 )
@@ -76,6 +81,30 @@ class TestFindWindow(unittest.TestCase):
 
     def test_empty_model(self):
         self.assertIsNone(_find_window("", SAMPLE_WINDOWS))
+
+
+
+class TestContextWindowPluginInterleaving(unittest.TestCase):
+    def test_interleaved_sessions_report_their_own_model(self):
+        plugin = ContextWindowPlugin()
+        plugin._windows = SAMPLE_WINDOWS
+        a, b = {}, {}
+        ctx_a = SimpleNamespace(state=a, invocation_id="inv-a", agent_name="root")
+        ctx_b = SimpleNamespace(state=b, invocation_id="inv-b", agent_name="root")
+        usage = SimpleNamespace(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=1000, candidates_token_count=24, total_token_count=1024
+            )
+        )
+        asyncio.run(plugin.before_model_callback(
+            callback_context=ctx_a, llm_request=SimpleNamespace(model="moonshotai/kimi-k2.5")))
+        asyncio.run(plugin.before_model_callback(
+            callback_context=ctx_b, llm_request=SimpleNamespace(model="anthropic/claude-sonnet-4")))
+        asyncio.run(plugin.after_model_callback(callback_context=ctx_a, llm_response=usage))
+        asyncio.run(plugin.after_model_callback(callback_context=ctx_b, llm_response=usage))
+        self.assertEqual(a["context_window"]["max_tokens"], 256000)
+        self.assertEqual(b["context_window"]["max_tokens"], 200000)
+        self.assertEqual(plugin._models, {})
 
 
 if __name__ == "__main__":

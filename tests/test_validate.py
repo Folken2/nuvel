@@ -51,6 +51,22 @@ class TestValidateAgentImpl(unittest.TestCase):
         self.assertEqual(result["status"], "ok")  # Not an error
         self.assertTrue(any("SOUL.md" in w for w in result["warnings"]))
 
+    def test_syntax_error_fails(self):
+        tool_py = os.path.join(self.agent_dir, "test_agent", "tools", "broken.py")
+        with open(tool_py, "w", encoding="utf-8") as fh:
+            fh.write("def broken(:\n    return 1\n")
+        result = _validate_agent_impl(self.agent_dir)
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(
+            any("Syntax error in test_agent/tools/broken.py" in e for e in result["errors"]),
+            result["errors"],
+        )
+
+    def test_public_name_matches_impl(self):
+        from nuvel.tools.validate_tool import validate_agent_dir
+
+        self.assertIs(validate_agent_dir, _validate_agent_impl)
+
 
 if __name__ == "__main__":
     unittest.main()

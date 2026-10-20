@@ -21,6 +21,10 @@
     "input": 1.25e-06,
     "output": 1e-05
   },
+  "google/gemini-3-flash-preview": {
+    "input": 5e-07,
+    "output": 3e-06
+  },
   "google/gemini-3.1-pro-preview": {
     "input": 2e-06,
     "output": 1.2e-05

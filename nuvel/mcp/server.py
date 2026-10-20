@@ -9,20 +9,35 @@ Resources:
     skill://{theme}/{name}   Full SKILL.md content for a skill.
 
 Tools:
-    search_skills        Search skills by keyword in name/description.
-    get_skill            Fetch a skill's full content + metadata by name.
-    propose_improvement  File a structured GitHub issue proposing a skill fix.
+    search_skills        Ranked multi-word search over metadata (and optionally bodies).
+    list_skills          Browse skills, optionally by theme, with pagination.
+    list_themes          List themes with their skill counts and names.
+    get_skill            Fetch a skill's full content + metadata by name, or a
+                         single ``## section`` (section-scoped reading).
+    install_skill        Plan (default) or apply installing a skill into a skills dir.
+    fence_value          Wrap a value in provenance-fencing markers.
+    propose_improvement  Send a skill-improvement proposal (GitHub, relay, or the
+                         local feedback store).
+    record_feedback      Record the outcome of using a skill in the local feedback store.
+    check_skill_health   Health report for a skill from the local feedback store.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import IO
 
+from nuvel.mcp import feedback
+from nuvel.mcp.installer import install_skill
 from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -38,6 +53,20 @@ INTERNAL_ERROR = -32603
 # Skill-improvement issues are filed against the skills hub.
 GITHUB_REPO = "Folken2/skills"
 GITHUB_ISSUES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
+
+DEFAULT_INSTALL_DIR = "~/.claude/skills"
+RELAY_TIMEOUT_SECONDS = 10
+
+# Search ranking tiers, highest first.
+SCORE_EXACT_NAME = 100
+SCORE_NAME_PREFIX = 80
+SCORE_ALL_IN_NAME = 60
+SCORE_ALL_IN_DESCRIPTION = 40
+SCORE_METADATA = 20
+SCORE_BODY_ONLY = 10
+
+# '-', '_', '.', '/' and whitespace are equivalent word separators in search.
+_SEPARATORS = re.compile(r"[\s\-_./]+")
 
 
 def log(*args) -> None:
@@ -72,6 +101,233 @@ def _summarize(text: str, limit: int = 60) -> str:
     return first
 
 
+def _normalize(text) -> str:
+    """Lowercase and collapse separators to single spaces for matching."""
+    return _SEPARATORS.sub(" ", str(text or "").lower()).strip()
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Return ``text`` without its leading ``---`` frontmatter block."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return text
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return "".join(lines[i + 1:])
+    return text
+
+
+def _frontmatter_version(text: str | None) -> str:
+    if not text:
+        return ""
+    version = parse_frontmatter(text).get("version", "")
+    return version.strip().strip("\"'") if isinstance(version, str) else ""
+
+
+def _snippet(body: str, tokens: list[str], width: int = 160) -> str:
+    """Short single-line excerpt around the first occurrence of any token."""
+    lower = body.lower()
+    positions = [p for p in (lower.find(t) for t in tokens) if p >= 0]
+    if not positions:
+        return ""
+    pos = min(positions)
+    start = max(0, pos - width // 3)
+    end = min(len(body), start + width)
+    excerpt = " ".join(body[start:end].split())
+    return ("…" if start > 0 else "") + excerpt + ("…" if end < len(body) else "")
+
+
+def _int_arg(args, key, default, maximum=None, minimum=1):
+    """Integer argument with a default; values above ``maximum`` are clamped."""
+    value = args.get(key)
+    if value is None:
+        return default
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise McpError(INVALID_PARAMS, f"Argument '{key}' must be an integer")
+    if value < minimum:
+        raise McpError(INVALID_PARAMS, f"Argument '{key}' must be >= {minimum}")
+    return min(value, maximum) if maximum is not None else value
+
+
+def _bool_arg(args, key, default=False):
+    value = args.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise McpError(INVALID_PARAMS, f"Argument '{key}' must be a boolean")
+    return value
+
+
+def _optional_str_arg(args, key):
+    value = args.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise McpError(INVALID_PARAMS, f"Argument '{key}' must be a string")
+    return value.strip() or None
+
+
+def _required_str_arg(args, key):
+    value = _optional_str_arg(args, key)
+    if value is None:
+        raise McpError(INVALID_PARAMS, f"Missing required argument '{key}'")
+    return value
+
+
+def _split_skill_ref(ref: str) -> tuple[str | None, str]:
+    """``'theme/name'`` -> (theme, name); ``'name'`` -> (None, name)."""
+    if "/" in ref:
+        theme, name = ref.split("/", 1)
+        return theme, name
+    return None, ref
+
+
+def _feedback_id(proposal: dict) -> str:
+    """Stable id: sha256 of the canonical (sorted, compact) proposal JSON."""
+    canonical = json.dumps(
+        proposal, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _relay_feedback(url: str, payload: dict) -> dict:
+    """POST ``payload`` as JSON to the feedback relay; return its JSON reply."""
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise ValueError("NUVEL_FEEDBACK_URL must be an http(s) URL")
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "nuvel-skills-mcp",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=RELAY_TIMEOUT_SECONDS) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+# Airbyte-style template placeholder: {{ fiscal_year_summary }}.
+TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*\}\}")
+
+
+def detect_template_variables(text: str) -> list[str]:
+    """Return the unique ``{{ var_name }}`` placeholders found in ``text``."""
+    seen: list[str] = []
+    for match in TEMPLATE_VAR_RE.finditer(text):
+        name = match.group(1)
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def fence_value(value: str, source: str) -> str:
+    """Wrap a value in Airbyte-style provenance-fencing markers.
+
+    The markers tell a reading agent that the enclosed value is a
+    machine-discovered / user-supplied fact, not an instruction, so a poisoned
+    value can't be mistaken for a directive.
+    """
+    begin = f"[begin customer-specific data ({source}, unverified)]"
+    end = "[end customer-specific data]"
+    return f"{begin}\n{value}\n{end}"
+
+
+def extract_section(content: str, section: str) -> str | None:
+    """Return the ``## {section}`` subsection of a SKILL.md body.
+
+    Includes the heading and any sub-headings/body up to (but not including)
+    the next ``##`` heading of the same level. Returns ``None`` when the
+    section heading isn't found.
+    """
+    target = f"## {section}"
+    lines = content.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.strip() == target:
+            start = i
+            break
+    if start is None:
+        return None
+    collected: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("## ") and stripped != target:
+            break
+        collected.append(line)
+    return "\n".join(collected).strip()
+
+
+def _substitute(content: str, var: str, value: str) -> str:
+    """Replace ``{{ var }}`` (any whitespace) with ``value`` in ``content``."""
+    pattern = re.compile(r"\{\{\s*" + re.escape(var) + r"\s*\}\}")
+    return pattern.sub(lambda _m: value, content)
+
+
+def _memory_app_name() -> str:
+    return os.environ.get("NUVEL_MCP_APP_NAME", "nuvel-skills")
+
+
+def _memory_user_id() -> str:
+    return os.environ.get("NUVEL_MCP_USER_ID", "default")
+
+
+def _memory_kwargs(flag_value: str | None) -> dict:
+    """Map the ``--with-org-memory`` value to OrgMemoryService factory kwargs.
+
+    A value containing ``://`` is treated as a Postgres DSN; anything else is
+    treated as an org-graph YAML path. ``None`` for a key lets the factory fall
+    back to the corresponding environment variable.
+    """
+    if not flag_value:
+        return {"dsn": None, "org_graph_path": None}
+    if "://" in flag_value:
+        return {"dsn": flag_value, "org_graph_path": None}
+    return {"dsn": None, "org_graph_path": flag_value}
+
+
+def _memory_response_text(response) -> str | None:
+    """Best-effort plain-text extraction from an ADK SearchMemoryResponse.
+
+    Uses ``getattr`` throughout so the stdlib-only module never has to import
+    ``google.genai`` types directly.
+    """
+    memories = getattr(response, "memories", None) or []
+    for memory in memories:
+        content = getattr(memory, "content", None)
+        parts = getattr(content, "parts", None) or []
+        texts = [getattr(p, "text", "") for p in parts if getattr(p, "text", None)]
+        joined = "\n".join(t for t in texts if t).strip()
+        if joined:
+            return joined
+    return None
+
+
+async def _resolve_templates_async(content, variables, build_service, kwargs):
+    """Resolve placeholders against a freshly-built OrgMemoryService (async)."""
+    service = await build_service(migrate=False, **kwargs)
+    resolved = content
+    for var in variables:
+        response = await service.search_memory(
+            app_name=_memory_app_name(),
+            user_id=_memory_user_id(),
+            query=var.replace("_", " ").replace("-", " "),
+            synthesize=False,
+        )
+        value = _memory_response_text(response)
+        if value:
+            resolved = _substitute(resolved, var, value)
+    return resolved
+
+
 def _improvement_issue(skill_name, current_version, issue, suggested_fix, harness):
     """Build the (title, body) for a skill-improvement GitHub issue."""
     title = "[Skill Improvement] {} v{} — {}".format(
@@ -104,12 +360,42 @@ def _improvement_issue(skill_name, current_version, issue, suggested_fix, harnes
 class SkillsMCPServer:
     """MCP JSON-RPC server backed by a :class:`SkillsLoader`."""
 
-    def __init__(self, loader: SkillsLoader, theme: str | None = None):
+    def __init__(
+        self,
+        loader: SkillsLoader,
+        theme: str | None = None,
+        require_filter: list[str] | None = None,
+        with_org_memory: str | None = None,
+        feedback_dir: str | None = None,
+    ):
         self.loader = loader
-        # When set, discovery (resources/list, search_skills, get_skill) is
-        # scoped to this single theme. resources/read is unaffected — scoping
+        # When set, discovery (resources/list, search_skills, list_skills,
+        # list_themes, get_skill, install_skill) is scoped to this single theme. resources/read is unaffected — scoping
         # is about discovery, not access control.
         self.theme = theme
+        # When set, discovery filters to skills whose ``requires`` frontmatter
+        # declares every capability in the list (Airbyte-style gating). A skill
+        # with no ``requires`` is hidden when the filter is active because it
+        # can't demonstrate the required capabilities.
+        self.require_filter = require_filter
+        # Optional DSN / org-graph path enabling OrgMemoryService template
+        # resolution. Imported lazily so the default (stdlib-only) path never
+        # touches ADK or asyncio.
+        self.with_org_memory = with_org_memory
+        # The one local feedback store (record_feedback, check_skill_health and
+        # propose_improvement's queue). None defers to $NUVEL_FEEDBACK_DIR, then
+        # ~/.nuvel/feedback, resolved per call; nothing is created until a write.
+        self._feedback_dir_override = feedback_dir
+        # Optional per-message auth check for the stdio loop (``--require-auth``):
+        # returns an error response to refuse the message, or None to let it
+        # through. The HTTP transport authenticates at the HTTP layer instead.
+        self.gate = None
+        if os.environ.get("NUVEL_FEEDBACK_QUEUE", "").strip():
+            log(
+                "NUVEL_FEEDBACK_QUEUE is no longer used; queued proposals go to "
+                f"{feedback.queue_path(self.feedback_dir)} "
+                "(set NUVEL_FEEDBACK_DIR or --feedback-dir to move the store)."
+            )
         self._methods = {
             "initialize": self.handle_initialize,
             "resources/list": self.handle_resources_list,
@@ -119,18 +405,79 @@ class SkillsMCPServer:
         }
         self._tools = {
             "search_skills": self.tool_search_skills,
+            "list_skills": self.tool_list_skills,
+            "list_themes": self.tool_list_themes,
             "get_skill": self.tool_get_skill,
+            "install_skill": self.tool_install_skill,
             "propose_improvement": self.tool_propose_improvement,
+            "fence_value": self.tool_fence_value,
+            "record_feedback": self.tool_record_feedback,
+            "check_skill_health": self.tool_check_skill_health,
         }
+
+    @property
+    def feedback_dir(self) -> Path:
+        """The local feedback store directory."""
+        return feedback.resolve_feedback_dir(self._feedback_dir_override)
 
     # --- Scoping helpers -----------------------------------------------------
 
+    def _satisfies_requirements(self, theme: str, entry: dict) -> bool:
+        """True when the entry's ``requires`` cover every gating capability."""
+        if not self.require_filter:
+            return True
+        required = set(self.loader.entry_requires(theme, entry))
+        return set(self.require_filter).issubset(required)
+
     def _scoped_entries(self):
-        """Yield ``(theme, entry)`` honoring the configured theme scope."""
+        """Yield ``(theme, entry)`` honoring theme scope and requirements."""
         for theme, entry in self.loader.iter_entries():
             if self.theme is not None and theme != self.theme:
                 continue
+            if not self._satisfies_requirements(theme, entry):
+                continue
             yield theme, entry
+
+    def _entries_for(self, theme: str | None):
+        """Scoped entries, further narrowed to ``theme`` when given."""
+        for t, entry in self._scoped_entries():
+            if theme is not None and t != theme:
+                continue
+            yield t, entry
+
+    def _resolve_skill(self, ref: str) -> tuple[str, dict]:
+        """Resolve ``name`` or ``theme/name`` within the discovery scope."""
+        wanted_theme, wanted_name = _split_skill_ref(ref)
+
+        # Under a theme scope, discovery is confined to that theme.
+        if self.theme is not None:
+            if wanted_theme is not None and wanted_theme != self.theme:
+                raise McpError(INVALID_PARAMS, f"Skill not found: {ref}")
+            wanted_theme = self.theme
+
+        theme, entry = self.loader.find(wanted_theme, wanted_name)
+        if entry is None:
+            raise McpError(INVALID_PARAMS, f"Skill not found: {ref}")
+        return theme, entry
+
+    def _read_skill_safe(self, theme: str, entry: dict) -> str | None:
+        """SKILL.md content, or None when it's missing or unreadable."""
+        try:
+            return self.loader.read_skill(theme, entry)
+        except (SkillsError, OSError, ValueError):
+            return None
+
+    def _skill_item(self, theme: str, entry: dict, content: str | None = None) -> dict:
+        if content is None:
+            content = self._read_skill_safe(theme, entry)
+        return {
+            "uri": f"skill://{theme}/{entry['name']}",
+            "theme": theme,
+            "name": entry["name"],
+            "description": entry.get("description", ""),
+            "author": entry.get("author", ""),
+            "version": _frontmatter_version(content),
+        }
 
     # --- Method handlers -----------------------------------------------------
 
@@ -186,30 +533,174 @@ class SkillsMCPServer:
             "tools": [
                 {
                     "name": "search_skills",
-                    "description": "Search skills by keyword in name or description.",
+                    "description": (
+                        "Find skills relevant to a task. Use this first when you need a "
+                        "skill but don't know its exact name. Multi-word queries are "
+                        "AND-matched (every word must appear) against skill name, "
+                        "description, theme and author; '-', '_', '.' and '/' count as "
+                        "spaces, so 'installer transaction' finds "
+                        "'installer-transaction-design'. Set include_body=true to also "
+                        "search the full SKILL.md text when a metadata search comes back "
+                        "empty. Results are ranked best-first; follow up with get_skill."
+                    ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Keyword to match against skill name/description.",
-                            }
+                                "description": "One or more words, e.g. 'bug triage' or 'payroll'.",
+                            },
+                            "theme": {
+                                "type": "string",
+                                "description": "Only search this theme (see list_themes).",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Max results (default 10, max 50).",
+                                "default": 10,
+                                "minimum": 1,
+                                "maximum": 50,
+                            },
+                            "include_body": {
+                                "type": "boolean",
+                                "description": "Also search SKILL.md bodies (slower). Default false.",
+                                "default": False,
+                            },
                         },
                         "required": ["query"],
                     },
                 },
                 {
+                    "name": "list_skills",
+                    "description": (
+                        "Browse the skills catalog page by page, optionally within one "
+                        "theme. Use this to see what exists when you have no specific "
+                        "query; use search_skills when you do. Returns 'total' so you "
+                        "can page with limit/offset."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "theme": {
+                                "type": "string",
+                                "description": "Only list this theme (see list_themes). Unknown themes return no items.",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Page size (default 50, max 200).",
+                                "default": 50,
+                                "minimum": 1,
+                                "maximum": 200,
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "description": "Number of items to skip (default 0).",
+                                "default": 0,
+                                "minimum": 0,
+                            },
+                        },
+                    },
+                },
+                {
+                    "name": "list_themes",
+                    "description": (
+                        "List the catalog's themes (e.g. 'hr', 'sales', "
+                        "'software-development') with how many skills each has and "
+                        "their names. Use this to orient yourself or to pick a 'theme' "
+                        "filter for search_skills / list_skills."
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+                {
                     "name": "get_skill",
-                    "description": "Get the full SKILL.md content and metadata for a skill by name or 'theme/name'.",
+                    "description": (
+                        "Get the full SKILL.md content, frontmatter metadata and version "
+                        "for a skill by name or 'theme/name'. Use this to read and "
+                        "follow a skill you found via search_skills or list_skills. "
+                        "Pass 'section' to read a single '## ' section instead of the "
+                        "whole file. The response also carries 'health' (the "
+                        "check_skill_health report) and 'metadata.template_variables' "
+                        "(any {{ placeholders }} the skill expects you to fill)."
+                    ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "name": {
                                 "type": "string",
                                 "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
-                            }
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": (
+                                    "Optional section heading to read instead of the whole "
+                                    "SKILL.md (e.g. 'Step-by-step instructions'). Returns "
+                                    "only that subsection."
+                                ),
+                            },
                         },
                         "required": ["name"],
+                    },
+                },
+                {
+                    "name": "install_skill",
+                    "description": (
+                        "Install a skill (SKILL.md plus its supporting files) into a local "
+                        "skills directory so your harness loads it natively. PLAN FIRST: "
+                        "by default (confirm=false) this is read-only and only reports "
+                        "the destination, file count and action ('install', 'update' or "
+                        "'noop') — nothing is written. Show that plan to the user, then "
+                        "call again with confirm=true to actually install. An existing "
+                        "copy is backed up to '<dest>.backup' before being replaced; "
+                        "symlinked targets are refused."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
+                            },
+                            "target_dir": {
+                                "type": "string",
+                                "description": (
+                                    "Skills directory to install into; the skill lands in "
+                                    "<target_dir>/<name>/. Defaults to "
+                                    "$NUVEL_SKILLS_INSTALL_DIR, then ~/.claude/skills."
+                                ),
+                            },
+                            "confirm": {
+                                "type": "boolean",
+                                "description": "false (default) = plan only; true = write files.",
+                                "default": False,
+                            },
+                        },
+                        "required": ["name"],
+                    },
+                },
+                {
+                    "name": "fence_value",
+                    "description": (
+                        "Wrap a value in provenance-fencing markers so a "
+                        "machine-discovered or user-supplied fact can't be mistaken "
+                        "for an instruction."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "description": "The value to fence.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": (
+                                    "Where the value came from "
+                                    "(e.g. 'machine-discovered', 'user-supplied')."
+                                ),
+                                "default": "machine-discovered",
+                            },
+                        },
+                        "required": ["value"],
                     },
                 },
                 {
@@ -217,19 +708,22 @@ class SkillsMCPServer:
                     "description": (
                         "Propose an improvement to a skill after using it and finding "
                         "it drifted (outdated tooling, missing edge cases, wrong "
-                        "assumptions). Files a structured GitHub issue for a curator "
-                        "to review."
+                        "assumptions). The proposal is filed as a GitHub issue, sent to "
+                        "the configured feedback relay, or saved to the local feedback "
+                        "store (where check_skill_health reports it); the 'delivery' "
+                        "field says which, and 'feedback_id' identifies it. To report "
+                        "how a run went without proposing a change, use record_feedback."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "skill_name": {
                                 "type": "string",
-                                "description": "Name of the skill being improved (e.g. 'bug-triage').",
+                                "description": "Name of the skill being improved (e.g. 'bug-triage') or 'theme/name'.",
                             },
                             "current_version": {
                                 "type": "string",
-                                "description": "Version from the SKILL.md frontmatter (e.g. '1.0.0').",
+                                "description": "Optional. Version you used; read from the SKILL.md frontmatter when omitted.",
                             },
                             "issue": {
                                 "type": "string",
@@ -244,7 +738,94 @@ class SkillsMCPServer:
                                 "description": "Agent/harness you're running (e.g. 'claude-code', 'cursor', 'hermes').",
                             },
                         },
-                        "required": ["skill_name", "current_version", "issue", "suggested_fix"],
+                        "required": ["skill_name", "issue", "suggested_fix"],
+                    },
+                },
+                {
+                    "name": "record_feedback",
+                    "description": (
+                        "Record how it went after you used a skill: the outcome, how "
+                        "severe any problem was, which section, what worked and what "
+                        "didn't. Saved to the local feedback store and counted by "
+                        "check_skill_health. Use propose_improvement instead when you "
+                        "have a concrete fix to suggest."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "skill_name": {
+                                "type": "string",
+                                "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
+                            },
+                            "skill_version": {
+                                "type": "string",
+                                "description": "Version from the SKILL.md frontmatter (or 'unknown').",
+                            },
+                            "outcome": {
+                                "type": "string",
+                                "enum": ["success", "partial", "failure", "blocked"],
+                                "description": "How well the skill worked: success (completed task), partial (needed tweaks), failure (wrong), blocked (couldn't proceed).",
+                            },
+                            "severity": {
+                                "type": "string",
+                                "enum": ["blocking", "misleading", "minor"],
+                                "description": "Impact: blocking (can't use skill), misleading (wrong info), minor (cosmetic).",
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": "Which ## heading(s) the feedback applies to, comma-separated.",
+                            },
+                            "what_worked": {
+                                "type": "string",
+                                "description": "What the skill got right (optional).",
+                            },
+                            "what_didnt": {
+                                "type": "string",
+                                "description": "What went wrong — missing steps, outdated commands, wrong assumptions.",
+                            },
+                            "proposed_patch": {
+                                "type": "string",
+                                "description": "Suggested fix or replacement text (optional).",
+                            },
+                            "harness": {
+                                "type": "string",
+                                "description": "Agent/harness you're running (e.g. 'hermes', 'claude-code'). Defaults to 'unknown'.",
+                            },
+                            "user_corrected": {
+                                "type": "boolean",
+                                "description": "Whether the user had to manually correct the skill's output.",
+                            },
+                            "attribution": {
+                                "type": "string",
+                                "description": "Who or what triggered the feedback (optional).",
+                            },
+                            "correlation_id": {
+                                "type": "string",
+                                "description": "External correlation id linking this feedback to a run/task (optional).",
+                            },
+                        },
+                        "required": ["skill_name", "skill_version", "outcome", "severity", "what_didnt"],
+                    },
+                },
+                {
+                    "name": "check_skill_health",
+                    "description": (
+                        "Check a skill's track record before relying on it. Reads the "
+                        "local feedback store: outcome counts for the last 30 days, "
+                        "trend, sections flagged as blocking or misleading, improvement "
+                        "proposals still queued, and a recommendation ('ok', "
+                        "'review_before_use' or 'use_cautiously'). get_skill embeds the "
+                        "same report as 'health'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "skill_name": {
+                                "type": "string",
+                                "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
+                            },
+                        },
+                        "required": ["skill_name"],
                     },
                 },
             ]
@@ -269,57 +850,230 @@ class SkillsMCPServer:
     # --- Tools ---------------------------------------------------------------
 
     def tool_search_skills(self, args):
-        query = (args.get("query") or "").strip().lower()
-        if not query:
-            raise McpError(INVALID_PARAMS, "Missing required argument 'query'")
-        matches = []
-        for theme, entry in self._scoped_entries():
-            haystack = "{} {}".format(
-                entry.get("name", ""), entry.get("description", "")
-            ).lower()
-            if query in haystack:
-                matches.append({
-                    "uri": f"skill://{theme}/{entry['name']}",
-                    "theme": theme,
-                    "name": entry["name"],
-                    "description": entry.get("description", ""),
-                    "author": entry.get("author", ""),
-                })
-        return {"query": query, "count": len(matches), "results": matches}
+        query = _required_str_arg(args, "query")
+        normalized_query = _normalize(query)
+        tokens = normalized_query.split()
+        if not tokens:
+            raise McpError(INVALID_PARAMS, "Argument 'query' must contain a word")
+        theme = _optional_str_arg(args, "theme")
+        limit = _int_arg(args, "limit", 10, maximum=50)
+        include_body = _bool_arg(args, "include_body")
+
+        hits = []
+        for t, entry in self._entries_for(theme):
+            fields = {
+                "name": _normalize(entry.get("name", "")),
+                "description": _normalize(entry.get("description", "")),
+                "theme": _normalize(t),
+                "author": _normalize(entry.get("author", "")),
+            }
+            content = body = None
+            if include_body:
+                content = self._read_skill_safe(t, entry)
+                if content:
+                    body = _strip_frontmatter(content)
+                    fields["body"] = _normalize(body)
+
+            if not all(any(tok in v for v in fields.values()) for tok in tokens):
+                continue
+            matched_in = [
+                f for f, v in fields.items() if any(tok in v for tok in tokens)
+            ]
+            name = fields["name"]
+            if name == normalized_query:
+                score = SCORE_EXACT_NAME
+            elif name.startswith(normalized_query):
+                score = SCORE_NAME_PREFIX
+            elif all(tok in name for tok in tokens):
+                score = SCORE_ALL_IN_NAME
+            elif all(tok in fields["description"] for tok in tokens):
+                score = SCORE_ALL_IN_DESCRIPTION
+            elif all(
+                any(tok in v for f, v in fields.items() if f != "body")
+                for tok in tokens
+            ):
+                score = SCORE_METADATA
+            else:
+                score = SCORE_BODY_ONLY
+            snippet = _snippet(body, tokens) if "body" in matched_in else ""
+            hits.append((score, str(entry.get("name", "")).lower(), t, entry,
+                         content, matched_in, snippet))
+
+        hits.sort(key=lambda h: (-h[0], h[1], h[2]))
+        results = []
+        for score, _, t, entry, content, matched_in, snippet in hits[:limit]:
+            item = self._skill_item(t, entry, content)
+            item.update(score=score, matched_in=matched_in, snippet=snippet)
+            results.append(item)
+        return {
+            "query": query,
+            "count": len(results),
+            "total": len(hits),
+            "results": results,
+        }
+
+    def tool_list_skills(self, args):
+        theme = _optional_str_arg(args, "theme")
+        limit = _int_arg(args, "limit", 50, maximum=200)
+        offset = _int_arg(args, "offset", 0, minimum=0)
+        entries = sorted(
+            self._entries_for(theme),
+            key=lambda te: (te[0], str(te[1].get("name", "")).lower()),
+        )
+        items = [self._skill_item(t, e) for t, e in entries[offset:offset + limit]]
+        return {
+            "total": len(entries),
+            "count": len(items),
+            "offset": offset,
+            "items": items,
+        }
+
+    def tool_list_themes(self, args):
+        grouped: dict[str, list[str]] = {}
+        for t, entry in self._scoped_entries():
+            grouped.setdefault(t, []).append(entry["name"])
+        themes = [
+            {"theme": t, "count": len(names), "skills": sorted(names)}
+            for t, names in sorted(grouped.items())
+        ]
+        return {"count": len(themes), "themes": themes}
 
     def tool_get_skill(self, args):
-        name = (args.get("name") or "").strip()
-        if not name:
-            raise McpError(INVALID_PARAMS, "Missing required argument 'name'")
-
-        wanted_theme, wanted_name = (None, name)
-        if "/" in name:
-            wanted_theme, wanted_name = name.split("/", 1)
-
-        # Under a theme scope, discovery is confined to that theme.
-        if self.theme is not None:
-            if wanted_theme is not None and wanted_theme != self.theme:
-                raise McpError(INVALID_PARAMS, f"Skill not found: {name}")
-            wanted_theme = self.theme
-
-        theme, entry = self.loader.find(wanted_theme, wanted_name)
-        if entry is None:
-            raise McpError(INVALID_PARAMS, f"Skill not found: {name}")
+        name = _required_str_arg(args, "name")
+        section = _optional_str_arg(args, "section")
+        theme, entry = self._resolve_skill(name)
 
         try:
             content = self.loader.read_skill(theme, entry)
         except SkillsError:
             raise McpError(INVALID_PARAMS, f"SKILL.md not available for {name}")
 
-        return {
+        metadata = parse_frontmatter(content)
+
+        # Section-scoped reading: return only the requested subsection.
+        body = content
+        if section is not None:
+            scoped = extract_section(content, section)
+            if scoped is None:
+                raise McpError(INVALID_PARAMS, f"Section not found: {section}")
+            body = scoped
+
+        # Template-variable detection (progressive disclosure of placeholders).
+        variables = detect_template_variables(body)
+        metadata["template_variables"] = variables
+
+        result = {
             "uri": f"skill://{theme}/{entry['name']}",
             "theme": theme,
             "name": entry["name"],
             "description": entry.get("description", ""),
             "author": entry.get("author", ""),
-            "metadata": parse_frontmatter(content),
-            "content": content,
+            "version": _frontmatter_version(content),
+            "metadata": metadata,
+            "content": body,
         }
+        if section is not None:
+            result["section"] = section
+
+        # Health signals from the feedback store (best-effort, no feedback = "ok").
+        try:
+            result["health"] = feedback.compute_health(self.feedback_dir, entry["name"])
+        except ValueError:  # a hub name that can't be a store key has no feedback
+            result["health"] = {"total_feedback": 0, "queued_proposals": 0, "recommendation": "ok"}
+
+        # Optional OrgMemoryService resolution (ADK-backed, best-effort).
+        if variables and self.with_org_memory:
+            resolved = self._resolve_templates(body, variables)
+            if resolved is not None:
+                result["resolved_content"] = resolved
+
+        return result
+
+    def tool_install_skill(self, args):
+        name = _required_str_arg(args, "name")
+        target_dir = (
+            _optional_str_arg(args, "target_dir")
+            or os.environ.get("NUVEL_SKILLS_INSTALL_DIR", "").strip()
+            or DEFAULT_INSTALL_DIR
+        )
+        confirm = _bool_arg(args, "confirm")
+        theme, entry = self._resolve_skill(name)
+
+        skill_name = entry["name"]
+        try:
+            content = self.loader.read_skill(theme, entry)
+        except SkillsError as exc:
+            return {
+                "status": "blocked",
+                "action": None,
+                "skill": skill_name,
+                "target": str(Path(target_dir).expanduser() / skill_name),
+                "target_dir": str(Path(target_dir).expanduser()),
+                "files": 0,
+                "paths": [],
+                "backup": None,
+                "error": f"{exc} (not vendored in this hub; install it from its upstream source)",
+            }
+        source_dir = self.loader.skill_path(theme, entry).parent
+        result = install_skill(skill_name, source_dir, content, target_dir, confirm)
+        result["uri"] = f"skill://{theme}/{skill_name}"
+        result["version"] = _frontmatter_version(content)
+        return result
+
+    def _lookup_version(self, skill_ref: str) -> str:
+        """Frontmatter version for ``name`` / ``theme/name`` ('' if unknown)."""
+        theme, entry = self.loader.find(*_split_skill_ref(skill_ref))
+        if entry is None:
+            return ""
+        return _frontmatter_version(self._read_skill_safe(theme, entry))
+
+    def tool_fence_value(self, args):
+        value = args.get("value")
+        if not isinstance(value, str) or not value.strip():
+            raise McpError(INVALID_PARAMS, "Missing required argument 'value'")
+        source = (args.get("source") or "machine-discovered").strip()
+        return {
+            "value": fence_value(value, source),
+            "source": source,
+        }
+
+    def tool_record_feedback(self, args):
+        """Record structured feedback after a skill is used."""
+        return feedback.write_feedback(self.feedback_dir, args)
+
+    def tool_check_skill_health(self, args):
+        """Check a skill's health from its feedback history."""
+        skill_name = _required_str_arg(args, "skill_name")
+        try:
+            return feedback.compute_health(self.feedback_dir, skill_name)
+        except ValueError as exc:
+            raise McpError(INVALID_PARAMS, str(exc))
+
+    def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
+        """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.
+
+        Imports ADK/``asyncio`` lazily so the default (stdlib-only) path never
+        touches them. Returns the resolved content, or ``None`` when resolution
+        can't run (missing dependencies / memory not configured), in which case
+        the caller falls back to raw content plus the ``template_variables``
+        hint.
+        """
+        try:
+            import asyncio
+
+            from nuvel.memory.factory import build_default_service
+        except Exception as exc:  # ADK stack not installed
+            log(f"OrgMemoryService unavailable (--with-org-memory): {exc}")
+            return None
+
+        kwargs = _memory_kwargs(self.with_org_memory)
+        try:
+            return asyncio.run(
+                _resolve_templates_async(content, variables, build_default_service, kwargs)
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort resolution
+            log(f"OrgMemoryService resolution failed: {exc}")
+            return None
 
     def tool_propose_improvement(self, args):
         skill_name = (args.get("skill_name") or "").strip()
@@ -332,7 +1086,6 @@ class SkillsMCPServer:
             k
             for k, v in (
                 ("skill_name", skill_name),
-                ("current_version", current_version),
                 ("issue", issue),
                 ("suggested_fix", suggested_fix),
             )
@@ -344,21 +1097,24 @@ class SkillsMCPServer:
                 "Missing required argument(s): {}".format(", ".join(missing)),
             )
 
+        if not current_version:
+            current_version = self._lookup_version(skill_name) or "unknown"
+
         title, body = _improvement_issue(
             skill_name, current_version, issue, suggested_fix, harness
         )
+        proposal = {
+            "skill_name": skill_name,
+            "current_version": current_version,
+            "issue": issue,
+            "suggested_fix": suggested_fix,
+            "harness": harness,
+        }
+        feedback_id = _feedback_id(proposal)
 
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
-            log("GitHub API not configured (no GITHUB_TOKEN). Improvement proposal:")
-            log(f"  title: {title}")
-            log(body)
-            return {
-                "status": "logged",
-                "message": "GitHub API not configured — improvement logged to stderr instead",
-                "title": title,
-                "body": body,
-            }
+            return self._deliver_without_token(proposal, feedback_id, title, body)
 
         payload = json.dumps(
             {"title": title, "body": body, "labels": ["skill-improvement"]}
@@ -390,11 +1146,64 @@ class SkillsMCPServer:
 
         return {
             "status": "filed",
+            "delivery": "github",
             "message": "Improvement proposal filed as GitHub issue",
+            "feedback_id": feedback_id,
+            "current_version": current_version,
             "issue_url": data.get("html_url"),
             "issue_number": data.get("number"),
             "title": title,
         }
+
+    def _deliver_without_token(self, proposal, feedback_id, title, body):
+        """Relay to NUVEL_FEEDBACK_URL if set, else (or on failure) queue locally."""
+        record = dict(proposal, feedback_id=feedback_id, title=title, body=body)
+        relay_url = os.environ.get("NUVEL_FEEDBACK_URL", "").strip()
+        relay_error = None
+        if relay_url:
+            try:
+                data = _relay_feedback(relay_url, record)
+            except (OSError, ValueError) as exc:  # URLError/HTTPError are OSErrors
+                relay_error = str(exc)
+                log(f"Feedback relay failed, queueing locally: {exc}")
+            else:
+                return {
+                    "status": "relayed",
+                    "delivery": "relay",
+                    "message": "Improvement proposal sent to the feedback relay",
+                    "feedback_id": feedback_id,
+                    "current_version": proposal["current_version"],
+                    "issue_url": data.get("issue_url"),
+                    "id": data.get("id"),
+                    "title": title,
+                }
+
+        record["queued_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if relay_error:
+            record["relay_error"] = relay_error
+        try:
+            queue_path = feedback.queue_proposal(self.feedback_dir, record)
+        except OSError as exc:
+            raise McpError(
+                INTERNAL_ERROR, f"Could not deliver or queue the proposal: {exc}"
+            )
+        result = {
+            "status": "queued",
+            "delivery": "queue",
+            "message": (
+                "No GITHUB_TOKEN or reachable NUVEL_FEEDBACK_URL — proposal saved "
+                "to the local feedback store for later delivery; "
+                "check_skill_health reports it"
+            ),
+            "feedback_id": feedback_id,
+            "current_version": proposal["current_version"],
+            "queue_path": str(queue_path),
+            "feedback_dir": str(queue_path.parent),
+            "title": title,
+        }
+        if relay_error:
+            result["relay_error"] = relay_error
+        return result
 
     # --- Dispatch / loop -----------------------------------------------------
 
@@ -451,6 +1260,13 @@ class SkillsMCPServer:
                 log(f"Parse error: {exc}")
                 _write_message(stdout, error_response(None, PARSE_ERROR, "Parse error"))
                 continue
+
+            if self.gate is not None:
+                refusal = self.gate(message)
+                if refusal is not None:
+                    if isinstance(message, dict) and "id" in message:
+                        _write_message(stdout, refusal)
+                    continue
 
             response = self.dispatch(message)
             if response is not None:

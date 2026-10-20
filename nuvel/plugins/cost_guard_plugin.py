@@ -109,14 +109,20 @@ class CostGuardPlugin(BasePlugin):
 
     Custom UIs consuming the SSE event stream can read ``state.cost_guard``
     to display live cost info and react to budget blocks.
+
+    One plugin instance serves every session on the server, so the running
+    total lives in each session's state (not on the instance) and the model
+    of an in-flight call is keyed by invocation and agent.
     """
+
+    STATE_KEY = "cost_guard"
 
     def __init__(self) -> None:
         super().__init__(name="cost_guard")
         self._pricing = _load_pricing(os.getenv("COST_GUARD_PRICING"))
         self._budget = float(os.getenv("COST_GUARD_BUDGET", "0"))
-        self._session_cost: float = 0.0
-        self._model: str = ""
+        # (invocation_id, agent_name) -> model of the call in flight.
+        self._models: dict[tuple[str, str], str] = {}
 
         if self._pricing:
             logger.info(
@@ -128,43 +134,76 @@ class CostGuardPlugin(BasePlugin):
         else:
             logger.warning("[CostGuard] No pricing data loaded — costs will not be tracked")
 
-    def _write_state(self, callback_context: CallbackContext, *, call_cost: float = 0, blocked: bool = False) -> None:
+    @staticmethod
+    def _call_key(callback_context: Any) -> tuple[str, str]:
+        return (
+            getattr(callback_context, "invocation_id", "") or "",
+            getattr(callback_context, "agent_name", "") or "",
+        )
+
+    @classmethod
+    def session_cost(cls, callback_context: Any) -> float:
+        """Running USD total for the session behind ``callback_context``."""
+        state = getattr(callback_context, "state", None)
+        if state is None:
+            return 0.0
+        snapshot = state.get(cls.STATE_KEY) or {}
+        try:
+            return float(snapshot.get("session_cost_usd", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
+
+    def _write_state(
+        self,
+        callback_context: CallbackContext,
+        *,
+        session_cost: float,
+        model: str,
+        call_cost: float = 0,
+        blocked: bool = False,
+    ) -> None:
         """Write cost guard state for client consumption via SSE."""
         if hasattr(callback_context, "state"):
-            callback_context.state["cost_guard"] = {
+            callback_context.state[self.STATE_KEY] = {
                 "call_cost_usd": round(call_cost, 8),
-                "session_cost_usd": round(self._session_cost, 8),
+                "session_cost_usd": round(session_cost, 8),
                 "budget_usd": self._budget,
                 "blocked": blocked,
-                "model": self._model,
+                "model": model,
             }
 
-    async def before_run_callback(
+    async def after_run_callback(
         self, *, invocation_context: InvocationContext
-    ) -> Optional[types.Content]:
-        self._model = ""
-        return None
+    ) -> None:
+        # Drop models left behind by calls that never reached after_model.
+        invocation_id = getattr(invocation_context, "invocation_id", "")
+        for key in [k for k in self._models if k[0] == invocation_id]:
+            self._models.pop(key, None)
 
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> Optional[LlmResponse]:
-        self._model = llm_request.model or ""
+        model = llm_request.model or ""
+        self._models[self._call_key(callback_context)] = model
 
         # Budget enforcement
-        if self._budget > 0 and self._session_cost >= self._budget:
+        session_cost = self.session_cost(callback_context)
+        if self._budget > 0 and session_cost >= self._budget:
             logger.warning(
                 "[CostGuard] Budget exceeded: $%.4f >= $%.2f — blocking request",
-                self._session_cost,
+                session_cost,
                 self._budget,
             )
-            self._write_state(callback_context, blocked=True)
+            self._write_state(
+                callback_context, session_cost=session_cost, model=model, blocked=True
+            )
             return LlmResponse(
                 content=types.Content(
                     role="model",
                     parts=[
                         types.Part(
                             text=f"I've reached the cost limit for this session "
-                            f"(${self._session_cost:.4f} / ${self._budget:.2f}). "
+                            f"(${session_cost:.4f} / ${self._budget:.2f}). "
                             f"Please start a new session to continue."
                         )
                     ],
@@ -176,6 +215,7 @@ class CostGuardPlugin(BasePlugin):
     async def after_model_callback(
         self, *, callback_context: CallbackContext, llm_response: LlmResponse
     ) -> Optional[LlmResponse]:
+        model = self._models.pop(self._call_key(callback_context), "")
         if not self._pricing:
             return None
 
@@ -186,23 +226,23 @@ class CostGuardPlugin(BasePlugin):
         prompt_tokens = usage.prompt_token_count or 0
         completion_tokens = usage.candidates_token_count or 0
 
-        cost = calculate_cost(
-            self._model, prompt_tokens, completion_tokens, self._pricing
-        )
+        cost = calculate_cost(model, prompt_tokens, completion_tokens, self._pricing)
 
         if cost is not None:
-            self._session_cost += cost
+            session_cost = self.session_cost(callback_context) + cost
             logger.info(
                 "[CostGuard] LLM call: $%.6f (session total: $%.6f) — %s",
                 cost,
-                self._session_cost,
-                self._model,
+                session_cost,
+                model,
             )
-            self._write_state(callback_context, call_cost=cost)
+            self._write_state(
+                callback_context, session_cost=session_cost, model=model, call_cost=cost
+            )
         else:
             logger.debug(
                 "[CostGuard] No pricing for model '%s' — cost not tracked",
-                self._model,
+                model,
             )
 
         return None

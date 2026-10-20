@@ -29,8 +29,11 @@ _PLACEHOLDER_RE = re.compile(r"\{\{.*?\}\}")
 # ── Impl (no ToolContext) ──────────────────────────────────────────────
 
 
-def _validate_agent_impl(agent_dir: str) -> dict:
+def validate_agent_dir(agent_dir: str) -> dict:
     """Validate the structure of a scaffolded agent directory.
+
+    Checks required files, unresolved placeholders, skill layout, and that
+    every Python file compiles. Nothing in the agent is imported or run.
 
     Returns a dict with ``status``, ``errors``, and ``warnings``.
     """
@@ -94,7 +97,23 @@ def _validate_agent_impl(agent_dir: str) -> dict:
                 rel = os.path.relpath(fpath, agent_dir)
                 errors.append(f"Unresolved placeholders in {rel}: {matches}")
 
-    # 6. Skills directories should have SKILL.md
+    # 6. Python files must compile (syntax only; nothing is executed)
+    for dirpath, _dirnames, filenames in os.walk(agent_dir):
+        for fname in filenames:
+            if not fname.endswith(".py"):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            rel = os.path.relpath(fpath, agent_dir)
+            try:
+                with open(fpath, encoding="utf-8") as fh:
+                    source = fh.read()
+                compile(source, rel, "exec", dont_inherit=True)
+            except SyntaxError as exc:
+                errors.append(f"Syntax error in {rel} line {exc.lineno}: {exc.msg}")
+            except (UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
+                errors.append(f"Python file {rel} could not be compiled: {exc!r}")
+
+    # 7. Skills directories should have SKILL.md
     skills_dir = os.path.join(package_dir, "skills")
     if os.path.isdir(skills_dir):
         for entry in os.listdir(skills_dir):
@@ -103,7 +122,7 @@ def _validate_agent_impl(agent_dir: str) -> dict:
                 if not os.path.isfile(os.path.join(skill_path, "SKILL.md")):
                     warnings.append(f"Skill directory {entry}/ missing SKILL.md")
 
-    # 7. SOUL.md should exist (warning, not error)
+    # 8. SOUL.md should exist (warning, not error)
     soul_file = os.path.join(package_dir, "soul", "SOUL.md")
     if not os.path.isfile(soul_file):
         warnings.append("Missing soul/SOUL.md — agent has no identity layer")
@@ -128,7 +147,11 @@ def validate_agent(name: str, tool_context=None) -> dict:
     else:
         output_dir = _OUTPUT_DIR
     agent_dir = os.path.join(output_dir, name)
-    return _validate_agent_impl(agent_dir)
+    return validate_agent_dir(agent_dir)
+
+
+# Earlier name, kept for existing callers.
+_validate_agent_impl = validate_agent_dir
 
 
 validate_agent_tool = FunctionTool(func=validate_agent)

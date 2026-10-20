@@ -5,7 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-08-18
+## [Unreleased]
+
+### Added
+
+- Skills MCP server HTTP transport (`nuvel mcp serve --transport http`): Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` + `/messages`, and `GET /healthz`, with Origin/CORS checks, body and session limits, and `--host`/`--port`/`--allow-remote`.
+- OAuth 2.1 on the Skills MCP HTTP transport. Every MCP method and tool requires a bearer access token, reads included. The server is its own authorization server: RFC 9728 and RFC 8414 metadata, rate-limited dynamic client registration (RFC 7591), authorization code + PKCE (S256) with GitHub login and a user allowlist, refresh-token rotation, `client_credentials` for operator-issued clients, and RFC 8707 resource binding. Tokens are stored hashed in `~/.nuvel/oauth.json` (`NUVEL_MCP_OAUTH_STORE`). New `nuvel mcp client create|list|delete` and `nuvel mcp token revoke`; `--no-auth` (loopback dev only) and, for stdio, `--require-auth`.
+
+### Fixed
+
+- The generated `tests/test_agent.py` never recorded or replayed, so its "replay" tests called the real model, costing money and giving non-deterministic results. It wrote the record/replay config into the session returned by `create_session`, which is a copy, so the Runner never saw it; it omitted the `streaming_mode` ADK 2.10's plugins require; and it imported `App` from `google.adk.app`, which does not exist, so `_run_agent` crashed before running. The config now goes in through `create_session(state=...)` with `"streaming_mode": "none"`, and `App` comes from `google.adk.apps`. `tests/test_record_replay_template.py` scaffolds an agent and runs record and replay with no real model calls.
+- Every generated ADK agent failed on its first turn: `MemoryPlugin.before_agent_callback` declared an `invocation_context` parameter that ADK never passes (it passes `agent` and `callback_context`), so the plugin manager aborted the run with a `RuntimeError`. The signature now matches ADK's.
+- The recordings and replay plugins in both chains took their directory from the `_adk_recordings_config` / `_adk_replay_config` session-state keys, which any API caller can set when creating or patching a session. A caller could make the server create a directory anywhere it can write and save the full LLM requests (system prompt, injected memory, tool definitions) there. Both plugins are now off unless `NUVEL_RECORD_REPLAY=1`, and drop those keys from the session at the start of each run otherwise. `make dev-ui` and the generated `tests/test_agent.py` turn the flag on for themselves.
+- `TracePlugin` kept the current run's trace id, session id, counters and conversation on the plugin instance. With two sessions in flight, one user's model output and tool results were written into the other's JSONL, database rows and `traces/conversations/*.json`. Each run's state is now keyed by invocation. Per-run `total_cost_usd` and peak context in `run_end` were also cumulative since process start; they are now per run. The meta-agent copy is now identical to the template's.
+- `SkillCuratorPlugin` (opt-in) mixed concurrent runs into one transcript, so a proposal could quote another user's conversation, and it called the model synchronously inside the event loop, stalling every session for the length of the call. Runs are now kept apart and the call runs in a worker thread.
+- `ToolEventsPlugin` kept every tool event and captured base64 image for the life of the process, across all sessions. Events and images now live for the run that produced them, and the SSE queue is registered per session (`set_event_queue(session_id, queue)`, `get_tool_events(invocation_id)`).
+- `ResiliencePlugin` rate-limited tool calls with one bucket for the whole server, so one runaway session throttled every user. `TOOL_RATE_LIMIT` / `TOOL_RATE_BURST` now apply per session (at most 10,000 buckets held), and a server-wide bucket every call must also pass (`TOOL_RATE_LIMIT_TOTAL` / `TOOL_RATE_BURST_TOTAL`, default 50/s, burst 200) stops a caller from dodging the limit by opening many sessions.
+- `ConsoleLoggerPlugin` mixed concurrent runs' counters, and it and `TracePlugin` / `ToolEventsPlugin` stored tool start times in session state, where they were persisted with the session and collided between parallel calls of the same tool. Timings are now kept in memory per tool call.
+
+## [0.4.0] - 2026-10-18
 
 ### Added
 
@@ -17,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `acknowledge_halt` tool — agents can recover from halted sessions instead of bricking
 - `command_guard` callback — `command_safety.classify()` now wired as a before_tool_callback in generated agents
 - 7 enterprise skills in the Nuvel Skills Hub: hr/payroll-processor, customer/triage-agent, ops/inventory-checker, ops/order-processor, audit/log-inspector, fleet/manage, fleet/troubleshoot
+- `validate_agent` now compiles every Python file in the agent (syntax only, nothing runs) and reports syntax errors with file and line.
+- Public names for embedding nuvel's builder tools in another ADK app: `nuvel.tools.validate_tool.validate_agent_dir` and `nuvel.tools.file_tools.resolve_safe_path`. The old private names stay as aliases.
+- Skills MCP server (`nuvel mcp serve`): `record_feedback` and `check_skill_health` tools over a local feedback store, with the same health report embedded in `get_skill`; `get_skill(section=...)` reads one `## ` section; `get_skill` lists `{{ var }}` template placeholders (resolved against `OrgMemoryService` with `--with-org-memory`); a `fence_value` tool for provenance-fencing values; and `--require` gating on a skill's `requires` frontmatter.
+
+### Changed
+
+- Skills MCP server: `propose_improvement`'s local fallback now queues into the feedback store (`--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback`) at `feedback-queue.jsonl`, so `check_skill_health` sees queued proposals. `NUVEL_FEEDBACK_QUEUE` is no longer read.
 
 ### Fixed
 
@@ -24,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - THIRD_PARTY.md now ships in the installed wheel (PEP 639 license-files) (#62)
 - PLUGIN_INSTANCES parser replaced with AST-based walker — handles .append() and += (#63)
 - Added subsystem coverage guard — new packages can't ship without skill references (#64)
+- `CostGuardPlugin` kept the running cost on the plugin instance, which a server shares across every session: `session_cost_usd` summed all users, and `COST_GUARD_BUDGET` blocked everyone once the server-wide total passed it. The total now lives in each session's state. Fixed in the meta-agent chain and in the generated-agent template.
+- `CostGuardPlugin` and `ContextWindowPlugin` kept the model of the call in flight on the instance, so concurrent sessions could price or size a call against another session's model. The model is now keyed by invocation and agent.
+- The meta-agent `CachePlugin` served `read_file`, `list_files` and `validate_agent` results from before a `write_file`, `scaffold_agent` or `install_skill` call for up to five minutes; those tools now clear the session's cache.
+- A latched guardrail halt never cleared: the model is short-circuited while latched, so it could never call `acknowledge_halt`, and every later turn in the session came back `[halted: …]`. The halt now stops the turn it fired in, and the user's next message clears it and resets the guard counters. Fixed in `nuvel/guardrails/` and the generated-agent template.
+- Scaffolds made from an installed nuvel (PyPI or git) had no `.env.example`, `.dockerignore`, `.gitignore` or `.gitkeep` files, because the `package-data` globs never match a leading dot. Added dotfile patterns and `tests/test_packaging.py`, which checks every template and skill file is covered.
+- `plugins/context_windows.json` was missing from the wheel, so an installed `ContextWindowPlugin` had no window sizes.
+- `google/gemini-3-flash-preview` had no entry in `pricing.json` or `context_windows.json`, so CostGuard never counted its cost (and a budget never triggered) and ContextWindow reported no percentages for it. Added to the meta-agent and template copies, priced from OpenRouter.
 
 ## [0.3.0] - 2026-08-06
 

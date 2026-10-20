@@ -13,7 +13,7 @@ _OUTPUT_DIR = os.getenv("AGENTS_OUTPUT_DIR", "./generated-agents")
 # ── Path safety ────────────────────────────────────────────────────────
 
 
-def _resolve_safe_path(path: str, base_dir: str) -> str:
+def resolve_safe_path(path: str, base_dir: str) -> str:
     """Resolve *path* relative to *base_dir*; reject escapes.
 
     Raises ValueError if the path is absolute or escapes base_dir via ``../``.
@@ -30,12 +30,16 @@ def _resolve_safe_path(path: str, base_dir: str) -> str:
     return resolved
 
 
+# Earlier name, kept for existing callers.
+_resolve_safe_path = resolve_safe_path
+
+
 # ── Impl functions (no ToolContext dependency) ─────────────────────────
 
 
 def _write_file_impl(path: str, content: str, base_dir: str) -> dict:
     try:
-        full = _resolve_safe_path(path, base_dir)
+        full = resolve_safe_path(path, base_dir)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 
@@ -52,7 +56,7 @@ def _write_file_impl(path: str, content: str, base_dir: str) -> dict:
 
 def _read_file_impl(path: str, base_dir: str) -> dict:
     try:
-        full = _resolve_safe_path(path, base_dir)
+        full = resolve_safe_path(path, base_dir)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 
@@ -70,7 +74,7 @@ def _read_file_impl(path: str, base_dir: str) -> dict:
 
 def _list_files_impl(path: str, base_dir: str) -> dict:
     try:
-        full = _resolve_safe_path(path, base_dir)
+        full = resolve_safe_path(path, base_dir)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 

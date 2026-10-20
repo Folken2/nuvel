@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nuvel-cli"
-version = "0.3.1"
+version = "0.4.0"
 description = "Production-ready agents, your way \u2014 skills, scaffolder, and meta-agent for Google ADK, Buzz, and Hermes Agent."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -75,9 +75,17 @@ include = ["nuvel*"]
     "backends/hermes/templates/**/*",
     "backends/hermes/templates_overlays/**/*",
     "backends/hermes/skills/**/*",
+    # "*" never matches a leading dot, so template dotfiles (.env.example,
+    # .dockerignore, .gitignore, .gitkeep) and dot-directories need their own
+    # patterns. tests/test_packaging.py checks the wheel against git.
+    "backends/*/templates/**/.*",
+    "backends/*/templates/**/.*/**/*",
+    "backends/*/templates/**/.*/**/.*",
+    "backends/*/templates_overlays/**/.*",
     "config/*",
     "prompt/*",
     "plugins/pricing.json",
+    "plugins/context_windows.json",
 ]
 "nuvel.dashboard" = ["fixtures/*.jsonl", "templates/*.html", "static/*"]
 

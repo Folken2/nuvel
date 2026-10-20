@@ -214,5 +214,51 @@ class TestScaffoldAgent(unittest.TestCase):
         self.assertNotIn("{{agent_package}}", content)
 
 
+class TestAdkDependencyConstraint(unittest.TestCase):
+    """Guard the google-adk constraint in the template and committed agents."""
+
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+    CONSTRAINT = "google-adk>=2.0.0,<3.0.0"
+
+    def test_scaffolded_requirements_carry_adk_2x_constraint(self):
+        tmpdir = tempfile.mkdtemp()
+        try:
+            result = scaffold_agent("dep-check", output_dir=tmpdir)
+            requirements = Path(result["path"]) / "requirements.txt"
+            lines = requirements.read_text().splitlines()
+            adk_lines = [ln for ln in lines if ln.startswith("google-adk")]
+            self.assertEqual(adk_lines, [self.CONSTRAINT])
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_template_requirements_carry_adk_2x_constraint(self):
+        template = (
+            self.REPO_ROOT
+            / "nuvel"
+            / "backends"
+            / "adk"
+            / "templates"
+            / "requirements.txt"
+        )
+        first = template.read_text().splitlines()[0]
+        self.assertEqual(first, self.CONSTRAINT)
+
+    def test_committed_generated_agents_have_no_obsolete_adk_pin(self):
+        """Committed sample agents must not pin an obsolete exact ADK version."""
+        generated = self.REPO_ROOT / "generated-agents"
+        if not generated.is_dir():
+            self.skipTest("generated-agents/ not present in this checkout")
+        offenders = []
+        for requirements in sorted(generated.glob("*/requirements.txt")):
+            for line in requirements.read_text().splitlines():
+                if not line.startswith("google-adk"):
+                    continue
+                if line.strip() != self.CONSTRAINT:
+                    offenders.append(
+                        f"{requirements.relative_to(self.REPO_ROOT)}: {line.strip()}"
+                    )
+        self.assertEqual(offenders, [], f"stale google-adk pins: {offenders}")
+
+
 if __name__ == "__main__":
     unittest.main()

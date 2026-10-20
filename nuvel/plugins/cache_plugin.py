@@ -12,11 +12,16 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
-from ..state.query_cache import cache_get, cache_set
+from ..state.query_cache import CACHE_STATE_KEY, cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
 CACHEABLE_TOOLS = {"read_file", "list_files", "validate_agent"}
+
+# Tools that change files on disk. Once one runs, a cached read_file /
+# list_files / validate_agent result may describe files that no longer exist
+# in that form, so the session's cache is dropped.
+INVALIDATING_TOOLS = {"write_file", "scaffold_agent", "install_skill"}
 
 
 class CachePlugin(BasePlugin):
@@ -51,6 +56,12 @@ class CachePlugin(BasePlugin):
         result: dict,
     ) -> Optional[dict]:
         """Store successful responses in cache."""
+        if tool.name in INVALIDATING_TOOLS:
+            if tool_context.state.get(CACHE_STATE_KEY):
+                tool_context.state[CACHE_STATE_KEY] = {}
+                logger.debug("Cache cleared after %s", tool.name)
+            return None
+
         if tool.name not in CACHEABLE_TOOLS:
             return None
 
