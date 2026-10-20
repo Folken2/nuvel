@@ -26,6 +26,8 @@ Subcommands:
         HTTP is gated by OAuth 2.1 (--no-auth for loopback dev); stdio by --require-auth.
     nuvel mcp client create|list|delete, nuvel mcp token revoke
         Manage the MCP server's OAuth clients and tokens.
+    nuvel acp serve [--dev]
+        Run the meta-agent as an ACP v2 subprocess over stdio.
     nuvel bots list|create|delete|chat|info|logs|send
         Manage and talk to Hermes-backed bots.
     nuvel fleet deploy|list|status|destroy
@@ -417,6 +419,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     from nuvel.commands import mcp_serve
     mcp_serve.register(sub)
+
+    from nuvel.commands import acp_serve
+    acp_serve.register(sub)
 
     # These subcommands pull optional third-party deps (fastapi/uvicorn, the
     # eval stack). Register them when importable; skip cleanly when they're not,

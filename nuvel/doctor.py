@@ -393,7 +393,7 @@ def check_acp_handshake(cwd: Path, pkg: str, timeout: float = 20.0) -> Check:
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": {"protocolVersion": 1, "clientCapabilities": {}},
+            "params": {"protocolVersion": 2, "clientCapabilities": {}},
         }
     )
     holder: dict[str, str] = {}
