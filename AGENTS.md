@@ -15,7 +15,7 @@ It ships as:
 - Knowledge skills in `nuvel/backends/<framework>/skills/`.
 - A CLI scaffolder exposed as `nuvel agent create` (deprecated alias: `nuvel new`).
 - A meta-agent exposed as `nuvel run`, implemented as a Google ADK `LlmAgent` in `nuvel/agent.py`.
-- A Skills MCP server exposed as `nuvel mcp serve`, in `nuvel/mcp/` (stdlib only).
+- A Skills MCP server exposed as `nuvel mcp serve`, in `packages/nuvel-mcp/src/nuvel_mcp/` (stdlib only; `nuvel/mcp/` is a deprecated alias).
 
 Generated projects are written to `generated-agents/<name>/` and are standalone runnable FastAPI apps. They should not depend on importing the local `nuvel` package at runtime.
 
@@ -111,7 +111,7 @@ It exposes:
 
 **The feedback store.** All local skill feedback lands in one directory: `--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback` (kept out of the skills hub so a read-only clone works). It holds `<skill>/<id>.json` per `record_feedback` report plus `feedback-queue.jsonl` for queued proposals. `check_skill_health` and `get_skill`'s `health` read both, so a queued proposal is visible immediately (repeat submissions of the same proposal share a `feedback_id` and count once). `theme/name` and `name` address the same skill. The former `NUVEL_FEEDBACK_QUEUE` variable is no longer read; the server logs a warning if it is set.
 
-The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol and tools, `skills_loader.py` = hub discovery/loading, `installer.py` = the plan/apply installer behind `install_skill`, `feedback.py` = the feedback store and health computation) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
+The code lives in `packages/nuvel-mcp/src/nuvel_mcp/` (`server.py` = JSON-RPC protocol and tools, `skills_loader.py` = hub discovery/loading, `installer.py` = the plan/apply installer behind `install_skill`, `feedback.py` = the feedback store and health computation) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Role scoping
 

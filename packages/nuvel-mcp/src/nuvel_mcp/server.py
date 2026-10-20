@@ -36,9 +36,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
-from nuvel.mcp import feedback
-from nuvel.mcp.installer import install_skill
-from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
+from nuvel_mcp import feedback
+from nuvel_mcp.installer import install_skill
+from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "nuvel-skills", "version": "1.0.0"}
@@ -1058,7 +1058,10 @@ class SkillsMCPServer:
             import asyncio
 
             from nuvel.memory.factory import build_default_service
-        except Exception as exc:  # ADK stack not installed
+        except ImportError as exc:  # nuvel-cli / ADK stack not installed
+            log(f"--with-org-memory needs nuvel-cli installed: {exc}")
+            return None
+        except Exception as exc:
             log(f"OrgMemoryService unavailable (--with-org-memory): {exc}")
             return None
 

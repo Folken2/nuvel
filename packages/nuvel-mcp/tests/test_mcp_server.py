@@ -1,4 +1,4 @@
-"""Tests for the Nuvel Skills MCP server (nuvel.mcp)."""
+"""Tests for the Nuvel Skills MCP server (nuvel_mcp)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import (
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import (
     SkillsError,
     SkillsLoader,
     parse_frontmatter,

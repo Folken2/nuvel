@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nuvel-cli"
-version = "0.4.0"
+version = "0.5.0.dev0"
 description = "Production-ready agents, your way \u2014 skills, scaffolder, and meta-agent for Google ADK, Buzz, and Hermes Agent."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -94,3 +94,9 @@ dependencies = { file = ["requirements.txt"] }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+nuvel-mcp = { workspace = true }

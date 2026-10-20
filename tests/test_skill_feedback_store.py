@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 
 from nuvel.commands import mcp_serve
-from nuvel.mcp import feedback
-from nuvel.mcp import server as server_mod
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsLoader
+from nuvel_mcp import feedback
+from nuvel_mcp import server as server_mod
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import SkillsLoader
 
 SKILL = "deploy-checklist"
 PROPOSAL = {"issue": "step 2 is stale", "suggested_fix": "update the link", "harness": "pytest"}

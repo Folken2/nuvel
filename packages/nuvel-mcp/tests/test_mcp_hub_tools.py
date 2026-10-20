@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from nuvel.mcp import server as server_mod
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsLoader
+from nuvel_mcp import server as server_mod
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import SkillsLoader
 
 # theme -> [(name, description, frontmatter version, body)]; a body of None
 # means the SKILL.md is not vendored (a dependency entry).

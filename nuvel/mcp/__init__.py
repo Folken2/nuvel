@@ -1,16 +1,23 @@
-"""Nuvel Skills MCP server.
+"""Deprecated alias for :mod:`nuvel_mcp`.
 
-A stdlib-only MCP (Model Context Protocol) stdio server that exposes a Nuvel
-Skills hub (a directory with ``index.json`` and ``<theme>/<name>/SKILL.md``
-files) as MCP resources and tools. Started via ``nuvel mcp serve``.
+The Skills MCP server moved to the standalone ``nuvel-mcp`` package. Submodules
+are aliased (not copied) so ``nuvel.mcp.server is nuvel_mcp.server``.
 """
 
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, resolve_skills_dir
+import sys
+import warnings
 
-__all__ = [
-    "SkillsMCPServer",
-    "SkillsLoader",
-    "SkillsError",
-    "resolve_skills_dir",
-]
+import nuvel_mcp
+from nuvel_mcp import feedback, installer, server, skills_loader
+from nuvel_mcp import SkillsError, SkillsLoader, SkillsMCPServer, resolve_skills_dir
+
+for _mod in (server, feedback, skills_loader, installer):
+    sys.modules[f"nuvel.mcp.{_mod.__name__.rsplit('.', 1)[1]}"] = _mod
+
+warnings.warn(
+    "nuvel.mcp is deprecated; import nuvel_mcp — removal not before 0.7",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+__all__ = ["SkillsMCPServer", "SkillsLoader", "SkillsError", "resolve_skills_dir"]
