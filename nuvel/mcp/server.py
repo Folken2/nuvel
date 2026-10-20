@@ -386,6 +386,10 @@ class SkillsMCPServer:
         # propose_improvement's queue). None defers to $NUVEL_FEEDBACK_DIR, then
         # ~/.nuvel/feedback, resolved per call; nothing is created until a write.
         self._feedback_dir_override = feedback_dir
+        # Optional per-message auth check for the stdio loop (``--require-auth``):
+        # returns an error response to refuse the message, or None to let it
+        # through. The HTTP transport authenticates at the HTTP layer instead.
+        self.gate = None
         if os.environ.get("NUVEL_FEEDBACK_QUEUE", "").strip():
             log(
                 "NUVEL_FEEDBACK_QUEUE is no longer used; queued proposals go to "
@@ -1256,6 +1260,13 @@ class SkillsMCPServer:
                 log(f"Parse error: {exc}")
                 _write_message(stdout, error_response(None, PARSE_ERROR, "Parse error"))
                 continue
+
+            if self.gate is not None:
+                refusal = self.gate(message)
+                if refusal is not None:
+                    if isinstance(message, dict) and "id" in message:
+                        _write_message(stdout, refusal)
+                    continue
 
             response = self.dispatch(message)
             if response is not None:

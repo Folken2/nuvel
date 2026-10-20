@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Skills MCP server HTTP transport (`nuvel mcp serve --transport http`): Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` + `/messages`, and `GET /healthz`, with Origin/CORS checks, body and session limits, and `--host`/`--port`/`--allow-remote`.
+- OAuth 2.1 on the Skills MCP HTTP transport. Every MCP method and tool requires a bearer access token, reads included. The server is its own authorization server: RFC 9728 and RFC 8414 metadata, rate-limited dynamic client registration (RFC 7591), authorization code + PKCE (S256) with GitHub login and a user allowlist, refresh-token rotation, `client_credentials` for operator-issued clients, and RFC 8707 resource binding. Tokens are stored hashed in `~/.nuvel/oauth.json` (`NUVEL_MCP_OAUTH_STORE`). New `nuvel mcp client create|list|delete` and `nuvel mcp token revoke`; `--no-auth` (loopback dev only) and, for stdio, `--require-auth`.
+
 ### Fixed
 
 - The generated `tests/test_agent.py` never recorded or replayed, so its "replay" tests called the real model, costing money and giving non-deterministic results. It wrote the record/replay config into the session returned by `create_session`, which is a copy, so the Runner never saw it; it omitted the `streaming_mode` ADK 2.10's plugins require; and it imported `App` from `google.adk.app`, which does not exist, so `_run_agent` crashed before running. The config now goes in through `create_session(state=...)` with `"streaming_mode": "none"`, and `App` comes from `google.adk.apps`. `tests/test_record_replay_template.py` scaffolds an agent and runs record and replay with no real model calls.
