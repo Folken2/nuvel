@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `nuvel mcp serve` without `--skills-dir` used to serve the current directory; it now starts in feedback-only mode. Migrate with `--skills-dir .`.
+- The MCP `initialize` response's `serverInfo.version` is now the installed `nuvel-mcp` version instead of a fixed `1.0.0`.
 - Relay failures (`propose_improvement`, `record_run_trace`) are logged as the exception class plus HTTP status only, never the message or URL, so credentials in `NUVEL_FEEDBACK_URL` cannot reach the logs.
 
 ### Deprecated

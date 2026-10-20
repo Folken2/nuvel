@@ -34,6 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from importlib import metadata
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
@@ -46,7 +47,15 @@ if TYPE_CHECKING:  # pragma: no cover
     from nuvel_mcp.traces import TraceStore
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "nuvel-skills", "version": "1.0.0"}
+def _package_version() -> str:
+    """The installed nuvel-mcp version; '0+unknown' when run from a bare source tree."""
+    try:
+        return metadata.version("nuvel-mcp")
+    except metadata.PackageNotFoundError:
+        return "0+unknown"
+
+
+SERVER_INFO = {"name": "nuvel-skills", "version": _package_version()}
 
 # JSON-RPC standard error codes.
 PARSE_ERROR = -32700
