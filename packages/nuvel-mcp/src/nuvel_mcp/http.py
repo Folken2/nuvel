@@ -18,7 +18,7 @@ from __future__ import annotations
 import contextlib
 import json
 import urllib.parse
-from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, MutableMapping
 from typing import Any
 
 import anyio
@@ -64,21 +64,24 @@ def _hostname(value: str) -> str | None:
         return None
 
 
-def _is_loopback_origin(origin: str) -> bool:
+def _origin_allowed(origin: str, hostnames: frozenset[str]) -> bool:
     try:
         parts = urllib.parse.urlsplit(origin)
     except ValueError:
         return False
-    return parts.scheme in ("http", "https") and parts.hostname in LOOPBACK_HOSTS
+    return parts.scheme in ("http", "https") and parts.hostname in hostnames
 
 
 class BodyLimitAuthMiddleware:
     """Validate Host/Origin, authenticate, cap the body and require valid JSON.
 
     With ``loopback_only`` (a loopback bind) a request whose ``Host`` is not a
-    loopback name gets 421 and one with a non-loopback ``Origin`` gets 403:
-    that stops DNS-rebinding pages, which the browser treats as same-origin,
-    from reaching the server, with or without an authenticator.
+    loopback name or one of ``allowed_hosts`` gets 421, and one whose
+    ``Origin`` is present and not ``http(s)://`` one of those gets 403. Names
+    match case-insensitively on any port. That stops DNS-rebinding pages,
+    which the browser treats as same-origin, from reaching the server, with or
+    without an authenticator; ``allowed_hosts`` admits the public name a
+    reverse proxy forwards.
 
     Order matters: authentication runs before any body byte is read, so an
     unauthenticated caller can't make the server buffer anything. A request
@@ -87,11 +90,13 @@ class BodyLimitAuthMiddleware:
     """
 
     def __init__(self, app: ASGIApp, authenticator: Authenticator | None,
-                 max_body_bytes: int = MAX_BODY_BYTES, loopback_only: bool = True) -> None:
+                 max_body_bytes: int = MAX_BODY_BYTES, loopback_only: bool = True,
+                 allowed_hosts: Iterable[str] = ()) -> None:
         self.app = app
         self.authenticator = authenticator
         self.max_body_bytes = max_body_bytes
         self.loopback_only = loopback_only
+        self.hostnames = LOOPBACK_HOSTS | {h.lower() for h in allowed_hosts}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -102,11 +107,11 @@ class BodyLimitAuthMiddleware:
         if self.loopback_only:
             headers = Headers(raw=list(raw_headers))
             hosts = headers.getlist("host")
-            if len(hosts) != 1 or _hostname(hosts[0]) not in LOOPBACK_HOSTS:
+            if len(hosts) != 1 or _hostname(hosts[0]) not in self.hostnames:
                 await _reject(send, 421, "invalid host")
                 return
             origins = headers.getlist("origin")
-            if len(origins) > 1 or (origins and not _is_loopback_origin(origins[0])):
+            if len(origins) > 1 or (origins and not _origin_allowed(origins[0], self.hostnames)):
                 await _reject(send, 403, "invalid origin")
                 return
         if sum(1 for k, _ in raw_headers if k.lower() == b"authorization") > 1:
@@ -224,12 +229,14 @@ def _build_mcp_server(server: SkillsMCPServer) -> Server:
 
 def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
               max_body_bytes: int = MAX_BODY_BYTES, *,
-              bind_host: str = "127.0.0.1") -> Starlette:
+              bind_host: str = "127.0.0.1",
+              allowed_hosts: Iterable[str] = ()) -> Starlette:
     """The ASGI app serving ``server`` at ``/mcp`` behind ``authenticator``.
 
     ``authenticator=None`` disables authentication (local use only; the CLI
     refuses it on a non-loopback host). When ``bind_host`` is a loopback name,
-    ``Host`` and ``Origin`` must be loopback too (DNS-rebinding protection).
+    ``Host`` and ``Origin`` must be loopback too, or one of ``allowed_hosts``
+    (the public name a reverse proxy forwards): DNS-rebinding protection.
     Sessions are stateless and responses are plain JSON: every request is
     authenticated on its own.
 
@@ -250,7 +257,8 @@ def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
                     lifespan=lifespan)
     app.add_middleware(BodyLimitAuthMiddleware, authenticator=authenticator,
                        max_body_bytes=max_body_bytes,
-                       loopback_only=bind_host in LOOPBACK_HOSTS)
+                       loopback_only=bind_host in LOOPBACK_HOSTS,
+                       allowed_hosts=allowed_hosts)
     return app
 
 
@@ -265,8 +273,10 @@ class _MCPEndpoint:
 
 
 def serve_http(server: SkillsMCPServer, host: str, port: int,
-               authenticator: Authenticator | None) -> None:
+               authenticator: Authenticator | None,
+               allowed_hosts: Iterable[str] = ()) -> None:
     """Serve ``server`` over Streamable HTTP with uvicorn until interrupted."""
     import uvicorn
 
-    uvicorn.run(build_app(server, authenticator, bind_host=host), host=host, port=port, log_level="info")
+    app = build_app(server, authenticator, bind_host=host, allowed_hosts=allowed_hosts)
+    uvicorn.run(app, host=host, port=port, log_level="info")

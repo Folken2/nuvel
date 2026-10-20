@@ -294,6 +294,43 @@ async def test_public_bind_does_not_check_host(server):
     assert res.status_code == 200
 
 
+# --- --allowed-host: loopback bind behind a reverse proxy ----------------------
+
+async def _proxied(app, host, origin=None):
+    headers = {**MCP_HEADERS, "Authorization": "Bearer s3cret", "Host": host}
+    if origin:
+        headers["Origin"] = origin
+    async with raw_client(app) as http:
+        return await http.post("/mcp", json=INIT, headers=headers)
+
+
+@pytest.mark.parametrize("host,origin", [
+    ("mcp.example.com", None),
+    ("MCP.Example.com", "https://mcp.example.com"),
+    ("mcp.example.com:443", "http://mcp.example.com"),
+])
+async def test_allowed_host_is_accepted_on_a_loopback_bind(server, host, origin):
+    app = build_app(server, BearerAuthenticator(TOKENS), allowed_hosts=["mcp.example.com"])
+    async with lifespan(app):
+        res = await _proxied(app, host, origin)
+    assert res.status_code == 200
+
+
+async def test_proxy_host_without_the_flag_is_421(app):
+    assert (await _proxied(app, "mcp.example.com")).status_code == 421
+
+
+@pytest.mark.parametrize("host,origin,status", [
+    ("evil.example", None, 421),
+    ("mcp.example.com.evil.example", None, 421),
+    ("mcp.example.com", "https://evil.example", 403),
+    ("mcp.example.com", "https://mcp.example.com.evil.example", 403),
+])
+async def test_allowed_host_does_not_open_other_hosts(server, host, origin, status):
+    app = build_app(server, BearerAuthenticator(TOKENS), allowed_hosts=["mcp.example.com"])
+    assert (await _proxied(app, host, origin)).status_code == status
+
+
 # --- check_skill_health over HTTP: runs only ------------------------------------
 
 async def test_http_health_returns_only_tenant_runs(app, server, tmp_path, monkeypatch):
@@ -374,6 +411,26 @@ def test_cli_non_loopback_with_bearer_auth_serves(captured, monkeypatch, tmp_pat
     (_, host, port, authenticator), _ = captured[0]
     assert (host, port) == ("0.0.0.0", 9000)
     assert authenticator.authenticate({"Authorization": "Bearer s3cret"}) == "acme"
+
+
+def test_cli_passes_allowed_hosts(captured, tmp_path):
+    assert cli.main(["serve", "--transport", "http", "--feedback-dir", str(tmp_path),
+                     "--allowed-host", "mcp.example.com",
+                     "--allowed-host", "Other.Example.org"]) == 0
+    assert captured[0][1]["allowed_hosts"] == ["mcp.example.com", "other.example.org"]
+
+
+@pytest.mark.parametrize("value", ["", " ", "evil.example/x", "user@evil.example",
+                                   "a b.example", "mcp.example.com:443", "http://x.example"])
+def test_cli_bad_allowed_host_exits_1(captured, capsys, value):
+    assert cli.main(["serve", "--transport", "http", "--allowed-host", value]) == 1
+    assert not captured
+    assert "--allowed-host" in capsys.readouterr().err
+
+
+def test_cli_allowed_host_needs_http(capsys):
+    assert cli.main(["serve", "--allowed-host", "mcp.example.com"]) == 1
+    assert "--transport http" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("spec", ["bearer", "not-a-spec", "no_such_module_xyz:make"])

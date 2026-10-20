@@ -280,7 +280,7 @@ Standalone Skills MCP server, shipped as its own dependency-free package (`nuvel
 
 ```bash
 uvx nuvel-mcp serve --skills-dir ./skills-hub
-nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--auth bearer|MODULE:FACTORY]
+nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--auth bearer|MODULE:FACTORY] [--allowed-host HOST]
 ```
 
 | Flag | Description |
@@ -291,6 +291,7 @@ nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--
 | `--transport stdio\|http` | `stdio` (default, no dependencies) or `http` (Streamable HTTP at `/mcp`; needs `pip install "nuvel-mcp[http]"`). Over HTTP only `record_run_trace` and `check_skill_health` are exposed unless `--tools` names others. |
 | `--host H`, `--port P` | HTTP bind address. Default `127.0.0.1:8765`. A host other than `127.0.0.1` / `localhost` / `::1` requires `--auth`. |
 | `--auth` | HTTP authenticator: `bearer` (tokens from `$NUVEL_MCP_TOKENS` as `name:token,name:token`; the name becomes the trace `tenant`) or `module:factory`, a zero-argument callable returning an `Authenticator`. Default: none (loopback only). See [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md). |
+| `--allowed-host HOST` | HTTP on a loopback bind: also accept `Host: HOST` (any port, case-insensitive) and `Origin: http(s)://HOST`. Use it for the public name a reverse proxy forwards; otherwise loopback binds answer non-loopback `Host` with `421` and non-loopback `Origin` with `403`. A bare host name; repeatable. |
 
 The stdio transport needs no dependencies; install `nuvel-mcp[http]` for HTTP. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
 

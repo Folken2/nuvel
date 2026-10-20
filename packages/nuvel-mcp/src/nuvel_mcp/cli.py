@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import re
 import sys
 
 from nuvel_mcp.auth import LOOPBACK_HOSTS
@@ -15,6 +16,8 @@ from nuvel_mcp.auth import LOOPBACK_HOSTS
 HTTP_EXTRA_HINT = 'pip install "nuvel-mcp[http]"'
 # Top-level modules the http extra provides; a missing one means the extra
 # isn't installed. Any other ImportError is reported as itself.
+# A bare DNS name or IPv4 address: no scheme, port, path, userinfo or spaces.
+ALLOWED_HOST_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*")
 HTTP_EXTRA_MODULES = frozenset({"mcp", "starlette", "anyio", "uvicorn", "httpx", "sse_starlette"})
 
 
@@ -106,6 +109,16 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         help="HTTP port. Default: 8765.",
     )
     parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=None,
+        metavar="HOST",
+        help="HTTP on a loopback bind: also accept this Host (and Origin "
+             "http(s)://HOST), e.g. the public name a reverse proxy forwards. "
+             "A bare host name, matched case-insensitively on any port. "
+             "Repeatable.",
+    )
+    parser.add_argument(
         "--auth",
         default=None,
         metavar="bearer|MODULE:FACTORY",
@@ -148,6 +161,18 @@ def run_serve(args: argparse.Namespace) -> int:
 
     http = args.transport == "http"
     authenticator = None
+    allowed_hosts: list[str] = []
+    if args.allowed_host is not None:
+        if not http:
+            print("Error: --allowed-host applies to --transport http only.", file=sys.stderr)
+            return 1
+        for value in args.allowed_host:
+            if not ALLOWED_HOST_RE.fullmatch(value.lower()):
+                print("Error: invalid --allowed-host value; expected a bare host name "
+                      "such as mcp.example.com (no scheme, port, path or spaces).",
+                      file=sys.stderr)
+                return 1
+            allowed_hosts.append(value.lower())
     if http:
         # Fail fast, before building anything or binding a socket.
         if args.host not in LOOPBACK_HOSTS and args.auth is None:
@@ -191,7 +216,8 @@ def run_serve(args: argparse.Namespace) -> int:
         trace_store=trace_store,
     )
     if http:
-        http_transport.serve_http(server, args.host, args.port, authenticator)
+        http_transport.serve_http(server, args.host, args.port, authenticator,
+                                  allowed_hosts=allowed_hosts)
     else:
         server.serve()
     return 0
