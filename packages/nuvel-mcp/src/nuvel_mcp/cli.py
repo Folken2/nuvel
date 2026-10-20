@@ -7,10 +7,19 @@ both entry points expose identical flags.
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+from nuvel_mcp.auth import LOOPBACK_HOSTS
+
 HTTP_EXTRA_HINT = 'pip install "nuvel-mcp[http]"'
+# Top-level modules the http extra provides; a missing one means the extra
+# isn't installed. Any other ImportError is reported as itself.
+HTTP_EXTRA_MODULES = frozenset({"mcp", "starlette", "anyio", "uvicorn", "httpx", "sse_starlette"})
+
+
+def _import_http_transport():
+    return importlib.import_module("nuvel_mcp.http")
 
 
 def _parse_tools(value: str) -> frozenset[str]:
@@ -149,10 +158,15 @@ def run_serve(args: argparse.Namespace) -> int:
             )
             return 1
         try:
-            from nuvel_mcp import http as http_transport
-        except ImportError:
-            print(f"Error: --transport http needs the http extra: {HTTP_EXTRA_HINT}",
-                  file=sys.stderr)
+            http_transport = _import_http_transport()
+        except ImportError as exc:
+            missing = (exc.name or "").partition(".")[0]
+            if missing in HTTP_EXTRA_MODULES:
+                print(f"Error: --transport http needs the http extra: {HTTP_EXTRA_HINT}",
+                      file=sys.stderr)
+            else:
+                print(f"Error: --transport http could not import {exc.name or exc}",
+                      file=sys.stderr)
             return 1
         from nuvel_mcp.auth import load_authenticator
         try:

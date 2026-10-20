@@ -220,7 +220,7 @@ async def test_lying_content_length_is_413():
         sent.append(message)
 
     scope = {"type": "http", "method": "POST", "path": "/mcp",
-             "headers": [(b"content-length", b"10")]}
+             "headers": [(b"host", b"127.0.0.1:8765"), (b"content-length", b"10")]}
     await mw(scope, receive, send)
     assert sent[0]["status"] == 413 and not seen
 
@@ -241,6 +241,99 @@ async def test_no_authenticator_allows_local_calls(server, tmp_path, example):
         result = await mcp_session(app, "ignored", go)
     assert result.isError is False
     assert "tenant" not in json.loads((tmp_path / DAY_FILE).read_text())
+
+
+# --- Host / Origin validation (DNS rebinding) -----------------------------------
+
+async def test_non_loopback_host_is_rejected_on_a_loopback_bind(app):
+    async with raw_client(app) as http:
+        res = await http.post("/mcp", content=json.dumps({**INIT, "pad": "SECRETPAYLOAD"}),
+                              headers={**MCP_HEADERS, "Authorization": "Bearer s3cret",
+                                       "Host": "evil.example"})
+    assert res.status_code == 421
+    assert "SECRETPAYLOAD" not in res.text and "evil.example" not in res.text
+
+
+async def test_non_loopback_host_is_rejected_without_auth_too(server):
+    app = build_app(server, None)
+    async with raw_client(app) as http:
+        res = await http.post("/mcp", json=INIT,
+                              headers={**MCP_HEADERS, "Host": "evil.example:8765"})
+    assert res.status_code == 421
+
+
+@pytest.mark.parametrize("origin", ["http://evil.example", "null", "http://127.0.0.1.evil.example"])
+async def test_foreign_origin_is_rejected(server, origin):
+    app = build_app(server, None)
+    async with raw_client(app) as http:
+        res = await http.post("/mcp", json=INIT, headers={**MCP_HEADERS, "Origin": origin})
+    assert res.status_code == 403
+    assert "evil" not in res.text
+
+
+@pytest.mark.parametrize("host,origin", [
+    ("localhost:8765", "http://localhost:8765"),
+    ("[::1]:8765", "http://[::1]:8765"),
+    ("127.0.0.1", "https://127.0.0.1"),
+])
+async def test_loopback_host_and_origin_are_accepted(server, host, origin):
+    app = build_app(server, None)
+    async with lifespan(app):
+        async with raw_client(app) as http:
+            res = await http.post("/mcp", json=INIT,
+                                  headers={**MCP_HEADERS, "Host": host, "Origin": origin})
+    assert res.status_code == 200
+
+
+async def test_public_bind_does_not_check_host(server):
+    app = build_app(server, BearerAuthenticator(TOKENS), bind_host="0.0.0.0")
+    async with lifespan(app):
+        async with raw_client(app) as http:
+            res = await http.post("/mcp", json=INIT, headers={
+                **MCP_HEADERS, "Authorization": "Bearer s3cret", "Host": "mcp.example.com"})
+    assert res.status_code == 200
+
+
+# --- check_skill_health over HTTP: runs only ------------------------------------
+
+async def test_http_health_returns_only_tenant_runs(app, server, tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    local = SkillsMCPServer(None, feedback_dir=tmp_path)
+    queued = local.handle_tools_call({"name": "propose_improvement", "arguments": {
+        "skill_name": "radar", "current_version": "1.0.0",
+        "issue": "PRIVATEISSUETEXT", "suggested_fix": "PRIVATEFIXTEXT"}})
+    assert json.loads(queued["content"][0]["text"])["status"] == "queued"
+
+    async def go(session):
+        return await session.call_tool(
+            "check_skill_health", {"skill_name": "radar", "plugin": "chief-of-staff"})
+
+    async with lifespan(app):
+        result = await mcp_session(app, "s3cret", go)
+    dumped = result.model_dump_json()
+    assert "PRIVATEISSUETEXT" not in dumped and "PRIVATEFIXTEXT" not in dumped
+    body = json.loads(result.content[0].text)
+    assert set(body) == {"skill", "plugin", "runs"}
+    assert (body["skill"], body["plugin"]) == ("radar", "chief-of-staff")
+    # stdio still reports the feedback store.
+    stdio = json.loads(local.handle_tools_call({"name": "check_skill_health", "arguments": {
+        "skill_name": "radar"}})["content"][0]["text"])
+    assert stdio["queued_proposals"] == 1
+
+
+@pytest.mark.parametrize("args", [
+    {"skill_name": "radar"},
+    {"skill_name": "radar", "plugin": "Bad Plugin SECRETVALUE"},
+    {"skill_name": "../SECRETVALUE", "plugin": "chief-of-staff"},
+])
+async def test_http_health_requires_plugin_and_never_echoes(app, args):
+    async def go(session):
+        return await session.call_tool("check_skill_health", args)
+
+    async with lifespan(app):
+        result = await mcp_session(app, "s3cret", go)
+    assert result.isError is True
+    assert "SECRETVALUE" not in result.model_dump_json()
 
 
 # --- CLI wiring ---------------------------------------------------------------

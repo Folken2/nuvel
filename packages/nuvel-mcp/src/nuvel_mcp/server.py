@@ -405,12 +405,17 @@ class SkillsMCPServer:
         feedback_dir: str | None = None,
         tools: frozenset[str] | None = None,
         trace_store: "TraceStore | None" = None,
+        health_runs_only: bool = False,
     ):
         # None means feedback-only mode: no hub tools or resources are served.
         self.loader = loader
         # Optional allow-list narrowing which tools are listed and callable.
         self._allowed_tools = tools
         self.trace_store = trace_store
+        # Set by the HTTP transport: check_skill_health then requires 'plugin'
+        # and returns only the principal-scoped run-trace summary, never
+        # anything read from the local feedback store (which holds free text).
+        self.health_runs_only = health_runs_only
         # When set, discovery (resources/list, search_skills, list_skills,
         # list_themes, get_skill, install_skill) is scoped to this single theme. resources/read is unaffected — scoping
         # is about discovery, not access control.
@@ -1153,6 +1158,8 @@ class SkillsMCPServer:
 
     def tool_check_skill_health(self, args):
         """Check a skill's health from its feedback history."""
+        if self.health_runs_only:
+            return self._runs_only_health(args)
         skill_name = _required_str_arg(args, "skill_name")
         plugin = args.get("plugin")
         if plugin is not None and not (
@@ -1166,6 +1173,21 @@ class SkillsMCPServer:
         if plugin is not None:
             report["runs"] = self._runs_summary(plugin, feedback.skill_key(skill_name))
         return report
+
+    def _runs_only_health(self, args) -> dict:
+        """check_skill_health for remote callers: the run summary and nothing else.
+
+        Error messages never repeat the caller's values.
+        """
+        plugin = args.get("plugin")
+        if not (isinstance(plugin, str) and traces.IDENTIFIER_RE.fullmatch(plugin)):
+            raise McpError(INVALID_PARAMS, "Argument 'plugin' is required and must be a plugin identifier")
+        skill_name = args.get("skill_name")
+        try:
+            skill = feedback.skill_key(skill_name if isinstance(skill_name, str) else "")
+        except ValueError:
+            raise McpError(INVALID_PARAMS, "Argument 'skill_name' must be a skill name") from None
+        return {"skill": skill, "plugin": plugin, "runs": self._runs_summary(plugin, skill)}
 
     def _runs_summary(self, plugin: str, skill: str) -> dict:
         """Last-30-days run-trace summary for ``plugin.skill`` (principal-scoped)."""

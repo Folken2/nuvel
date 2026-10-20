@@ -12,7 +12,7 @@ authors = [{ name = "Albert Folch" }]
 dependencies = []
 
 [project.optional-dependencies]
-http = ["mcp>=1.10,<2"]
+http = ["mcp>=1.30,<2"]
 
 [project.scripts]
 nuvel-mcp = "nuvel_mcp.cli:main"

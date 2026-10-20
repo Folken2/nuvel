@@ -24,6 +24,9 @@ current_principal: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 TOKENS_ENV = "NUVEL_MCP_TOKENS"
+# Host names that only reach this machine. The HTTP transport may run without
+# an authenticator only when bound to one of these.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 class Authenticator(Protocol):

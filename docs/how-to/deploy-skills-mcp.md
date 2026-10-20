@@ -8,7 +8,7 @@ authenticator.
 ## Run it
 
 The HTTP transport needs the optional `http` extra (it pulls in the official
-`mcp` SDK; the stdio server stays dependency-free):
+`mcp` SDK, version 1.30 or newer; the stdio server stays dependency-free):
 
 ```bash
 export NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN,globex:$GLOBEX_MCP_TOKEN"
@@ -51,8 +51,15 @@ terminate TLS itself; run it behind something that does:
   platform's HTTPS endpoint.
 
 Binding anything other than `127.0.0.1`, `localhost` or `::1` without `--auth`
-is refused before the server starts. With no `--auth` on loopback, any process
-on the machine can call the server, so use that only for local testing.
+is refused before the server starts. Without `--auth`, every process on the
+machine can call the server, so use that only for local testing.
+
+On a loopback bind the server also checks `Host` and `Origin`, with or without
+`--auth`. Without these checks any website the user visits could reach the server
+through DNS rebinding: the browser treats the rebound page as same-origin. A
+`Host` other than `127.0.0.1`, `localhost` or `[::1]` (any port) gets `421`, and
+an `Origin` that is present and not one of those gets `403`. On a public bind
+(`--host 0.0.0.0`) `Host` is not checked; `--auth` is required there instead.
 
 ## What is exposed over HTTP, and why
 
@@ -61,7 +68,7 @@ By default HTTP exposes exactly two tools:
 | Tool | Why it is safe to expose |
 |---|---|
 | `record_run_trace` | Takes a closed-schema `nuvel.skill_run/1` trace with no free-text fields; anything else is rejected without being echoed. |
-| `check_skill_health` | Read-only; its `runs` block is scoped to the caller's tenant. |
+| `check_skill_health` | Read-only. Over HTTP `plugin` is required, and the result is only `{"skill", "plugin", "runs"}`: the run-trace summary for the caller's tenant. Nothing from the local feedback store (outcome counts, queued proposals and their free text) is returned. |
 
 Everything else is off unless you name it in `--tools`:
 
@@ -81,6 +88,8 @@ Every request is checked before the MCP SDK sees it:
 
 | Condition | Response |
 |---|---|
+| `Host` not loopback (loopback bind only) | `421` |
+| `Origin` present and not loopback (loopback bind only) | `403` |
 | Missing or wrong token, or more than one `Authorization` header | `401` |
 | Body over 65536 bytes (by `Content-Length`, or counted while streaming a chunked body) | `413` |
 | Body that is not valid JSON | `400` |

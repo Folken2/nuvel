@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from typing import Any
 
@@ -28,7 +29,7 @@ from starlette.applications import Starlette
 from starlette.datastructures import Headers
 from starlette.routing import Route
 
-from nuvel_mcp.auth import Authenticator, current_principal
+from nuvel_mcp.auth import LOOPBACK_HOSTS, Authenticator, current_principal
 from nuvel_mcp.server import INVALID_PARAMS, SERVER_INFO, McpError, SkillsMCPServer, log
 
 Scope = MutableMapping[str, Any]
@@ -55,8 +56,29 @@ async def _reject(send: Send, status: int, error: str, extra: list | None = None
     await send({"type": "http.response.body", "body": body})
 
 
+def _hostname(value: str) -> str | None:
+    """Host name of a ``Host`` header value (``[::1]:8765`` -> ``::1``)."""
+    try:
+        return urllib.parse.urlsplit(f"//{value}").hostname
+    except ValueError:
+        return None
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    try:
+        parts = urllib.parse.urlsplit(origin)
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and parts.hostname in LOOPBACK_HOSTS
+
+
 class BodyLimitAuthMiddleware:
-    """Authenticate, cap the body at ``max_body_bytes`` and require valid JSON.
+    """Validate Host/Origin, authenticate, cap the body and require valid JSON.
+
+    With ``loopback_only`` (a loopback bind) a request whose ``Host`` is not a
+    loopback name gets 421 and one with a non-loopback ``Origin`` gets 403:
+    that stops DNS-rebinding pages, which the browser treats as same-origin,
+    from reaching the server, with or without an authenticator.
 
     Order matters: authentication runs before any body byte is read, so an
     unauthenticated caller can't make the server buffer anything. A request
@@ -65,10 +87,11 @@ class BodyLimitAuthMiddleware:
     """
 
     def __init__(self, app: ASGIApp, authenticator: Authenticator | None,
-                 max_body_bytes: int = MAX_BODY_BYTES) -> None:
+                 max_body_bytes: int = MAX_BODY_BYTES, loopback_only: bool = True) -> None:
         self.app = app
         self.authenticator = authenticator
         self.max_body_bytes = max_body_bytes
+        self.loopback_only = loopback_only
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -76,6 +99,16 @@ class BodyLimitAuthMiddleware:
             return
 
         raw_headers = scope.get("headers") or []
+        if self.loopback_only:
+            headers = Headers(raw=list(raw_headers))
+            hosts = headers.getlist("host")
+            if len(hosts) != 1 or _hostname(hosts[0]) not in LOOPBACK_HOSTS:
+                await _reject(send, 421, "invalid host")
+                return
+            origins = headers.getlist("origin")
+            if len(origins) > 1 or (origins and not _is_loopback_origin(origins[0])):
+                await _reject(send, 403, "invalid origin")
+                return
         if sum(1 for k, _ in raw_headers if k.lower() == b"authorization") > 1:
             await _reject(send, 401, "unauthorized", [(b"www-authenticate", b"Bearer")])
             return
@@ -190,13 +223,20 @@ def _build_mcp_server(server: SkillsMCPServer) -> Server:
 
 
 def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
-              max_body_bytes: int = MAX_BODY_BYTES) -> Starlette:
+              max_body_bytes: int = MAX_BODY_BYTES, *,
+              bind_host: str = "127.0.0.1") -> Starlette:
     """The ASGI app serving ``server`` at ``/mcp`` behind ``authenticator``.
 
     ``authenticator=None`` disables authentication (local use only; the CLI
-    refuses it on a non-loopback host). Sessions are stateless and responses
-    are plain JSON: every request is authenticated on its own.
+    refuses it on a non-loopback host). When ``bind_host`` is a loopback name,
+    ``Host`` and ``Origin`` must be loopback too (DNS-rebinding protection).
+    Sessions are stateless and responses are plain JSON: every request is
+    authenticated on its own.
+
+    Puts ``server`` in remote mode: ``check_skill_health`` then returns only the
+    caller's run summary, nothing from the local feedback store.
     """
+    server.health_runs_only = True
     manager = StreamableHTTPSessionManager(
         app=_build_mcp_server(server), json_response=True, stateless=True,
     )
@@ -209,7 +249,8 @@ def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
     app = Starlette(routes=[Route(MCP_PATH, endpoint=_MCPEndpoint(manager))],
                     lifespan=lifespan)
     app.add_middleware(BodyLimitAuthMiddleware, authenticator=authenticator,
-                       max_body_bytes=max_body_bytes)
+                       max_body_bytes=max_body_bytes,
+                       loopback_only=bind_host in LOOPBACK_HOSTS)
     return app
 
 
@@ -228,4 +269,4 @@ def serve_http(server: SkillsMCPServer, host: str, port: int,
     """Serve ``server`` over Streamable HTTP with uvicorn until interrupted."""
     import uvicorn
 
-    uvicorn.run(build_app(server, authenticator), host=host, port=port, log_level="info")
+    uvicorn.run(build_app(server, authenticator, bind_host=host), host=host, port=port, log_level="info")

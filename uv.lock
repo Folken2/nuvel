@@ -1659,7 +1659,7 @@ http = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mcp", marker = "extra == 'http'", specifier = ">=1.10,<2" }]
+requires-dist = [{ name = "mcp", marker = "extra == 'http'", specifier = ">=1.30,<2" }]
 provides-extras = ["http"]
 
 [[package]]

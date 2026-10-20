@@ -130,6 +130,11 @@ Without `plugin` the output is unchanged. When a principal is authenticated, the
 counts only that principal's tenant; over stdio (no principal) it covers the whole
 store.
 
+Over HTTP (`--transport http`) `plugin` is required, and the result carries only the
+identifiers and the tenant-scoped `runs` block (`{"skill", "plugin", "runs"}`).
+Nothing from the local feedback store is returned to remote callers, because it holds
+free text (queued proposals) and other tenants' outcomes.
+
 ## Known limitations
 
 - **Duplicate detection is per process.** The `run_id` check runs under an in-process
