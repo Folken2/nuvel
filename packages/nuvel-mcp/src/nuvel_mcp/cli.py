@@ -173,6 +173,11 @@ def run_serve(args: argparse.Namespace) -> int:
                       file=sys.stderr)
                 return 1
             allowed_hosts.append(value.lower())
+        if args.auth is None:
+            # A proxied public name is non-loopback reach, same as --host.
+            print("Error: --allowed-host makes the server reachable through a proxy; "
+                  "it requires --auth.", file=sys.stderr)
+            return 1
     if http:
         # Fail fast, before building anything or binding a socket.
         if args.host not in LOOPBACK_HOSTS and args.auth is None:

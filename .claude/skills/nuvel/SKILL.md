@@ -173,7 +173,7 @@ nuvel new <kebab-name> --description "…" --with-acp
 nuvel-mcp serve --skills-dir ./skills-hub   # same as: nuvel mcp serve; or: uvx nuvel-mcp serve
 nuvel-mcp serve                             # no --skills-dir: feedback-only mode (feedback tools + record_run_trace)
 nuvel-mcp serve --tools record_run_trace,check_skill_health --trace-store local   # allow-list; trace store local|module:factory
-NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN" nuvel-mcp serve --transport http --auth bearer   # Streamable HTTP (needs nuvel-mcp[http]); --host/--port default 127.0.0.1:8765; non-loopback --host requires --auth; behind a reverse proxy add --allowed-host mcp.example.com (loopback binds 421 any other Host)
+NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN" nuvel-mcp serve --transport http --auth bearer   # Streamable HTTP (needs nuvel-mcp[http]); --host/--port default 127.0.0.1:8765; non-loopback --host requires --auth; behind a reverse proxy add --allowed-host mcp.example.com (requires --auth; loopback binds 421 any other Host)
 
 # Knowledge
 nuvel skills list

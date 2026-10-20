@@ -43,10 +43,15 @@ terminate TLS itself; run it behind something that does:
   rejects with `421` unless you allow it with `--allowed-host`:
 
   ```bash
+  export NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN"   # name:token pairs, from your secret store
   nuvel-mcp serve --transport http --auth bearer --allowed-host mcp.example.com
   ```
 
-  Caddy (passes the client's `Host` upstream by default):
+  `--allowed-host` requires `--auth`: a proxied public name is reachable from
+  outside the machine, exactly like a non-loopback `--host`.
+
+  Caddy (passes the client's `Host` upstream by default; run `nuvel-mcp` with
+  the command above):
 
   ```text
   mcp.example.com {
@@ -54,7 +59,7 @@ terminate TLS itself; run it behind something that does:
   }
   ```
 
-  nginx:
+  nginx (same `nuvel-mcp` command):
 
   ```nginx
   location /mcp {
@@ -65,7 +70,8 @@ terminate TLS itself; run it behind something that does:
 
   Alternatively, have the proxy rewrite `Host` to the upstream address (Caddy:
   `header_up Host {upstream_hostport}`; nginx: `proxy_set_header Host 127.0.0.1:8765;`),
-  in which case no `--allowed-host` is needed.
+  in which case no `--allowed-host` is needed. Keep `--auth bearer` anyway: the
+  proxy makes the server public whichever way `Host` arrives.
 
 - **Container platform** (Railway, Fly, Cloud Run, Kubernetes) — bind
   `--host 0.0.0.0 --port $PORT` and expose the service only through the
@@ -81,8 +87,8 @@ through DNS rebinding: the browser treats the rebound page as same-origin. A
 `Host` other than `127.0.0.1`, `localhost`, `[::1]` or a `--allowed-host` name
 (any port, case-insensitive) gets `421`, and an `Origin` that is present and not
 `http://` or `https://` one of those names gets `403`. `--allowed-host` takes a
-bare host name (no scheme, port or path), is repeatable, and the checks stay on
-when `--auth` is set. On a public bind
+bare host name (no scheme, port or path), is repeatable, requires `--auth`, and
+the checks stay on when `--auth` is set. On a public bind
 (`--host 0.0.0.0`) `Host` is not checked; `--auth` is required there instead.
 
 ## What is exposed over HTTP, and why

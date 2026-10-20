@@ -413,9 +413,10 @@ def test_cli_non_loopback_with_bearer_auth_serves(captured, monkeypatch, tmp_pat
     assert authenticator.authenticate({"Authorization": "Bearer s3cret"}) == "acme"
 
 
-def test_cli_passes_allowed_hosts(captured, tmp_path):
+def test_cli_passes_allowed_hosts(captured, monkeypatch, tmp_path):
+    monkeypatch.setenv("NUVEL_MCP_TOKENS", "acme:s3cret")
     assert cli.main(["serve", "--transport", "http", "--feedback-dir", str(tmp_path),
-                     "--allowed-host", "mcp.example.com",
+                     "--auth", "bearer", "--allowed-host", "mcp.example.com",
                      "--allowed-host", "Other.Example.org"]) == 0
     assert captured[0][1]["allowed_hosts"] == ["mcp.example.com", "other.example.org"]
 
@@ -426,6 +427,28 @@ def test_cli_bad_allowed_host_exits_1(captured, capsys, value):
     assert cli.main(["serve", "--transport", "http", "--allowed-host", value]) == 1
     assert not captured
     assert "--allowed-host" in capsys.readouterr().err
+
+
+def test_cli_allowed_host_without_auth_exits_1(captured, capsys):
+    assert cli.main(["serve", "--transport", "http", "--allowed-host", "mcp.example.com"]) == 1
+    assert not captured
+    assert "--auth" in capsys.readouterr().err
+
+
+def test_build_app_refuses_allowed_hosts_without_authenticator(server):
+    with pytest.raises(ValueError, match="authenticator"):
+        build_app(server, None, allowed_hosts=("mcp.example.com",))
+
+
+def test_serve_http_refuses_allowed_hosts_without_authenticator(server, monkeypatch):
+    import sys
+    import types
+    from nuvel_mcp.http import serve_http
+    ran = []
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: ran.append(1)))
+    with pytest.raises(ValueError):
+        serve_http(server, "127.0.0.1", 8765, None, allowed_hosts=["mcp.example.com"])
+    assert not ran
 
 
 def test_cli_allowed_host_needs_http(capsys):

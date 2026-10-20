@@ -240,9 +240,15 @@ def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
     Sessions are stateless and responses are plain JSON: every request is
     authenticated on its own.
 
+    ``allowed_hosts`` makes the server reachable from outside the machine, so
+    it requires an authenticator (``ValueError`` otherwise).
+
     Puts ``server`` in remote mode: ``check_skill_health`` then returns only the
     caller's run summary, nothing from the local feedback store.
     """
+    allowed_hosts = tuple(allowed_hosts)
+    if allowed_hosts and authenticator is None:
+        raise ValueError("allowed_hosts requires an authenticator")
     server.health_runs_only = True
     manager = StreamableHTTPSessionManager(
         app=_build_mcp_server(server), json_response=True, stateless=True,
