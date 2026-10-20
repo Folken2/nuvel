@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- `validate_agent` now compiles every Python file in the agent (syntax only, nothing runs) and reports syntax errors with file and line.
-- Public names for embedding nuvel's builder tools in another ADK app: `nuvel.tools.validate_tool.validate_agent_dir` and `nuvel.tools.file_tools.resolve_safe_path`. The old private names stay as aliases.
-
 ### Fixed
 
 - Every generated ADK agent failed on its first turn: `MemoryPlugin.before_agent_callback` declared an `invocation_context` parameter that ADK never passes (it passes `agent` and `callback_context`), so the plugin manager aborted the run with a `RuntimeError`. The signature now matches ADK's.
@@ -21,15 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ToolEventsPlugin` kept every tool event and captured base64 image for the life of the process, across all sessions. Events and images now live for the run that produced them, and the SSE queue is registered per session (`set_event_queue(session_id, queue)`, `get_tool_events(invocation_id)`).
 - `ResiliencePlugin` rate-limited tool calls with one bucket for the whole server, so one runaway session throttled every user. `TOOL_RATE_LIMIT` / `TOOL_RATE_BURST` now apply per session (at most 10,000 buckets held), and a server-wide bucket every call must also pass (`TOOL_RATE_LIMIT_TOTAL` / `TOOL_RATE_BURST_TOTAL`, default 50/s, burst 200) stops a caller from dodging the limit by opening many sessions.
 - `ConsoleLoggerPlugin` mixed concurrent runs' counters, and it and `TracePlugin` / `ToolEventsPlugin` stored tool start times in session state, where they were persisted with the session and collided between parallel calls of the same tool. Timings are now kept in memory per tool call.
-- `CostGuardPlugin` kept the running cost on the plugin instance, which a server shares across every session: `session_cost_usd` summed all users, and `COST_GUARD_BUDGET` blocked everyone once the server-wide total passed it. The total now lives in each session's state. Fixed in the meta-agent chain and in the generated-agent template.
-- `CostGuardPlugin` and `ContextWindowPlugin` kept the model of the call in flight on the instance, so concurrent sessions could price or size a call against another session's model. The model is now keyed by invocation and agent.
-- The meta-agent `CachePlugin` served `read_file`, `list_files` and `validate_agent` results from before a `write_file`, `scaffold_agent` or `install_skill` call for up to five minutes; those tools now clear the session's cache.
-- A latched guardrail halt never cleared: the model is short-circuited while latched, so it could never call `acknowledge_halt`, and every later turn in the session came back `[halted: …]`. The halt now stops the turn it fired in, and the user's next message clears it and resets the guard counters. Fixed in `nuvel/guardrails/` and the generated-agent template.
-- Scaffolds made from an installed nuvel (PyPI or git) had no `.env.example`, `.dockerignore`, `.gitignore` or `.gitkeep` files, because the `package-data` globs never match a leading dot. Added dotfile patterns and `tests/test_packaging.py`, which checks every template and skill file is covered.
-- `plugins/context_windows.json` was missing from the wheel, so an installed `ContextWindowPlugin` had no window sizes.
-- `google/gemini-3-flash-preview` had no entry in `pricing.json` or `context_windows.json`, so CostGuard never counted its cost (and a budget never triggered) and ContextWindow reported no percentages for it. Added to the meta-agent and template copies, priced from OpenRouter.
 
-## [0.4.0] - 2026-08-18
+## [0.4.0] - 2026-10-18
 
 ### Added
 
@@ -41,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `acknowledge_halt` tool — agents can recover from halted sessions instead of bricking
 - `command_guard` callback — `command_safety.classify()` now wired as a before_tool_callback in generated agents
 - 7 enterprise skills in the Nuvel Skills Hub: hr/payroll-processor, customer/triage-agent, ops/inventory-checker, ops/order-processor, audit/log-inspector, fleet/manage, fleet/troubleshoot
+- `validate_agent` now compiles every Python file in the agent (syntax only, nothing runs) and reports syntax errors with file and line.
+- Public names for embedding nuvel's builder tools in another ADK app: `nuvel.tools.validate_tool.validate_agent_dir` and `nuvel.tools.file_tools.resolve_safe_path`. The old private names stay as aliases.
+- Skills MCP server (`nuvel mcp serve`): `record_feedback` and `check_skill_health` tools over a local feedback store, with the same health report embedded in `get_skill`; `get_skill(section=...)` reads one `## ` section; `get_skill` lists `{{ var }}` template placeholders (resolved against `OrgMemoryService` with `--with-org-memory`); a `fence_value` tool for provenance-fencing values; and `--require` gating on a skill's `requires` frontmatter.
+
+### Changed
+
+- Skills MCP server: `propose_improvement`'s local fallback now queues into the feedback store (`--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback`) at `feedback-queue.jsonl`, so `check_skill_health` sees queued proposals. `NUVEL_FEEDBACK_QUEUE` is no longer read.
 
 ### Fixed
 
@@ -48,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - THIRD_PARTY.md now ships in the installed wheel (PEP 639 license-files) (#62)
 - PLUGIN_INSTANCES parser replaced with AST-based walker — handles .append() and += (#63)
 - Added subsystem coverage guard — new packages can't ship without skill references (#64)
+- `CostGuardPlugin` kept the running cost on the plugin instance, which a server shares across every session: `session_cost_usd` summed all users, and `COST_GUARD_BUDGET` blocked everyone once the server-wide total passed it. The total now lives in each session's state. Fixed in the meta-agent chain and in the generated-agent template.
+- `CostGuardPlugin` and `ContextWindowPlugin` kept the model of the call in flight on the instance, so concurrent sessions could price or size a call against another session's model. The model is now keyed by invocation and agent.
+- The meta-agent `CachePlugin` served `read_file`, `list_files` and `validate_agent` results from before a `write_file`, `scaffold_agent` or `install_skill` call for up to five minutes; those tools now clear the session's cache.
+- A latched guardrail halt never cleared: the model is short-circuited while latched, so it could never call `acknowledge_halt`, and every later turn in the session came back `[halted: …]`. The halt now stops the turn it fired in, and the user's next message clears it and resets the guard counters. Fixed in `nuvel/guardrails/` and the generated-agent template.
+- Scaffolds made from an installed nuvel (PyPI or git) had no `.env.example`, `.dockerignore`, `.gitignore` or `.gitkeep` files, because the `package-data` globs never match a leading dot. Added dotfile patterns and `tests/test_packaging.py`, which checks every template and skill file is covered.
+- `plugins/context_windows.json` was missing from the wheel, so an installed `ContextWindowPlugin` had no window sizes.
+- `google/gemini-3-flash-preview` had no entry in `pricing.json` or `context_windows.json`, so CostGuard never counted its cost (and a budget never triggered) and ContextWindow reported no percentages for it. Added to the meta-agent and template copies, priced from OpenRouter.
 
 ## [0.3.0] - 2026-08-06
 

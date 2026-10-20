@@ -81,7 +81,7 @@ Keep `.claude/skills/nuvel/SKILL.md` in sync with CLI flags, scaffold behavior, 
 `nuvel mcp serve` starts a stdlib-only MCP (Model Context Protocol) stdio server that exposes a skills hub — the [Nuvel Skills](https://github.com/Folken2/skills) repo, or any directory laid out the same way — to MCP clients such as Claude Code, Cursor, and Codex.
 
 ```bash
-nuvel mcp serve [--skills-dir <dir>]
+nuvel mcp serve [--skills-dir <dir>] [--theme <t>] [--require <cap>]... [--with-org-memory <dsn|path>] [--feedback-dir <dir>]
 ```
 
 - `--skills-dir` (default: current directory) points at a skills hub. It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
@@ -90,11 +90,28 @@ nuvel mcp serve [--skills-dir <dir>]
 It exposes:
 
 - **Resources** — `skill://{theme}/{name}` for every skill in the hub's `index.json`, returning the full `SKILL.md`.
-- **Tools** — `search_skills` (keyword search over name/description), `get_skill` (full content + frontmatter metadata by `name` or `theme/name`), and `propose_improvement` (files a structured GitHub issue proposing a skill fix).
+- **Tools**:
+  - `search_skills` — ranked search. Multi-word queries are AND-matched, case-insensitively, against name, description, theme and author (`-`, `_`, `.`, `/` count as spaces, so `installer transaction` finds `installer-transaction-design`). `include_body=true` also searches `SKILL.md` bodies and returns a `snippet`. Optional `theme`, `limit` (default 10, max 50).
+  - `list_skills` — paginated browse (`theme`, `limit` default 50 / max 200, `offset`); returns `total` for paging. An unknown theme returns an empty list.
+  - `list_themes` — every theme with its skill count and skill names.
+  - `get_skill` — full content, frontmatter `metadata` and top-level `version` by `name` or `theme/name`. Optional `section` returns a single `## ` section instead of the whole file. `metadata.template_variables` lists any `{{ var }}` placeholders; with `--with-org-memory` they are resolved against `OrgMemoryService` into `resolved_content`. Every response embeds `health` — the same report `check_skill_health` returns.
+  - `install_skill` — copies a skill's directory (`SKILL.md` plus supporting files) into `<target_dir>/<name>/`. `target_dir` defaults to `$NUVEL_SKILLS_INSTALL_DIR`, then `~/.claude/skills`. Plan-first: `confirm=false` (default) is read-only and reports `action` (`install` / `update` / `noop`); `confirm=true` writes through a staging directory, backs an existing copy up to `<dest>.backup` (never overwriting an existing backup), refuses symlinked or non-directory targets (`blocked`), and re-verifies the result. Statuses: `planned`, `installed`, `noop`, `blocked`, `failed`.
+  - `fence_value` — wraps a value in `[begin customer-specific data (<source>, unverified)]` … `[end customer-specific data]` markers so a discovered or user-supplied fact can't be read as an instruction.
+  - `propose_improvement` — sends a skill-improvement proposal (`current_version` is optional and read from frontmatter when omitted). Every call returns a `feedback_id` and a `delivery` field.
+  - `record_feedback` — records the outcome of using a skill (`outcome`: success / partial / failure / blocked; `severity`: blocking / misleading / minor; optional `section`, `what_worked`, `proposed_patch`, …) in the feedback store.
+  - `check_skill_health` — a skill's report from the feedback store: 30-day outcome counts, `trend`, `flagged_sections` (≥2 reports on a section with a blocking or misleading one), `queued_proposals` with the newest `proposals`, and a `recommendation` (`ok` / `review_before_use` / `use_cautiously`, driven by outcome reports).
 
-`propose_improvement` files issues against `github.com/Folken2/skills` using the `GITHUB_TOKEN` environment variable. Without a token it degrades gracefully: the proposal is logged to stderr and returned to the caller instead of being filed.
+`--theme <t>` scopes discovery (`resources/list`, `search_skills`, `list_skills`, `list_themes`, `get_skill`, `install_skill`) to one theme; `resources/read` stays unscoped. `--require <cap>` (repeatable, comma-separated) further limits `resources/list`, `search_skills`, `list_skills` and `list_themes` to skills whose `requires` frontmatter declares every listed capability.
 
-The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol, `skills_loader.py` = hub discovery/loading) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
+`propose_improvement` delivers via the first available path:
+
+1. `GITHUB_TOKEN` set — files an issue against `github.com/Folken2/skills` (`status: "filed"`, `delivery: "github"`, `issue_url`).
+2. `NUVEL_FEEDBACK_URL` set — POSTs the proposal as JSON to that relay (`status: "relayed"`, `delivery: "relay"`, plus the relay's `issue_url`/`id` if returned). If the relay fails, it falls through to the queue with a `relay_error`.
+3. Otherwise — appends one JSON line to the feedback store's inbound queue, `<feedback dir>/feedback-queue.jsonl`, and returns `status: "queued"`, `delivery: "queue"`, the `queue_path` and the `feedback_dir`. If even that write fails the call returns an error, never a success.
+
+**The feedback store.** All local skill feedback lands in one directory: `--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback` (kept out of the skills hub so a read-only clone works). It holds `<skill>/<id>.json` per `record_feedback` report plus `feedback-queue.jsonl` for queued proposals. `check_skill_health` and `get_skill`'s `health` read both, so a queued proposal is visible immediately (repeat submissions of the same proposal share a `feedback_id` and count once). `theme/name` and `name` address the same skill. The former `NUVEL_FEEDBACK_QUEUE` variable is no longer read; the server logs a warning if it is set.
+
+The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol and tools, `skills_loader.py` = hub discovery/loading, `installer.py` = the plan/apply installer behind `install_skill`, `feedback.py` = the feedback store and health computation) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Role scoping
 
