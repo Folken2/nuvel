@@ -141,7 +141,7 @@ class BodyLimitAuthMiddleware:
         """Read the whole body (bounded), or send the error and return None."""
         declared = Headers(scope=scope).get("content-length")
         if declared is not None:
-            if not declared.isdigit():
+            if not (declared.isascii() and declared.isdigit()):
                 await _reject(send, 400, "invalid content-length")
                 return None
             if int(declared) > self.max_body_bytes:

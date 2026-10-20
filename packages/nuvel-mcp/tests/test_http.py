@@ -225,6 +225,32 @@ async def test_lying_content_length_is_413():
     assert sent[0]["status"] == 413 and not seen
 
 
+@pytest.mark.parametrize("declared", ["\u00b2".encode("latin-1"), "\u00b9\u00b3".encode("latin-1"),
+                                      b"-1", b"1e3", b""])
+async def test_non_ascii_digit_content_length_is_400(declared):
+    """``str.isdigit`` accepts superscripts that ``int()`` rejects; still a 400."""
+    seen = []
+
+    async def inner(scope, receive, send):  # pragma: no cover - must not be reached
+        seen.append(scope)
+
+    from nuvel_mcp.http import BodyLimitAuthMiddleware
+
+    mw = BodyLimitAuthMiddleware(inner, authenticator=None)
+    sent = []
+
+    async def receive():  # pragma: no cover - the header check runs first
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp",
+             "headers": [(b"host", b"127.0.0.1:8765"), (b"content-length", declared)]}
+    await mw(scope, receive, send)
+    assert sent[0]["status"] == 400 and not seen
+
+
 async def test_invalid_json_is_400_without_echo(app):
     async with raw_client(app) as http:
         res = await http.post("/mcp", content=b"{not json SECRETPAYLOAD",
