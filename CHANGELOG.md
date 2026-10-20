@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `record_run_trace` tool: stores content-free `nuvel.skill_run/1` run traces (see `docs/reference/skill-run-traces.md`).
 - `--trace-store local|MODULE:FACTORY` to choose where run traces are kept.
 - `check_skill_health(plugin=...)` adds a `runs` block (30-day outcome counts and errors by step) built from run traces.
+- Streamable HTTP transport for `nuvel-mcp serve` (`--transport http`, `--host`, `--port`, `--auth bearer|MODULE:FACTORY`; needs `nuvel-mcp[http]`): bearer tokens from `$NUVEL_MCP_TOKENS` stamp each trace's `tenant`, only `record_run_trace` and `check_skill_health` are exposed by default, and request bodies are capped at 64 KiB. See `docs/how-to/deploy-skills-mcp.md`.
 
 ### Changed
 

@@ -1,0 +1,104 @@
+# Deploy the Skills MCP server over HTTP
+
+`nuvel-mcp` speaks stdio by default, which is right for an MCP client on your own
+machine. To collect [skill run traces](../reference/skill-run-traces.md) from
+agents running elsewhere, serve it over **Streamable HTTP** behind an
+authenticator.
+
+## Run it
+
+The HTTP transport needs the optional `http` extra (it pulls in the official
+`mcp` SDK; the stdio server stays dependency-free):
+
+```bash
+export NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN,globex:$GLOBEX_MCP_TOKEN"
+uvx --from "nuvel-mcp[http]" nuvel-mcp serve --transport http --auth bearer
+```
+
+The endpoint is `http://127.0.0.1:8765/mcp` (change it with `--host` / `--port`).
+Without the extra, `--transport http` exits with
+`pip install "nuvel-mcp[http]"`.
+
+`--auth bearer` reads `$NUVEL_MCP_TOKENS` as `name:token,name:token`. A client
+sends `Authorization: Bearer <token>`; the matching **name** becomes the caller's
+principal and is stamped as the `tenant` of every trace it records. The token
+itself is never stored or logged. Generate tokens with something like
+`openssl rand -hex 32` and keep them in your secret manager, not in shell history.
+
+Point an MCP client at it, for example Claude Code:
+
+```bash
+claude mcp add --transport http nuvel-skills https://mcp.example.com/mcp \
+  --header "Authorization: Bearer $ACME_MCP_TOKEN"
+```
+
+## Put it behind TLS
+
+Bearer tokens must never cross a network in clear text. `nuvel-mcp` does not
+terminate TLS itself; run it behind something that does:
+
+- **Reverse proxy on the same host** — keep the default `--host 127.0.0.1` and
+  let Caddy, nginx or similar terminate TLS and forward to `127.0.0.1:8765`:
+
+  ```text
+  mcp.example.com {
+      reverse_proxy 127.0.0.1:8765
+  }
+  ```
+
+- **Container platform** (Railway, Fly, Cloud Run, Kubernetes) — bind
+  `--host 0.0.0.0 --port $PORT` and expose the service only through the
+  platform's HTTPS endpoint.
+
+Binding anything other than `127.0.0.1`, `localhost` or `::1` without `--auth`
+is refused before the server starts. With no `--auth` on loopback, any process
+on the machine can call the server, so use that only for local testing.
+
+## What is exposed over HTTP, and why
+
+By default HTTP exposes exactly two tools:
+
+| Tool | Why it is safe to expose |
+|---|---|
+| `record_run_trace` | Takes a closed-schema `nuvel.skill_run/1` trace with no free-text fields; anything else is rejected without being echoed. |
+| `check_skill_health` | Read-only; its `runs` block is scoped to the caller's tenant. |
+
+Everything else is off unless you name it in `--tools`:
+
+- `record_feedback` and `propose_improvement` accept **free text**, which can
+  carry user content a hosted endpoint should never receive.
+  `propose_improvement` can also file GitHub issues with the server's
+  `GITHUB_TOKEN` on behalf of any caller.
+- The hub tools (`search_skills`, `get_skill`, `install_skill`, …) serve a
+  local skills hub, and `install_skill` writes to the server's filesystem.
+
+stdio keeps the full tool set: it runs on the user's own machine, where free text
+never leaves.
+
+## Request limits
+
+Every request is checked before the MCP SDK sees it:
+
+| Condition | Response |
+|---|---|
+| Missing or wrong token, or more than one `Authorization` header | `401` |
+| Body over 65536 bytes (by `Content-Length`, or counted while streaming a chunked body) | `413` |
+| Body that is not valid JSON | `400` |
+
+None of these responses echo the request body. Sessions are stateless and
+responses are plain JSON, so every request is authenticated on its own.
+
+## Bring your own authenticator
+
+`--auth module:factory` imports `module` and calls `factory()` with no arguments.
+It must return an object with
+`authenticate(headers: Mapping[str, str]) -> str | None` (see
+`nuvel_mcp.auth.Authenticator`): return the principal name to accept the
+request, `None` to reject it with `401`. Header names are matched
+case-insensitively. The `--auth` value is only ever read from the command line.
+
+## What this package does not do
+
+Managed hosting, an OAuth provider, the tenant model and hosted trace storage live
+in the private nuvel-cloud service, which plugs in through `--auth` and
+`--trace-store`. This package only makes the open-source server deployable.

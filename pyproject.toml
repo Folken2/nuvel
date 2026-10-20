@@ -100,3 +100,8 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 nuvel-mcp = { workspace = true }
+
+[dependency-groups]
+# Installed by default by `uv run` / `uv sync`, so the nuvel-mcp HTTP
+# transport tests run in the dev env.
+dev = ["nuvel-mcp[http]"]

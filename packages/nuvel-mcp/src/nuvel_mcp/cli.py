@@ -9,6 +9,9 @@ from __future__ import annotations
 import argparse
 import sys
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+HTTP_EXTRA_HINT = 'pip install "nuvel-mcp[http]"'
+
 
 def _parse_tools(value: str) -> frozenset[str]:
     return frozenset(v.strip() for v in value.split(",") if v.strip())
@@ -73,6 +76,35 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
              "<feedback-dir>/_runs/) or 'module:factory', a zero-argument "
              "callable returning a TraceStore. Default: local.",
     )
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="'stdio' (default) or 'http' (Streamable HTTP; needs "
+             f"{HTTP_EXTRA_HINT}). Over HTTP only record_run_trace and "
+             "check_skill_health are exposed unless --tools says otherwise.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP bind address. Default: 127.0.0.1. Any non-loopback "
+             "address requires --auth.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="HTTP port. Default: 8765.",
+    )
+    parser.add_argument(
+        "--auth",
+        default=None,
+        metavar="bearer|MODULE:FACTORY",
+        help="HTTP authenticator: 'bearer' (tokens from $NUVEL_MCP_TOKENS as "
+             "name:token,name:token; the name becomes the trace tenant) or "
+             "'module:factory', a zero-argument callable returning an "
+             "Authenticator. Default: none (loopback only).",
+    )
 
 
 def run_serve(args: argparse.Namespace) -> int:
@@ -105,23 +137,56 @@ def run_serve(args: argparse.Namespace) -> int:
             print(f"Error: invalid --trace-store: {exc}", file=sys.stderr)
             return 1
 
+    http = args.transport == "http"
+    authenticator = None
+    if http:
+        # Fail fast, before building anything or binding a socket.
+        if args.host not in LOOPBACK_HOSTS and args.auth is None:
+            print(
+                f"Error: --host {args.host} is not a loopback address; "
+                "serving it requires --auth.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            from nuvel_mcp import http as http_transport
+        except ImportError:
+            print(f"Error: --transport http needs the http extra: {HTTP_EXTRA_HINT}",
+                  file=sys.stderr)
+            return 1
+        from nuvel_mcp.auth import load_authenticator
+        try:
+            # The spec only ever comes from the command line.
+            authenticator = load_authenticator(args.auth)
+        except ValueError as exc:
+            print(f"Error: invalid --auth: {exc}", file=sys.stderr)
+            return 1
+
+    tools = args.tools
+    if http and tools is None:
+        from nuvel_mcp.server import HTTP_DEFAULT_TOOLS
+        tools = HTTP_DEFAULT_TOOLS
+
     server = SkillsMCPServer(
         loader,
         theme=args.theme,
         require_filter=require_filter,
         with_org_memory=args.with_org_memory,
         feedback_dir=args.feedback_dir,
-        tools=args.tools,
+        tools=tools,
         trace_store=trace_store,
     )
-    server.serve()
+    if http:
+        http_transport.serve_http(server, args.host, args.port, authenticator)
+    else:
+        server.serve()
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nuvel-mcp", description="Nuvel Skills MCP server.")
     sub = parser.add_subparsers(dest="command", required=True)
-    p_serve = sub.add_parser("serve", help="Start the Nuvel Skills MCP stdio server.")
+    p_serve = sub.add_parser("serve", help="Start the Nuvel Skills MCP server (stdio or HTTP).")
     add_serve_arguments(p_serve)
     p_serve.set_defaults(func=run_serve)
     args = parser.parse_args(argv)

@@ -17,7 +17,18 @@ pip install "nuvel-mcp[http]"
 ```
 
 Run `nuvel-mcp serve --help` for all flags (`--theme`, `--require`,
-`--with-org-memory`, `--feedback-dir`).
+`--with-org-memory`, `--feedback-dir`, `--tools`, `--trace-store`,
+`--transport`, `--host`, `--port`, `--auth`).
+
+To serve run traces over HTTP behind bearer tokens:
+
+```bash
+export NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN"
+uvx --from "nuvel-mcp[http]" nuvel-mcp serve --transport http --auth bearer
+```
+
+See the [deployment guide](https://folken2.github.io/nuvel/how-to/deploy-skills-mcp/)
+for TLS and what is exposed over HTTP.
 
 ## Relationship to `nuvel-cli`
 

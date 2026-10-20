@@ -280,7 +280,7 @@ Standalone Skills MCP server, shipped as its own dependency-free package (`nuvel
 
 ```bash
 uvx nuvel-mcp serve --skills-dir ./skills-hub
-nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY]
+nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--auth bearer|MODULE:FACTORY]
 ```
 
 | Flag | Description |
@@ -288,6 +288,9 @@ nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--
 | `--skills-dir DIR` | Skills hub to serve. Optional: without it the server starts in feedback-only mode and exposes just the feedback tools (`record_feedback`, `check_skill_health`, `propose_improvement`, `record_run_trace`). `nuvel mcp serve` used to serve the current directory when it was omitted; pass `--skills-dir .` to keep that. |
 | `--tools A,B` | Comma-separated allow-list of tool names to expose. |
 | `--trace-store` | Where `record_run_trace` keeps traces: `local` (JSONL under `<feedback-dir>/_runs/`, the default) or `module:factory`, a zero-argument callable returning a `TraceStore`. See [Skill run traces](skill-run-traces.md). |
+| `--transport stdio\|http` | `stdio` (default, no dependencies) or `http` (Streamable HTTP at `/mcp`; needs `pip install "nuvel-mcp[http]"`). Over HTTP only `record_run_trace` and `check_skill_health` are exposed unless `--tools` names others. |
+| `--host H`, `--port P` | HTTP bind address. Default `127.0.0.1:8765`. A host other than `127.0.0.1` / `localhost` / `::1` requires `--auth`. |
+| `--auth` | HTTP authenticator: `bearer` (tokens from `$NUVEL_MCP_TOKENS` as `name:token,name:token`; the name becomes the trace `tenant`) or `module:factory`, a zero-argument callable returning an `Authenticator`. Default: none (loopback only). See [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md). |
 
 The stdio transport needs no dependencies; install `nuvel-mcp[http]` for HTTP. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
 

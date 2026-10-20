@@ -22,9 +22,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_serve = sub.add_parser(
         "serve",
-        help="Start the Nuvel Skills MCP stdio server.",
+        help="Start the Nuvel Skills MCP server (stdio, or HTTP with --transport http).",
         description=(
-            "Start an MCP stdio server that exposes a skills hub as MCP "
+            "Start an MCP server (stdio by default, Streamable HTTP with "
+            "--transport http) that exposes a skills hub as MCP "
             "resources (skill://{theme}/{name}) and tools (search_skills, "
             "list_skills, list_themes, get_skill, install_skill, fence_value, "
             "propose_improvement, record_feedback, check_skill_health, "
