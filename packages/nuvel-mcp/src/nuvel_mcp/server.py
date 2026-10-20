@@ -20,6 +20,7 @@ Tools:
                          local feedback store).
     record_feedback      Record the outcome of using a skill in the local feedback store.
     check_skill_health   Health report for a skill from the local feedback store.
+    record_run_trace     Record one content-free ``nuvel.skill_run/1`` run trace.
 """
 
 from __future__ import annotations
@@ -36,7 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
-from nuvel_mcp import feedback
+from nuvel_mcp import feedback, traces
+from nuvel_mcp.auth import current_principal
 from nuvel_mcp.installer import install_skill
 from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
 
@@ -80,7 +82,9 @@ def log(*args) -> None:
 HUB_TOOLS = frozenset({
     "search_skills", "list_skills", "list_themes", "get_skill", "install_skill", "fence_value",
 })
-FEEDBACK_TOOLS = frozenset({"record_feedback", "check_skill_health", "propose_improvement"})
+FEEDBACK_TOOLS = frozenset({
+    "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+})
 # Tools the HTTP transport exposes when no explicit allow-list is given.
 HTTP_DEFAULT_TOOLS = frozenset({"record_run_trace", "check_skill_health"})
 
@@ -434,12 +438,19 @@ class SkillsMCPServer:
             "fence_value": self.tool_fence_value,
             "record_feedback": self.tool_record_feedback,
             "check_skill_health": self.tool_check_skill_health,
+            "record_run_trace": self.tool_record_run_trace,
         }
 
     @property
     def feedback_dir(self) -> Path:
         """The local feedback store directory."""
         return feedback.resolve_feedback_dir(self._feedback_dir_override)
+
+    def _trace_store(self) -> "TraceStore":
+        """The configured trace store, else a local one under ``feedback_dir``."""
+        if self.trace_store is not None:
+            return self.trace_store
+        return traces.LocalTraceStore(self.feedback_dir)
 
     # --- Scoping helpers -----------------------------------------------------
 
@@ -862,8 +873,37 @@ class SkillsMCPServer:
                         "required": ["skill_name"],
                     },
                 },
+                {
+                    "name": "record_run_trace",
+                    "description": (
+                        "Record one skill run as a content-free nuvel.skill_run/1 "
+                        "trace, once per run, when the skill tells you to. Every "
+                        "field is an enum, a UUID, a version, a timestamp, a count "
+                        "or a short lowercase identifier. Step ids, count keys and "
+                        "error steps come only from the skill's published step "
+                        "catalog (step ids start with '<skill name>.'); never "
+                        "invent them. Never put names, subjects, addresses, "
+                        "message text or any other user content in a trace. "
+                        "'safety' must contain both injection_suspected and "
+                        "forbidden_tool_requested, or be omitted. Do not send "
+                        "'tenant' (the server sets it). A rejected trace returns "
+                        "the failing field paths only. Re-sending the same run_id "
+                        "returns 'duplicate'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"trace": self._trace_input_schema()},
+                        "required": ["trace"],
+                    },
+                },
             ]
         }
+
+    @staticmethod
+    def _trace_input_schema() -> dict:
+        schema = {k: v for k, v in traces.load_schema().items() if k != "$schema"}
+        schema["description"] = "One nuvel.skill_run/1 trace object."
+        return schema
 
     def handle_tools_call(self, params):
         tool_name = params.get("name")
@@ -1095,6 +1135,36 @@ class SkillsMCPServer:
             return feedback.compute_health(self.feedback_dir, skill_name)
         except ValueError as exc:
             raise McpError(INVALID_PARAMS, str(exc))
+
+    def tool_record_run_trace(self, args):
+        """Validate, normalise, store and (optionally) relay one run trace."""
+        trace = args.get("trace")
+        errors = traces.validate_skill_run(trace)
+        if not errors:
+            prefix = f"{trace['skill']['name']}."
+            errors = [
+                f"/steps/{i}/id"
+                for i, step in enumerate(trace.get("steps", []))
+                if not step["id"].startswith(prefix)
+            ]
+        if errors:
+            raise ToolInputError(errors)
+
+        record = traces.normalize(trace, tenant=current_principal.get())
+        try:
+            stored = self._trace_store().append(record)
+        except OSError as exc:
+            raise McpError(INTERNAL_ERROR, f"Could not store the run trace: {exc}")
+        if not stored:
+            return {"status": "duplicate", "run_id": record["run_id"]}
+
+        relay_url = os.environ.get("NUVEL_FEEDBACK_URL", "").strip()
+        if relay_url:
+            try:
+                _relay_feedback(relay_url, {"type": "skill_run", "record": record})
+            except Exception as exc:  # the local copy stands; never retried
+                log(f"Run trace relay failed (kept locally): {exc}")
+        return {"status": "recorded", "run_id": record["run_id"]}
 
     def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
         """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.

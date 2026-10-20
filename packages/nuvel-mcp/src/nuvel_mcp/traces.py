@@ -10,15 +10,25 @@ other, so the schema and the validator cannot silently drift apart.
 Privacy rule: validation errors are JSON-pointer paths only (``/steps/2/id``),
 never the offending value. Object keys that are not themselves identifier-shaped
 are reported as ``*`` so a client cannot smuggle content back out through a key.
+
+Storage: ``normalize`` produces the stored form (``started_at`` truncated to
+the minute in UTC, ``tenant`` stamped by the server), and a ``TraceStore``
+keeps it. ``LocalTraceStore`` is the default; ``load_trace_store`` resolves a
+``--trace-store`` spec (``local`` or ``module:factory``).
 """
 
 from __future__ import annotations
 
+import copy
+import importlib
 import json
 import re
-from datetime import datetime
+import threading
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from importlib import resources
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 SCHEMA_ID = "nuvel.skill_run/1"
 SCHEMA_RESOURCE = "schemas/skill_run.v1.schema.json"
@@ -188,3 +198,157 @@ def _validate(value: object, schema: dict, path: str, errors: list[str]) -> None
                 errors.append(child)
             elif isinstance(additional, dict):
                 _validate(sub, additional, child, errors)
+
+
+# --- Normalisation -----------------------------------------------------------
+
+
+def normalize(trace: dict, tenant: str | None) -> dict:
+    """Return a stored-form copy of a *valid* trace.
+
+    ``started_at`` is converted to UTC and truncated to the minute
+    (``YYYY-MM-DDTHH:MM:00Z``); ``tenant`` is added only when not ``None``.
+    The input is not modified.
+    """
+    out = copy.deepcopy(trace)
+    started = _parse_started_at(out["started_at"])
+    out["started_at"] = started.replace(second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if tenant is not None:
+        out["tenant"] = tenant
+    return out
+
+
+def _parse_started_at(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+# --- Storage -----------------------------------------------------------------
+
+
+RUNS_DIRNAME = "_runs"
+
+
+@runtime_checkable
+class TraceStore(Protocol):
+    """Where normalised traces go. ``nuvel-cloud`` plugs in its own."""
+
+    def append(self, trace: dict) -> bool:
+        """Store a normalised trace; ``False`` if its ``run_id`` is a duplicate."""
+        ...
+
+    def query(self, plugin: str, skill: str, since: datetime, tenant: str | None) -> list[dict]:
+        """Traces for ``plugin.skill`` started at or after *since*.
+
+        ``tenant=None`` returns every tenant's traces.
+        """
+        ...
+
+
+class LocalTraceStore:
+    """JSONL files at ``{feedback_dir}/_runs/{plugin}.{skill}/{YYYY-MM-DD}.jsonl``.
+
+    One line per run, dated by the normalised (UTC) ``started_at``. Appends are
+    serialised per file by a lock (check-then-write for ``run_id`` idempotency)
+    and each line is a single ``write()`` in append mode.
+    """
+
+    _locks: dict[Path, threading.Lock] = {}
+    _locks_guard = threading.Lock()
+
+    def __init__(self, feedback_dir: Path):
+        self.feedback_dir = Path(feedback_dir)
+
+    def _skill_dir(self, plugin: str, skill: str) -> Path:
+        return self.feedback_dir / RUNS_DIRNAME / f"{plugin}.{skill}"
+
+    @classmethod
+    def _lock_for(cls, path: Path) -> threading.Lock:
+        with cls._locks_guard:
+            return cls._locks.setdefault(path, threading.Lock())
+
+    def append(self, trace: dict) -> bool:
+        plugin, skill = trace["plugin"]["name"], trace["skill"]["name"]
+        if not (IDENTIFIER_RE.fullmatch(plugin) and IDENTIFIER_RE.fullmatch(skill)):
+            raise ValueError("plugin and skill names must be identifiers")
+        day = _parse_started_at(trace["started_at"]).date().isoformat()
+        path = (self._skill_dir(plugin, skill) / f"{day}.jsonl").resolve()
+        line = json.dumps(trace, ensure_ascii=False, separators=(",", ":")) + "\n"
+        with self._lock_for(path):
+            if any(t.get("run_id") == trace["run_id"] for t in _read_jsonl(path)):
+                return False
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+        return True
+
+    def query(self, plugin: str, skill: str, since: datetime, tenant: str | None) -> list[dict]:
+        if not (
+            isinstance(plugin, str) and isinstance(skill, str)
+            and IDENTIFIER_RE.fullmatch(plugin) and IDENTIFIER_RE.fullmatch(skill)
+        ):
+            return []
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        since = since.astimezone(timezone.utc)
+        directory = self._skill_dir(plugin, skill)
+        if not directory.is_dir():
+            return []
+        results: list[dict] = []
+        for path in sorted(directory.glob("*.jsonl")):
+            try:
+                day = date.fromisoformat(path.stem)
+            except ValueError:
+                continue
+            if day < since.date():
+                continue
+            for trace in _read_jsonl(path):
+                if tenant is not None and trace.get("tenant") != tenant:
+                    continue
+                try:
+                    started = _parse_started_at(trace["started_at"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if started >= since:
+                    results.append(trace)
+        return results
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    records = []
+    for raw in text.splitlines():
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def load_trace_store(spec: str, feedback_dir: Path) -> TraceStore:
+    """Build the trace store named by *spec*.
+
+    ``"local"`` is :class:`LocalTraceStore` under *feedback_dir*;
+    ``"module:factory"`` imports ``module`` and calls ``factory()`` with no
+    arguments. Raises ``ValueError`` for anything else.
+    """
+    if spec == "local":
+        return LocalTraceStore(feedback_dir)
+    module_name, sep, attr = (spec or "").partition(":")
+    if not sep or not module_name or not attr:
+        raise ValueError("trace store must be 'local' or 'module:factory'")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"cannot import trace store module {module_name!r}: {exc}") from exc
+    factory = getattr(module, attr, None)
+    if not callable(factory):
+        raise ValueError(f"trace store factory {spec!r} not found or not callable")
+    return factory()

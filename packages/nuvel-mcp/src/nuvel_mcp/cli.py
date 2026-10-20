@@ -65,11 +65,21 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
              "read-only git clone still works. Default: $NUVEL_FEEDBACK_DIR, "
              "then ~/.nuvel/feedback.",
     )
+    parser.add_argument(
+        "--trace-store",
+        default="local",
+        metavar="local|MODULE:FACTORY",
+        help="Where record_run_trace stores traces: 'local' (JSONL under "
+             "<feedback-dir>/_runs/) or 'module:factory', a zero-argument "
+             "callable returning a TraceStore. Default: local.",
+    )
 
 
 def run_serve(args: argparse.Namespace) -> int:
+    from nuvel_mcp.feedback import resolve_feedback_dir
     from nuvel_mcp.server import SkillsMCPServer
     from nuvel_mcp.skills_loader import SkillsError, SkillsLoader
+    from nuvel_mcp.traces import load_trace_store
 
     loader = None
     if args.skills_dir is not None:
@@ -85,6 +95,16 @@ def run_serve(args: argparse.Namespace) -> int:
         for value in args.require:
             require_filter.extend(v.strip() for v in value.split(",") if v.strip())
 
+    trace_store = None
+    if args.trace_store != "local":
+        try:
+            trace_store = load_trace_store(
+                args.trace_store, resolve_feedback_dir(args.feedback_dir)
+            )
+        except ValueError as exc:
+            print(f"Error: invalid --trace-store: {exc}", file=sys.stderr)
+            return 1
+
     server = SkillsMCPServer(
         loader,
         theme=args.theme,
@@ -92,6 +112,7 @@ def run_serve(args: argparse.Namespace) -> int:
         with_org_memory=args.with_org_memory,
         feedback_dir=args.feedback_dir,
         tools=args.tools,
+        trace_store=trace_store,
     )
     server.serve()
     return 0

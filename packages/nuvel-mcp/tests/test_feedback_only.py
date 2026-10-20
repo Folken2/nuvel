@@ -18,12 +18,16 @@ from nuvel_mcp.server import (
 def test_no_hub_lists_only_feedback_tools(tmp_path):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     names = {t["name"] for t in s.handle_tools_list({})["tools"]}
-    assert names == FEEDBACK_TOOLS
+    assert names == FEEDBACK_TOOLS == {
+        "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+    }
     assert s.handle_resources_list({})["resources"] == []
 
 
 def test_constants():
-    assert FEEDBACK_TOOLS == {"record_feedback", "check_skill_health", "propose_improvement"}
+    assert FEEDBACK_TOOLS == {
+        "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+    }
     assert "search_skills" in HUB_TOOLS and not (HUB_TOOLS & FEEDBACK_TOOLS)
     assert HTTP_DEFAULT_TOOLS == {"record_run_trace", "check_skill_health"}
 
