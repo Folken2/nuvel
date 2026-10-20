@@ -7,6 +7,7 @@ Lightweight implementations with no external dependencies.
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from enum import Enum
 from typing import Optional
 
@@ -139,6 +140,63 @@ class RateLimiter:
         return self._tokens
 
 
+class KeyedRateLimiter:
+    """
+    One token bucket per key (e.g. per session), so a single noisy caller
+    can't use up the budget for everyone else on a shared server.
+
+    Keys are cheap for a caller to mint (a new session is one API call), so
+    `total_rate` / `total_burst` add one more bucket that every request must
+    also pass, which bounds the rate across all keys together.
+
+    Holds at most `max_keys` buckets; the least recently used one is dropped
+    first. A dropped key starts again with a full bucket, which is what an
+    idle key would have refilled to anyway (the total bucket still applies).
+
+    Usage:
+        limiter = KeyedRateLimiter(rate=5.0, burst=20, total_rate=50.0, total_burst=200)
+        if not limiter.allow(session_id):
+            return {"status": "error", "message": "Rate limit exceeded"}
+    """
+
+    def __init__(
+        self,
+        rate: float = 2.0,
+        burst: int = 10,
+        max_keys: int = 10_000,
+        total_rate: Optional[float] = None,
+        total_burst: Optional[int] = None,
+    ):
+        self.rate = rate
+        self.burst = burst
+        self.max_keys = max_keys
+        self.total: Optional[RateLimiter] = (
+            RateLimiter(rate=total_rate, burst=total_burst)
+            if total_rate is not None and total_burst is not None
+            else None
+        )
+        self._buckets: OrderedDict[str, RateLimiter] = OrderedDict()
+
+    def allow(self, key: str) -> bool:
+        """Check if a request for `key` is allowed. Consumes one token from the
+        key's bucket and one from the total bucket if yes, none if no."""
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            bucket = self._buckets[key] = RateLimiter(rate=self.rate, burst=self.burst)
+            while len(self._buckets) > self.max_keys:
+                self._buckets.popitem(last=False)
+        else:
+            self._buckets.move_to_end(key)
+        if bucket.available_tokens < 1.0:
+            return False
+        if self.total is not None and not self.total.allow():
+            return False
+        return bucket.allow()
+
+    def __len__(self) -> int:
+        return len(self._buckets)
+
+
 # ── Singleton instances (shared across the app) ─────────────────────
 
 db_circuit = CircuitBreaker(
@@ -147,7 +205,10 @@ db_circuit = CircuitBreaker(
     recovery_timeout=30.0,
 )
 
-tool_rate_limiter = RateLimiter(
-    rate=float(__import__("os").getenv("TOOL_RATE_LIMIT", "5.0")),     # requests/sec
-    burst=int(__import__("os").getenv("TOOL_RATE_BURST", "20")),       # burst capacity
+# Keyed per session by ResiliencePlugin, with a server-wide cap on top.
+tool_rate_limiter = KeyedRateLimiter(
+    rate=float(__import__("os").getenv("TOOL_RATE_LIMIT", "5.0")),     # requests/sec, per session
+    burst=int(__import__("os").getenv("TOOL_RATE_BURST", "20")),       # burst capacity, per session
+    total_rate=float(__import__("os").getenv("TOOL_RATE_LIMIT_TOTAL", "50.0")),  # requests/sec, all sessions
+    total_burst=int(__import__("os").getenv("TOOL_RATE_BURST_TOTAL", "200")),    # burst capacity, all sessions
 )
