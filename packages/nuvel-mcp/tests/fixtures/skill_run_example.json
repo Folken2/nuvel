@@ -1,0 +1,28 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "3f0c2a9e-6b1d-4c8e-9a57-2d4e8f1b0c63",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {"name": "chief-of-staff", "version": "0.2.0"},
+  "skill":  {"name": "radar", "version": "0.2.0"},
+  "host": "claude-cowork",
+  "mode": "scheduled",
+  "started_at": "2026-10-20T17:43:00Z",
+  "duration_s": 58,
+  "outcome": "success",
+  "steps": [
+    {"id": "radar.1.load-state", "status": "ok"},
+    {"id": "radar.2.email", "status": "ok",
+     "counts": {"read": 14, "skipped_category": 6, "opened": 3, "relevant": 2}},
+    {"id": "radar.2.calendar", "status": "ok", "counts": {"read": 0}},
+    {"id": "radar.3.write", "status": "ok", "counts": {"documents_created": 1}}
+  ],
+  "tools": [
+    {"name": "gmail.search_threads", "calls": 2, "errors": 0},
+    {"name": "gmail.get_thread", "calls": 3, "errors": 0},
+    {"name": "gdrive.create_file", "calls": 1, "errors": 0}
+  ],
+  "errors": [],
+  "routing": {"needs_you_now": 0, "decide": 1, "i_owe": 0, "waiting_on": 0, "watching": 2},
+  "safety": {"injection_suspected": 0, "forbidden_tool_requested": 0},
+  "user_corrected": false
+}
