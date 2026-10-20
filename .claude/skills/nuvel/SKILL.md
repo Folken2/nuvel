@@ -171,6 +171,8 @@ nuvel new <kebab-name> --description "…" --with-acp
 
 # Serve a skills hub over MCP (standalone, dependency-free package)
 nuvel-mcp serve --skills-dir ./skills-hub   # same as: nuvel mcp serve; or: uvx nuvel-mcp serve
+nuvel-mcp serve                             # no --skills-dir: feedback-only mode (feedback tools + record_run_trace)
+nuvel-mcp serve --tools record_run_trace,check_skill_health --trace-store local   # allow-list; trace store local|module:factory
 
 # Knowledge
 nuvel skills list

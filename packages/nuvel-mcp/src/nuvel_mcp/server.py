@@ -33,7 +33,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
@@ -86,6 +86,7 @@ FEEDBACK_TOOLS = frozenset({
     "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
 })
 # Tools the HTTP transport exposes when no explicit allow-list is given.
+RUN_OUTCOMES = ("success", "partial", "failure", "blocked", "skipped")
 HTTP_DEFAULT_TOOLS = frozenset({"record_run_trace", "check_skill_health"})
 
 
@@ -213,6 +214,18 @@ def _feedback_id(proposal: dict) -> str:
         proposal, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _describe_failure(exc: BaseException) -> str:
+    """Log-safe description of a relay failure: exception class (+ HTTP status).
+
+    Never ``str(exc)`` and never the URL: ``NUVEL_FEEDBACK_URL`` may carry
+    credentials (``https://user:pass@host``) that exception messages echo.
+    """
+    name = type(exc).__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{name} {exc.code}"
+    return name
 
 
 def _relay_feedback(url: str, payload: dict) -> dict:
@@ -860,7 +873,10 @@ class SkillsMCPServer:
                         "trend, sections flagged as blocking or misleading, improvement "
                         "proposals still queued, and a recommendation ('ok', "
                         "'review_before_use' or 'use_cautiously'). get_skill embeds the "
-                        "same report as 'health'."
+                        "same report as 'health'. With 'plugin', the report also "
+                        "carries a 'runs' block built from recorded run traces: "
+                        "outcome counts for the last 30 days, errors by step and "
+                        "error class, and the total."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -868,6 +884,13 @@ class SkillsMCPServer:
                             "skill_name": {
                                 "type": "string",
                                 "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
+                            },
+                            "plugin": {
+                                "type": "string",
+                                "description": (
+                                    "Plugin the skill ships in (e.g. 'chief-of-staff'). "
+                                    "Adds the 'runs' block from recorded run traces."
+                                ),
                             },
                         },
                         "required": ["skill_name"],
@@ -1131,10 +1154,36 @@ class SkillsMCPServer:
     def tool_check_skill_health(self, args):
         """Check a skill's health from its feedback history."""
         skill_name = _required_str_arg(args, "skill_name")
+        plugin = args.get("plugin")
+        if plugin is not None and not (
+            isinstance(plugin, str) and traces.IDENTIFIER_RE.fullmatch(plugin)
+        ):
+            raise McpError(INVALID_PARAMS, "Argument 'plugin' must be a plugin identifier")
         try:
-            return feedback.compute_health(self.feedback_dir, skill_name)
+            report = feedback.compute_health(self.feedback_dir, skill_name)
         except ValueError as exc:
             raise McpError(INVALID_PARAMS, str(exc))
+        if plugin is not None:
+            report["runs"] = self._runs_summary(plugin, feedback.skill_key(skill_name))
+        return report
+
+    def _runs_summary(self, plugin: str, skill: str) -> dict:
+        """Last-30-days run-trace summary for ``plugin.skill`` (principal-scoped)."""
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        runs = self._trace_store().query(plugin, skill, since, current_principal.get())
+        outcomes = dict.fromkeys(RUN_OUTCOMES, 0)
+        errors_by_step: dict[str, dict[str, int]] = {}
+        for run in runs:
+            if run.get("outcome") in outcomes:
+                outcomes[run["outcome"]] += 1
+            for err in run.get("errors", []):
+                by_class = errors_by_step.setdefault(err["step"], {})
+                by_class[err["class"]] = by_class.get(err["class"], 0) + 1
+        return {
+            "last_30_days": outcomes,
+            "errors_by_step": errors_by_step,
+            "total": len(runs),
+        }
 
     def tool_record_run_trace(self, args):
         """Validate, normalise, store and (optionally) relay one run trace."""
@@ -1163,7 +1212,7 @@ class SkillsMCPServer:
             try:
                 _relay_feedback(relay_url, {"type": "skill_run", "record": record})
             except Exception as exc:  # the local copy stands; never retried
-                log(f"Run trace relay failed (kept locally): {exc}")
+                log(f"Run trace relay failed (kept locally): {_describe_failure(exc)}")
         return {"status": "recorded", "run_id": record["run_id"]}
 
     def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
@@ -1285,7 +1334,7 @@ class SkillsMCPServer:
                 data = _relay_feedback(relay_url, record)
             except (OSError, ValueError) as exc:  # URLError/HTTPError are OSErrors
                 relay_error = str(exc)
-                log(f"Feedback relay failed, queueing locally: {exc}")
+                log(f"Feedback relay failed, queueing locally: {_describe_failure(exc)}")
             else:
                 return {
                     "status": "relayed",

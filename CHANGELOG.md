@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
+- Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.
+- `--tools A,B` allow-list of tool names to expose.
+- `record_run_trace` tool: stores content-free `nuvel.skill_run/1` run traces (see `docs/reference/skill-run-traces.md`).
+- `--trace-store local|MODULE:FACTORY` to choose where run traces are kept.
+- `check_skill_health(plugin=...)` adds a `runs` block (30-day outcome counts and errors by step) built from run traces.
+
+### Changed
+
+- `nuvel mcp serve` without `--skills-dir` used to serve the current directory; it now starts in feedback-only mode. Migrate with `--skills-dir .`.
+- Relay failures (`propose_improvement`, `record_run_trace`) are logged as the exception class plus HTTP status only, never the message or URL, so credentials in `NUVEL_FEEDBACK_URL` cannot reach the logs.
+
+### Deprecated
+
+- The `nuvel.mcp` import path; import `nuvel_mcp` instead. Removal not before 0.7.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added
