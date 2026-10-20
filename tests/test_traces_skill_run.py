@@ -96,3 +96,71 @@ def test_stats_without_skill_runs_has_no_skill_steps(tmp_path: Path, capsys: pyt
 def test_source_that_is_a_runs_dir_reads_plugin_skill_subdirs() -> None:
     runs = traces_cli._collect_runs([str(FIXTURE / "_runs")])
     assert [r.schema for r in runs] == ["skill_run"]
+
+
+# ── eval excludes skill runs ─────────────────────────────────────────
+
+
+def _copy_fixture(dst: Path) -> Path:
+    import shutil
+
+    shutil.copytree(FIXTURE, dst)
+    return dst
+
+
+def _no_scored_under_runs(root: Path) -> bool:
+    return not list(root.rglob("_runs/**/scored.jsonl"))
+
+
+def test_eval_score_ignores_skill_runs_via_source(tmp_path: Path) -> None:
+    import asyncio
+
+    from nuvel.eval.scorer import ScoreSession
+
+    src = _copy_fixture(tmp_path / "src")
+    judged: list[str] = []
+
+    async def fake_judge(run, rubric):  # pragma: no cover - must not be reached for skill runs
+        judged.append(run.agent)
+        raise AssertionError("judge called")
+
+    report = asyncio.run(ScoreSession(sources=[str(src)], judge_fn=fake_judge, dry_run=False).run())
+    assert _no_scored_under_runs(src)
+    assert "chief-of-staff:radar" not in judged
+    assert all("_runs" not in d for d in map(str, report.per_dir))
+
+
+def test_eval_score_ignores_skill_runs_via_feedback_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from nuvel.eval.scorer import ScoreSession
+
+    fb = tmp_path / "fb"
+    _copy_fixture(tmp_path / "x")
+    (fb / "_runs").mkdir(parents=True)
+    import shutil
+
+    shutil.copytree(FIXTURE / "_runs" / "chief-of-staff.radar", fb / "_runs" / "chief-of-staff.radar")
+    monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(fb))
+    report = asyncio.run(ScoreSession().run())
+    assert report.scored_count == 0
+    assert _no_scored_under_runs(fb)
+
+
+def test_eval_report_and_baseline_ignore_skill_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from nuvel.eval import cli as eval_cli
+    from nuvel.eval.stats import compute_baseline_stats
+
+    src = _copy_fixture(tmp_path / "src")
+    # A stray scored.jsonl beside the skill runs must not be loaded by eval.
+    (src / "_runs" / "chief-of-staff.radar" / "scored.jsonl").write_text("{}\n")
+    dirs = [str(d) for d in eval_cli._discover_trace_dirs([str(src)], include_skill_runs=False)]
+    assert not any("_runs" in d for d in dirs)
+    runs = traces_cli._collect_runs([str(src)])
+    stats = compute_baseline_stats(runs)
+    assert all("chief-of-staff" not in k for k in stats)
+
+
+def test_traces_list_still_shows_skill_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    main(["traces", "list", "--source", str(FIXTURE)])
+    assert "chief-of-staff:radar" in capsys.readouterr().out

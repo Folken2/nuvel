@@ -52,6 +52,8 @@ def compute_baseline_stats(
     """
     by_agent: dict[str, list[Run]] = {}
     for r in runs:
+        if r.schema == "skill_run":
+            continue
         by_agent.setdefault(_agent_key(r), []).append(r)
 
     out: dict[str, BaselineStats] = {}

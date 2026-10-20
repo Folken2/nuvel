@@ -35,7 +35,7 @@ from nuvel.traces_cli import _discover_trace_dirs, _parse_since
 def _load_all_scored(sources: list[str] | None) -> list:
     """Aggregate every ``scored.jsonl`` across discovered trace directories."""
     out = []
-    for d in _discover_trace_dirs(sources):
+    for d in _discover_trace_dirs(sources, include_skill_runs=False):
         idx = load_scored_index(d / "scored.jsonl")
         out.extend(idx.values())
     return out

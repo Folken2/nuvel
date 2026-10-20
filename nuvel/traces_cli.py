@@ -37,7 +37,9 @@ from nuvel_mcp.feedback import resolve_feedback_dir
 # ── Discovery ────────────────────────────────────────────────────────
 
 
-def _discover_trace_dirs(extra: list[str] | None = None) -> list[Path]:
+def _discover_trace_dirs(
+    extra: list[str] | None = None, *, include_skill_runs: bool = True
+) -> list[Path]:
     roots: list[Path] = []
     cwd = Path.cwd()
 
@@ -66,7 +68,7 @@ def _discover_trace_dirs(extra: list[str] | None = None) -> list[Path]:
     # Skill run traces (nuvel.skill_run/1) live one level deeper, under
     # `_runs/<plugin>.<skill>/`. Only `_runs` trees are walked recursively.
     skill_roots = [resolve_feedback_dir()] + [Path(src) for src in extra or []]
-    for root in skill_roots:
+    for root in skill_roots if include_skill_runs else []:
         for d in _skill_run_dirs(root):
             if d not in roots:
                 roots.append(d)
@@ -270,8 +272,10 @@ def _parse_file_runs(path: Path, keep_events: bool = False) -> list[Run]:
     return list(runs.values())
 
 
-def _collect_runs(sources: list[str] | None, keep_events: bool = False) -> list[Run]:
-    dirs = _discover_trace_dirs(sources)
+def _collect_runs(
+    sources: list[str] | None, keep_events: bool = False, *, include_skill_runs: bool = True
+) -> list[Run]:
+    dirs = _discover_trace_dirs(sources, include_skill_runs=include_skill_runs)
     runs: list[Run] = []
     for f in _iter_trace_files(dirs):
         runs.extend(_parse_file_runs(f, keep_events=keep_events))
