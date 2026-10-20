@@ -17,22 +17,27 @@ Safety boundaries (preserved from the previous after_agent_callback):
 
 Design notes:
 
-* Counters live on the plugin instance and are reset in
-  ``before_run_callback`` so each run has a clean slate.
+* Counters live in a per-invocation ``_CuratorRun``, opened in
+  ``before_run_callback`` and dropped in ``after_run_callback``. One plugin
+  instance serves every session on a server, so nothing run-specific lives
+  on the plugin itself.
 * ``after_tool_callback`` / ``on_event_callback`` / ``on_tool_error_callback``
   accumulate signal during the run.
 * ``after_run_callback`` evaluates the heuristic, builds the prompt, and
-  dispatches to the LLM exactly once per run.
+  dispatches to the LLM exactly once per run, in a worker thread so the
+  synchronous SDK call doesn't stall every other session on the event loop.
 * Multi-agent attribution: every event author is captured so the proposal
   frontmatter can list ``triggering_agents`` instead of just one agent.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
@@ -123,6 +128,22 @@ def _default_llm_fn(prompt: str) -> str:
 
 # ── Plugin ────────────────────────────────────────────────────────────
 
+# Runs whose after_run never fired are dropped oldest-first past this many.
+_MAX_OPEN_RUNS = 1024
+
+
+@dataclass
+class _CuratorRun:
+    """Signal accumulated over one invocation."""
+
+    tool_calls: int = 0
+    event_count: int = 0
+    tool_errors: dict[str, int] = field(default_factory=dict)
+    triggering_agents: set[str] = field(default_factory=set)
+    # Compact transcript snippets captured during the run (bounded).
+    transcript_lines: list[str] = field(default_factory=list)
+    transcript_chars: int = 0
+
 
 class SkillCuratorPlugin(BasePlugin):
     """ADK Plugin that proposes new/patched skills after complex runs.
@@ -138,26 +159,26 @@ class SkillCuratorPlugin(BasePlugin):
     def __init__(self, llm_fn: Optional[LlmFn] = None) -> None:
         super().__init__(name="skill_curator")
         self._llm_fn: LlmFn = llm_fn or _default_llm_fn
-        self._tool_calls: int = 0
-        self._event_count: int = 0
-        self._tool_errors: dict[str, int] = {}
-        self._triggering_agents: set[str] = set()
-        # Compact transcript snippets captured during the run (bounded).
-        self._transcript_lines: list[str] = []
-        self._transcript_chars: int = 0
+        self._runs: dict[str, _CuratorRun] = {}
         self._transcript_max: int = 4000
+
+    def _run_for(self, invocation_id: Optional[str]) -> _CuratorRun:
+        """The run for this invocation, created on first sight."""
+        run = self._runs.get(invocation_id)
+        if run is None:
+            run = self._runs[invocation_id] = _CuratorRun()
+            while len(self._runs) > _MAX_OPEN_RUNS:
+                self._runs.pop(next(iter(self._runs)))
+        return run
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def before_run_callback(
         self, *, invocation_context: "InvocationContext"
     ) -> None:
-        self._tool_calls = 0
-        self._event_count = 0
-        self._tool_errors = {}
-        self._triggering_agents = set()
-        self._transcript_lines = []
-        self._transcript_chars = 0
+        # Start clean even if this invocation id was somehow seen before.
+        self._runs.pop(invocation_context.invocation_id, None)
+        self._run_for(invocation_context.invocation_id)
         return None
 
     async def after_tool_callback(
@@ -170,7 +191,7 @@ class SkillCuratorPlugin(BasePlugin):
     ) -> None:
         # Tool calls are also surfaced via on_event_callback (function_call
         # parts), but counting here is more reliable across agent variants.
-        self._tool_calls += 1
+        self._run_for(getattr(tool_context, "invocation_id", None)).tool_calls += 1
         return None
 
     async def on_tool_error_callback(
@@ -181,20 +202,22 @@ class SkillCuratorPlugin(BasePlugin):
         tool_context: "ToolContext",
         error: Exception,
     ) -> None:
+        run = self._run_for(getattr(tool_context, "invocation_id", None))
         name = getattr(tool, "name", "?") or "?"
-        self._tool_errors[name] = self._tool_errors.get(name, 0) + 1
+        run.tool_errors[name] = run.tool_errors.get(name, 0) + 1
         self._append_transcript(
-            f"tool_error: {name} ({type(error).__name__}: {str(error)[:120]})"
+            run, f"tool_error: {name} ({type(error).__name__}: {str(error)[:120]})"
         )
         return None
 
     async def on_event_callback(
         self, *, invocation_context: "InvocationContext", event: "Event"
     ) -> None:
-        self._event_count += 1
+        run = self._run_for(invocation_context.invocation_id)
+        run.event_count += 1
         author = getattr(event, "author", None) or "?"
         if author and author != "?":
-            self._triggering_agents.add(author)
+            run.triggering_agents.add(author)
         content = getattr(event, "content", None)
         if content is not None:
             for part in getattr(content, "parts", None) or []:
@@ -202,29 +225,30 @@ class SkillCuratorPlugin(BasePlugin):
                 text = getattr(part, "text", None)
                 if fc is not None:
                     self._append_transcript(
-                        f"[{author}] tool_call: {getattr(fc, 'name', '?')}"
+                        run, f"[{author}] tool_call: {getattr(fc, 'name', '?')}"
                     )
                 elif text:
                     snippet = text.strip().replace("\n", " ")
                     if len(snippet) > 240:
                         snippet = snippet[:240] + "..."
-                    self._append_transcript(f"[{author}] {snippet}")
+                    self._append_transcript(run, f"[{author}] {snippet}")
         return None
 
     async def after_run_callback(
         self, *, invocation_context: "InvocationContext"
     ) -> None:
-        if not _enabled():
+        run = self._runs.pop(invocation_context.invocation_id, None)
+        if run is None or not _enabled():
             return None
 
         min_tools = _int_env(ENV_MIN_TOOLS, DEFAULT_MIN_TOOLS)
         min_events = _int_env(ENV_MIN_EVENTS, DEFAULT_MIN_EVENTS)
         max_tool_errors = max(
-            self._tool_errors.values(), default=0
+            run.tool_errors.values(), default=0
         )
         if not self._is_complex(
-            tool_calls=self._tool_calls,
-            event_count=self._event_count,
+            tool_calls=run.tool_calls,
+            event_count=run.event_count,
             error_count=max_tool_errors,
             min_tools=min_tools,
             min_events=min_events,
@@ -238,10 +262,10 @@ class SkillCuratorPlugin(BasePlugin):
             or Path(__file__).resolve().parent.parent / "skills"
         )
         existing = _existing_skill_names(skills_dir)
-        prompt = self._build_prompt(existing)
+        prompt = self._build_prompt(run, existing)
 
         try:
-            raw = self._llm_fn(prompt)
+            raw = await asyncio.to_thread(self._llm_fn, prompt)
         except Exception as exc:
             logger.warning("[skill_curator] LLM call failed: %s", exc)
             return None
@@ -261,7 +285,7 @@ class SkillCuratorPlugin(BasePlugin):
             return None
 
         # Resolve agent attribution: prefer aggregated set, fall back to root.
-        agents = sorted(self._triggering_agents) or [
+        agents = sorted(run.triggering_agents) or [
             getattr(getattr(invocation_context, "agent", None), "name", "") or ""
         ]
         try:
@@ -276,11 +300,11 @@ class SkillCuratorPlugin(BasePlugin):
 
     # ── Internal helpers ──────────────────────────────────────────────
 
-    def _append_transcript(self, line: str) -> None:
-        if self._transcript_chars >= self._transcript_max:
+    def _append_transcript(self, run: _CuratorRun, line: str) -> None:
+        if run.transcript_chars >= self._transcript_max:
             return
-        self._transcript_lines.append(line)
-        self._transcript_chars += len(line) + 1
+        run.transcript_lines.append(line)
+        run.transcript_chars += len(line) + 1
 
     def _is_complex(
         self,
@@ -301,14 +325,14 @@ class SkillCuratorPlugin(BasePlugin):
             return True
         return False
 
-    def _build_prompt(self, existing: list[str]) -> str:
-        transcript = "\n".join(self._transcript_lines)
+    def _build_prompt(self, run: _CuratorRun, existing: list[str]) -> str:
+        transcript = "\n".join(run.transcript_lines)
         if len(transcript) > self._transcript_max:
             transcript = transcript[: self._transcript_max] + "\n...[truncated]"
         # Surface error signal explicitly — it's a strong "missing skill" hint.
         repeated_errors = {
             tool: count
-            for tool, count in self._tool_errors.items()
+            for tool, count in run.tool_errors.items()
             if count >= _int_env(ENV_MIN_ERRORS, DEFAULT_MIN_ERRORS)
         }
         error_section = ""
