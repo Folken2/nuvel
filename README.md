@@ -218,7 +218,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel doctor [--path <dir>]` | Diagnose the install and the agent in cwd (env, deps, pricing) |
 | `nuvel traces list \| show \| stats \| errors` | Inspect JSONL trace logs across all local agents |
 | `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
-| `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs |
+| `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs (also shows `nuvel.skill_run/1` skill runs and per-step error rates) |
 | `nuvel eval score \| report \| worst \| drift` | **Production trace scoring** — score traces (heuristics + LLM judge), surface worst runs, detect drift |
 | `nuvel evalv2 init <skill> [--name <n>] [--description <d>] [--force]` | **Skill evaluation** — stamp a starter `eval/` suite into a skill |
 | `nuvel evalv2 list` | List skills that ship an `eval/` suite |

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--trace-store local|MODULE:FACTORY` to choose where run traces are kept.
 - `check_skill_health(plugin=...)` adds a `runs` block (30-day outcome counts and errors by step) built from run traces.
 - Streamable HTTP transport for `nuvel-mcp serve` (`--transport http`, `--host`, `--port`, `--auth bearer|MODULE:FACTORY`; needs `nuvel-mcp[http]`): bearer tokens from `$NUVEL_MCP_TOKENS` stamp each trace's `tenant`, only `record_run_trace` and `check_skill_health` are exposed by default (over HTTP `check_skill_health` returns only the caller's run summary), loopback binds validate `Host`/`Origin` against DNS rebinding, and request bodies are capped at 64 KiB. Requires `mcp>=1.30`. See `docs/how-to/deploy-skills-mcp.md`.
+- `nuvel traces` and `nuvel dashboard` read `nuvel.skill_run/1` run traces: skill runs appear alongside agent runs (outcome as status), and the dashboard adds a per-step "Skill steps" error table. `nuvel eval` ignores skill runs.
 
 ### Changed
 

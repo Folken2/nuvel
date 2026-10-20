@@ -41,4 +41,16 @@
   {% endfor %}
 </div>
 
+{% if step_rates %}
+<div class="ed-section-lbl">Skill steps</div>
+<table class="ed-steps">
+  <thead><tr><th>Step</th><th>Runs</th><th>Errors</th></tr></thead>
+  <tbody>
+  {% for row in step_rates %}
+    <tr><td><code>{{ row.step }}</code></td><td>{{ row.runs }}</td><td{% if row.errors %} class="err"{% endif %}>{{ row.errors }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% endblock %}

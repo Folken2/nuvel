@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from nuvel.dashboard.headlines import describe_run
 from nuvel.dashboard.loader import TraceLoader
 from nuvel.eval.schema import ScoredRun
-from nuvel.traces_cli import Run
+from nuvel.traces_cli import Run, step_error_rates
 
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent
@@ -37,6 +37,8 @@ def _cost_label(cost: float | None) -> str:
 
 
 def _run_has_error(run: Run) -> bool:
+    if run.schema == "skill_run":
+        return run.subtype in {"failure", "blocked"}
     for ev in run.events:
         if ev.get("event") in _ERROR_EVENTS:
             return True
@@ -134,6 +136,10 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
             "total_cost_label": _cost_label(total_cost or None),
             "error_count": sum(1 for v in views if v.has_error),
             "recent_error": next((v for v in views if v.has_error), None),
+            "step_rates": [
+                {"step": sid, "runs": n, "errors": bad}
+                for sid, n, bad in step_error_rates(runs)
+            ],
             "window_label": "all time",
             "live": watcher is not None,
         }
