@@ -274,6 +274,17 @@ nuvel run [--dev]
 
 The meta-agent itself is a nuvel-scaffolded ADK agent. Its source is under `nuvel/` in the repository.
 
+## `nuvel-mcp serve`
+
+Standalone Skills MCP server, shipped as its own dependency-free package (`nuvel-mcp`). `nuvel mcp serve` delegates to it with the same flags.
+
+```bash
+uvx nuvel-mcp serve --skills-dir ./skills-hub
+nuvel-mcp serve [--skills-dir DIR] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR]
+```
+
+The stdio transport needs no dependencies; install `nuvel-mcp[http]` for HTTP. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
+
 ## Programmatic API
 
 The CLI is a thin wrapper over `scaffold_agent()` in each backend module. If you want to invoke scaffolding from Python:

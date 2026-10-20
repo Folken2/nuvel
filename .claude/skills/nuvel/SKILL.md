@@ -169,6 +169,9 @@ nuvel new <kebab-name> --description "…" --with-acp
 #   then: python -m <snake_name>.acp     (Agent Client Protocol over stdio)
 #         python -m <snake_name>.cli "…"  (one-shot)  |  python -m <snake_name>.cli  (REPL)
 
+# Serve a skills hub over MCP (standalone, dependency-free package)
+nuvel-mcp serve --skills-dir ./skills-hub   # same as: nuvel mcp serve; or: uvx nuvel-mcp serve
+
 # Knowledge
 nuvel skills list
 nuvel skills search prompt

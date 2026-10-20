@@ -71,14 +71,14 @@ API tokens stored in GitHub secrets. The workflow in
 [.github/workflows/release.yml](.github/workflows/release.yml) triggers on a
 `v*.*.*` tag push and:
 
-1. Builds sdist + wheel and verifies the tag matches `pyproject.toml` `version`
+1. Builds sdist + wheel for both `nuvel-cli` and `nuvel-mcp` and verifies the tag matches the `version` in both `pyproject.toml` and `packages/nuvel-mcp/pyproject.toml` (the two packages always release at the same version)
 2. Publishes to PyPI through the OIDC-backed `pypi` environment
 3. Creates a GitHub release with auto-generated notes
 
 To cut a release:
 
 ```bash
-# 1. Bump version in pyproject.toml
+# 1. Bump version in pyproject.toml AND packages/nuvel-mcp/pyproject.toml
 # 2. Commit, push, and tag
 git commit -am "release: 0.2.0"
 git tag v0.2.0
@@ -89,6 +89,14 @@ One-time setup before the first release:
 
 - Register `nuvel` on PyPI and add this repo as a Trusted Publisher
   (`pypi.org` → Account → Publishing → Add a new pending publisher).
+- Do the same for `nuvel-mcp`: configure a PyPI trusted publisher for that
+  project (same repo, workflow `release.yml`, environment `pypi`). This is a
+  manual maintainer step outside the repo and must happen before the first release.
+- The `nuvel-mcp` name is not yet registered on PyPI. Because `nuvel-cli`
+  depends on it, the maintainer must create the PyPI project (trusted
+  publisher) and publish `0.5.0.dev0` (or a placeholder) **before this branch
+  is pushed or merged**, to close a dependency-confusion window. Keep the
+  compatible range pin (`nuvel-mcp>=0.5.0.dev0,<0.6`); do not switch to an exact pin.
 - Create a GitHub environment named `pypi` (Settings → Environments → New
   environment).
 

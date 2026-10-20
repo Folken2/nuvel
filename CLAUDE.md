@@ -15,8 +15,8 @@ Generated projects land in `generated-agents/<name>/` and are standalone runnabl
 ## Common commands
 
 ```bash
-make install     # pip install -e .  (exposes `nuvel` console script)
-make test        # python -m pytest tests/ -v
+make install     # pip install -e packages/nuvel-mcp -e .  (exposes `nuvel` and `nuvel-mcp` console scripts)
+make test        # python -m pytest tests/ -v  (CI also runs packages/nuvel-mcp/tests)
 make run         # nuvel run         (meta-agent, prod-style)
 make dev         # nuvel run --dev   (in-memory sessions)
 make dev-ui      # adk web with all 12 plugins loaded (meta-agent's own chain, not the 17-plugin generated-agent chain)
@@ -25,9 +25,13 @@ make skills      # nuvel skills list
 
 Single test: `pytest tests/test_scaffold.py::test_name -v`. Tests are async-mode auto (see `[tool.pytest.ini_options]` in [pyproject.toml](pyproject.toml)) — no `@pytest.mark.asyncio` decorators needed.
 
-CLI surface (full table in README): `nuvel agent create`, `nuvel skills list|search`, `nuvel doctor`, `nuvel traces`, `nuvel pricing`, `nuvel dashboard`, `nuvel eval`, `nuvel run`, `nuvel mcp serve`.
+CLI surface (full table in README): `nuvel agent create`, `nuvel skills list|search`, `nuvel doctor`, `nuvel traces`, `nuvel pricing`, `nuvel dashboard`, `nuvel eval`, `nuvel run`, `nuvel mcp serve` (delegates to the standalone `nuvel-mcp serve`).
 
 ## Architecture — the parts that span multiple files
+
+### Monorepo: two PyPI packages
+
+The repo publishes two distributions at the same version, from one tag: `nuvel-cli` (root `pyproject.toml`, import `nuvel`) and `nuvel-mcp` (`packages/nuvel-mcp/`, import `nuvel_mcp`, no runtime dependencies; the `http` extra adds `mcp`). The Skills MCP server lives in `nuvel_mcp`; `nuvel.mcp` is a deprecated shim and `nuvel mcp serve` delegates to `nuvel_mcp.cli`. Its tests are in `packages/nuvel-mcp/tests/`. `release.yml` checks the tag against both versions and builds both into `dist/`.
 
 ### Three parallel backends
 

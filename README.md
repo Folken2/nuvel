@@ -227,6 +227,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel plugins list` | Discover [Agent Plugins](https://agent-plugins.org/) in the configured `plugin_dirs` (`NUVEL_PLUGIN_DIRS`, default `./plugins`), listing each plugin's skills and MCP servers |
 | `nuvel plugins load <dir>` | Load and inspect a single plugin directory |
 | `nuvel plugins config` | Show the current plugin directory configuration |
+| `nuvel-mcp serve [--skills-dir <dir>]` | Standalone, dependency-free Skills MCP server (`uvx nuvel-mcp serve --skills-dir …`); `nuvel mcp serve` delegates to it, and the old `nuvel.mcp` import is a deprecated shim for `nuvel_mcp` |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |
 
