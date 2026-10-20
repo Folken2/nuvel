@@ -134,7 +134,8 @@ It must return an object with
 `authenticate(headers: Mapping[str, str]) -> str | None` (see
 `nuvel_mcp.auth.Authenticator`): return the principal name to accept the
 request, `None` to reject it with `401`. Header names are matched
-case-insensitively. The `--auth` value is only ever read from the command line.
+case-insensitively. A factory that returns anything else, including `None`, is
+refused at startup (exit 1): it never turns authentication off. The `--auth` value is only ever read from the command line.
 
 ## What this package does not do
 

@@ -233,8 +233,8 @@ def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
               allowed_hosts: Iterable[str] = ()) -> Starlette:
     """The ASGI app serving ``server`` at ``/mcp`` behind ``authenticator``.
 
-    ``authenticator=None`` disables authentication (local use only; the CLI
-    refuses it on a non-loopback host). When ``bind_host`` is a loopback name,
+    ``authenticator=None`` disables authentication, which is allowed only on a
+    loopback ``bind_host`` (``ValueError`` otherwise). When ``bind_host`` is a loopback name,
     ``Host`` and ``Origin`` must be loopback too, or one of ``allowed_hosts``
     (the public name a reverse proxy forwards): DNS-rebinding protection.
     Sessions are stateless and responses are plain JSON: every request is
@@ -247,6 +247,8 @@ def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
     caller's run summary, nothing from the local feedback store.
     """
     allowed_hosts = tuple(allowed_hosts)
+    if authenticator is None and bind_host not in LOOPBACK_HOSTS:
+        raise ValueError("a non-loopback bind_host requires an authenticator")
     if allowed_hosts and authenticator is None:
         raise ValueError("allowed_hosts requires an authenticator")
     server.health_runs_only = True

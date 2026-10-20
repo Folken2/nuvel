@@ -81,8 +81,9 @@ def load_authenticator(spec: str | None) -> Authenticator | None:
 
     ``None`` means no authentication; ``"bearer"`` is
     :meth:`BearerAuthenticator.from_env`; ``"module:factory"`` imports
-    ``module`` and calls ``factory()`` with no arguments. Raises ``ValueError``
-    for anything else.
+    ``module`` and calls ``factory()`` with no arguments; the result must have
+    a callable ``authenticate``. Raises ``ValueError`` for anything else, so a
+    factory returning ``None`` never silently disables authentication.
     """
     if spec is None:
         return None
@@ -98,4 +99,9 @@ def load_authenticator(spec: str | None) -> Authenticator | None:
     factory = getattr(module, attr, None)
     if not callable(factory):
         raise ValueError(f"authenticator factory {spec!r} not found or not callable")
-    return factory()
+    authenticator = factory()
+    if not callable(getattr(authenticator, "authenticate", None)):
+        raise ValueError(
+            f"authenticator factory {spec!r} must return an object with an authenticate() method"
+        )
+    return authenticator

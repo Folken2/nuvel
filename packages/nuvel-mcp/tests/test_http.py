@@ -451,6 +451,32 @@ def test_serve_http_refuses_allowed_hosts_without_authenticator(server, monkeypa
     assert not ran
 
 
+def test_build_app_refuses_non_loopback_bind_without_authenticator(server):
+    with pytest.raises(ValueError, match="authenticator"):
+        build_app(server, None, bind_host="0.0.0.0")
+
+
+def test_serve_http_refuses_non_loopback_bind_without_authenticator(server, monkeypatch):
+    import sys
+    import types
+    from nuvel_mcp.http import serve_http
+    ran = []
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: ran.append(1)))
+    with pytest.raises(ValueError):
+        serve_http(server, "0.0.0.0", 8765, None)
+    assert not ran
+
+
+def test_cli_non_loopback_with_factory_returning_none_exits_1(captured, capsys, tmp_path,
+                                                                monkeypatch):
+    (tmp_path / "none_auth_mod.py").write_text("def make():\n    return None\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert cli.main(["serve", "--transport", "http", "--host", "0.0.0.0",
+                     "--auth", "none_auth_mod:make", "--feedback-dir", str(tmp_path)]) == 1
+    assert not captured
+    assert "--auth" in capsys.readouterr().err
+
+
 def test_cli_allowed_host_needs_http(capsys):
     assert cli.main(["serve", "--allowed-host", "mcp.example.com"]) == 1
     assert "--transport http" in capsys.readouterr().err

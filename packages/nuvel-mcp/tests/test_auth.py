@@ -106,3 +106,17 @@ def test_load_authenticator_factory(tmp_path, monkeypatch):
 def test_load_authenticator_bad_spec(spec):
     with pytest.raises(ValueError):
         load_authenticator(spec)
+
+
+@pytest.mark.parametrize("body", [
+    "def make():\n    return None\n",
+    "def make():\n    return object()\n",
+    "class A:\n    authenticate = 'not callable'\n"
+    "def make():\n    return A()\n",
+], ids=["none", "object", "non-callable"])
+def test_load_authenticator_factory_must_return_an_authenticator(tmp_path, monkeypatch, body):
+    (tmp_path / "bad_auth_mod.py").write_text(body)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(__import__("sys").modules, "bad_auth_mod", raising=False)
+    with pytest.raises(ValueError, match="authenticate"):
+        load_authenticator("bad_auth_mod:make")
