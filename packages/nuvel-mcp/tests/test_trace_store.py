@@ -109,6 +109,20 @@ def test_query_filters_by_since_skill_and_tenant(tmp_path, example):
     assert [r["run_id"] for r in acme] == [new_acme["run_id"]]
 
 
+def test_query_separates_dotted_names_sharing_a_directory(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    ab_c = {**_run(example, "2026-10-20T10:00:00Z", skill="c"),
+            "plugin": {"name": "a.b", "version": "0.2.0"}}
+    a_bc = {**_run(example, "2026-10-20T11:00:00Z", skill="b.c"),
+            "plugin": {"name": "a", "version": "0.2.0"}}
+    store.append(ab_c)
+    store.append(a_bc)
+    assert (tmp_path / "_runs" / "a.b.c").is_dir()  # both share it
+    since = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert [r["run_id"] for r in store.query("a.b", "c", since, None)] == [ab_c["run_id"]]
+    assert [r["run_id"] for r in store.query("a", "b.c", since, None)] == [a_bc["run_id"]]
+
+
 def test_query_since_within_a_day(tmp_path, example):
     store = LocalTraceStore(tmp_path)
     early = _run(example, "2026-10-20T08:00:00Z")

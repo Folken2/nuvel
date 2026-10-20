@@ -309,6 +309,9 @@ class LocalTraceStore:
             for trace in _read_jsonl(path):
                 if tenant is not None and trace.get("tenant") != tenant:
                     continue
+                # Dotted names can share a directory ('a.b' + 'c', 'a' + 'b.c').
+                if _name(trace, "plugin") != plugin or _name(trace, "skill") != skill:
+                    continue
                 try:
                     started = _parse_started_at(trace["started_at"])
                 except (KeyError, TypeError, ValueError):
@@ -316,6 +319,11 @@ class LocalTraceStore:
                 if started >= since:
                     results.append(trace)
         return results
+
+
+def _name(trace: dict, key: str) -> object:
+    entry = trace.get(key)
+    return entry.get("name") if isinstance(entry, dict) else None
 
 
 def _read_jsonl(path: Path) -> list[dict]:

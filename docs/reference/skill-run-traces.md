@@ -127,8 +127,10 @@ HTTP status only, never the URL) and not retried; the local copy stands.
 ```
 
 Without `plugin` the output is unchanged. When a principal is authenticated, the block
-counts only that principal's tenant; over stdio (no principal) it covers the whole
-store.
+counts only that principal's tenant; with no principal it covers the whole store. That
+is the case over stdio, and also over HTTP without `--auth` (allowed on a loopback
+bind only): every local caller then sees every tenant's runs, and the traces it records
+carry no `tenant`, exactly as over stdio.
 
 Over HTTP (`--transport http`) `plugin` is required, and the result carries only the
 identifiers and the tenant-scoped `runs` block (`{"skill", "plugin", "runs"}`).
@@ -141,9 +143,10 @@ free text (queued proposals) and other tenants' outcomes.
   lock, so two server processes appending to the same store can both accept the same
   `run_id`. Readers should treat `run_id` as the dedup key.
 - **Directory names can collide.** `{plugin}.{skill}` is ambiguous when identifiers
-  contain `.` (plugin `a.b` + skill `c` and plugin `a` + skill `b.c`). Records keep
-  the full `plugin` and `skill`, so nothing is lost, but a per-directory read can mix
-  the two.
+  contain `.` (plugin `a.b` + skill `c` and plugin `a` + skill `b.c`), so both land in
+  the same files. Records keep the full `plugin` and `skill`, and
+  `LocalTraceStore.query` matches on them, so health reports never mix the two; a
+  tool reading the directories directly must filter on those fields too.
 - **Strict function-calling translators.** The tool's `inputSchema` keeps `format`
   and `propertyNames`, which some strict function-calling translators reject. Clients
   that need a reduced schema must strip those keywords themselves; the server still
