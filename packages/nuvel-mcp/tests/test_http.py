@@ -358,6 +358,53 @@ async def test_http_health_returns_only_tenant_runs(app, server, tmp_path, monke
     assert stdio["queued_proposals"] == 1
 
 
+def _radar_hub(root):
+    from nuvel_mcp.skills_loader import SkillsLoader
+
+    skill = root / "skills" / "ops" / "radar"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: radar\nversion: 1.0.0\n---\n\nScan.\n")
+    (root / "skills" / "index.json").write_text(json.dumps({"version": "1.0.0", "themes": {
+        "ops": [{"name": "radar", "description": "d", "path": "skills/ops/radar/SKILL.md"}]}}))
+    return SkillsLoader(root / "skills")
+
+
+async def test_http_get_skill_returns_nothing_from_the_feedback_store(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    store = tmp_path / "store"
+    local = SkillsMCPServer(None, feedback_dir=store)
+    local.handle_tools_call({"name": "propose_improvement", "arguments": {
+        "skill_name": "radar", "current_version": "1.0.0",
+        "issue": "PRIVATEISSUETEXT", "suggested_fix": "PRIVATEFIXTEXT"}})
+    hub = _radar_hub(tmp_path / "hub")
+    # stdio still embeds the feedback report in get_skill.
+    stdio = SkillsMCPServer(hub, feedback_dir=store)
+    assert stdio.tool_get_skill({"name": "radar"})["health"]["queued_proposals"] == 1
+
+    remote = SkillsMCPServer(hub, feedback_dir=store, tools=frozenset({"get_skill"}))
+    app = build_app(remote, BearerAuthenticator(TOKENS))
+
+    async def go(session):
+        return await session.call_tool("get_skill", {"name": "radar"})
+
+    async with lifespan(app):
+        result = await mcp_session(app, "s3cret", go)
+    assert result.isError is not True
+    dumped = result.model_dump_json()
+    assert "PRIVATEISSUETEXT" not in dumped and "PRIVATEFIXTEXT" not in dumped
+    assert "health" not in json.loads(result.content[0].text)
+
+
+async def test_http_tools_list_marks_plugin_required(app):
+    async def go(session):
+        return await session.list_tools()
+
+    async with lifespan(app):
+        result = await mcp_session(app, "s3cret", go)
+    health = next(t for t in result.tools if t.name == "check_skill_health")
+    assert set(health.inputSchema["required"]) == {"skill_name", "plugin"}
+
+
 @pytest.mark.parametrize("args", [
     {"skill_name": "radar"},
     {"skill_name": "radar", "plugin": "Bad Plugin SECRETVALUE"},

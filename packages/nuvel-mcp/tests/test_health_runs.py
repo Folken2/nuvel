@@ -179,3 +179,13 @@ def test_propose_relay_failure_never_logs_password(tmp_path, monkeypatch, capsys
     assert "relay failed" in err.lower()
     assert SECRET not in err and "relay.example" not in err
     assert "URLError" in err
+
+
+def test_remote_mode_schema_requires_plugin(tmp_path):
+    s = SkillsMCPServer(None, feedback_dir=tmp_path, health_runs_only=True)
+    tools = {t["name"]: t for t in s.handle_tools_list({})["tools"]}
+    assert set(tools["check_skill_health"]["inputSchema"]["required"]) == {"skill_name", "plugin"}
+    # The stdio definition is untouched by a remote-mode server.
+    local = SkillsMCPServer(None, feedback_dir=tmp_path)
+    tools = {t["name"]: t for t in local.handle_tools_list({})["tools"]}
+    assert tools["check_skill_health"]["inputSchema"]["required"] == ["skill_name"]

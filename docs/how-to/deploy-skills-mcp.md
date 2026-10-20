@@ -109,6 +109,9 @@ Everything else is off unless you name it in `--tools`:
 - The hub tools (`search_skills`, `get_skill`, `install_skill`, …) serve a
   local skills hub, and `install_skill` writes to the server's filesystem.
 
+Whatever you enable, no tool returns data from the local feedback store over HTTP:
+`get_skill`, for example, leaves out its `health` report.
+
 stdio keeps the full tool set: it runs on the user's own machine, where free text
 never leaves.
 

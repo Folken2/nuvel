@@ -193,6 +193,33 @@ def _optional_str_arg(args, key):
     return value.strip() or None
 
 
+_REMOTE_DESCRIPTIONS = {
+    "check_skill_health": (
+        "Check a skill's run record before relying on it: outcome counts for the "
+        "last 30 days, errors by step and error class, and the total, from the "
+        "run traces recorded for your tenant. 'plugin' is required."
+    ),
+    "get_skill": (
+        "Get the full SKILL.md content, frontmatter metadata and version for a "
+        "skill by name or 'theme/name'. Pass 'section' to read a single '## ' "
+        "section instead of the whole file. 'metadata.template_variables' lists "
+        "any {{ placeholders }} the skill expects you to fill."
+    ),
+}
+
+
+def _remote_definition(tool: dict) -> dict:
+    """``tool`` as listed in remote mode (nothing from the feedback store)."""
+    name = tool["name"]
+    if name not in _REMOTE_DESCRIPTIONS:
+        return tool
+    tool = {**tool, "description": _REMOTE_DESCRIPTIONS[name]}
+    if name == "check_skill_health":
+        schema = tool["inputSchema"]
+        tool["inputSchema"] = {**schema, "required": [*schema["required"], "plugin"]}
+    return tool
+
+
 def _required_str_arg(args, key):
     value = _optional_str_arg(args, key)
     if value is None:
@@ -412,9 +439,11 @@ class SkillsMCPServer:
         # Optional allow-list narrowing which tools are listed and callable.
         self._allowed_tools = tools
         self.trace_store = trace_store
-        # Set by the HTTP transport: check_skill_health then requires 'plugin'
-        # and returns only the principal-scoped run-trace summary, never
-        # anything read from the local feedback store (which holds free text).
+        # Remote mode, set by the HTTP transport: no tool returns anything
+        # read from the local feedback store (which holds free text and every
+        # tenant's outcomes). check_skill_health then requires 'plugin' and
+        # returns only the principal-scoped run-trace summary; get_skill omits
+        # 'health'.
         self.health_runs_only = health_runs_only
         # When set, discovery (resources/list, search_skills, list_skills,
         # list_themes, get_skill, install_skill) is scoped to this single theme. resources/read is unaffected — scoping
@@ -589,6 +618,8 @@ class SkillsMCPServer:
 
     def handle_tools_list(self, params):
         tools = self._all_tool_definitions()["tools"]
+        if self.health_runs_only:
+            tools = [_remote_definition(t) for t in tools]
         return {"tools": [t for t in tools if self._tool_enabled(t["name"])]}
 
     def _all_tool_definitions(self):
@@ -1089,10 +1120,12 @@ class SkillsMCPServer:
             result["section"] = section
 
         # Health signals from the feedback store (best-effort, no feedback = "ok").
-        try:
-            result["health"] = feedback.compute_health(self.feedback_dir, entry["name"])
-        except ValueError:  # a hub name that can't be a store key has no feedback
-            result["health"] = {"total_feedback": 0, "queued_proposals": 0, "recommendation": "ok"}
+        # Never in remote mode: the store holds other callers' free text.
+        if not self.health_runs_only:
+            try:
+                result["health"] = feedback.compute_health(self.feedback_dir, entry["name"])
+            except ValueError:  # a hub name that can't be a store key has no feedback
+                result["health"] = {"total_feedback": 0, "queued_proposals": 0, "recommendation": "ok"}
 
         # Optional OrgMemoryService resolution (ADK-backed, best-effort).
         if variables and self.with_org_memory:
