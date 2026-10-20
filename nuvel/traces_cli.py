@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from nuvel_mcp.feedback import resolve_feedback_dir
+
 
 # ── Discovery ────────────────────────────────────────────────────────
 
@@ -61,7 +63,28 @@ def _discover_trace_dirs(extra: list[str] | None = None) -> list[Path]:
         if p.is_dir() and p not in roots:
             roots.append(p)
 
+    # Skill run traces (nuvel.skill_run/1) live one level deeper, under
+    # `_runs/<plugin>.<skill>/`. Only `_runs` trees are walked recursively.
+    skill_roots = [resolve_feedback_dir()] + [Path(src) for src in extra or []]
+    for root in skill_roots:
+        for d in _skill_run_dirs(root):
+            if d not in roots:
+                roots.append(d)
+
     return roots
+
+
+def _skill_run_dirs(root: Path) -> list[Path]:
+    """Every directory at or under a `_runs` directory found in `root`."""
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    for dirpath, dirnames, _files in os.walk(root):
+        dirnames.sort()
+        here = Path(dirpath)
+        if root.name == "_runs" or "_runs" in here.relative_to(root).parts:
+            found.append(here)
+    return found
 
 
 # Eval writes scored.jsonl as a sibling of trace files; never treat it
@@ -110,8 +133,9 @@ class Run:
     cost_usd: float | None = None
     user_input: str | None = None
     subtype: str | None = None
-    schema: str = "adk"  # "adk" | "casdk"
+    schema: str = "adk"  # "adk" | "casdk" | "skill_run"
     events: list[dict] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)  # skill_run only
 
     @property
     def key(self) -> str:
@@ -134,12 +158,47 @@ def _read_jsonl(path: Path) -> Iterator[dict]:
         return
 
 
+def _skill_run_from_record(path: Path, rec: dict) -> Run | None:
+    """Normalise one `nuvel.skill_run/1` record; None when it is malformed."""
+    try:
+        run_id = str(rec["run_id"])
+        agent = f"{rec['plugin']['name']}:{rec['skill']['name']}"
+        duration_s = rec.get("duration_s")
+        steps = [s for s in rec.get("steps") or [] if isinstance(s, dict)]
+        calls = sum(int(t.get("calls") or 0) for t in rec.get("tools") or [])
+        return Run(
+            agent=agent,
+            file=path,
+            session_id=run_id,
+            trace_id=run_id,
+            started_at=rec.get("started_at"),
+            duration_ms=int(duration_s * 1000) if duration_s is not None else None,
+            tool_calls=calls,
+            subtype=rec.get("outcome"),
+            schema="skill_run",
+            steps=steps,
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def _parse_file_runs(path: Path, keep_events: bool = False) -> list[Run]:
     """Group records in one JSONL file into Run summaries."""
     agent_label = _agent_label_for(path)
     runs: dict[str, Run] = {}
 
     for rec in _read_jsonl(path):
+        if not isinstance(rec, dict):
+            continue
+        # Skill run schema (written by nuvel-mcp).
+        if rec.get("schema") == "nuvel.skill_run/1":
+            sr = _skill_run_from_record(path, rec)
+            if sr is not None:
+                if keep_events:
+                    sr.events.append(rec)
+                runs[f"skill_run:{sr.session_id}"] = sr
+            continue
+
         # CASDK flat schema: no `event` key, has top-level cost/duration/num_turns.
         if "event" not in rec and ("num_turns" in rec or "total_cost_usd" in rec):
             sid = str(rec.get("session_id") or "")
@@ -217,6 +276,30 @@ def _collect_runs(sources: list[str] | None, keep_events: bool = False) -> list[
     for f in _iter_trace_files(dirs):
         runs.extend(_parse_file_runs(f, keep_events=keep_events))
     return runs
+
+
+def step_error_rates(runs: list[Run]) -> list[tuple[str, int, int]]:
+    """Per skill step: (step_id, runs containing it, runs where it errored).
+
+    Sorted by error ratio descending, then step id. Non-skill runs are ignored.
+    """
+    seen: dict[str, int] = {}
+    errored: dict[str, int] = {}
+    for r in runs:
+        if r.schema != "skill_run":
+            continue
+        ids: dict[str, bool] = {}
+        for step in r.steps:
+            sid = step.get("id")
+            if not isinstance(sid, str):
+                continue
+            ids[sid] = ids.get(sid, False) or step.get("status") == "error"
+        for sid, bad in ids.items():
+            seen[sid] = seen.get(sid, 0) + 1
+            errored[sid] = errored.get(sid, 0) + (1 if bad else 0)
+    rows = [(sid, n, errored[sid]) for sid, n in seen.items()]
+    rows.sort(key=lambda t: (-(t[2] / t[1]), t[0]))
+    return rows
 
 
 # ── Filters & formatting ─────────────────────────────────────────────
@@ -476,6 +559,14 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     total_cost = sum(b["cost"] for b in by_agent.values() if b["any_cost"])
     print(f"\nTotal: {total_runs} run(s), {_fmt_tokens(total_tokens)} tokens"
           + (f", ${total_cost:.4f}" if total_cost else ""))
+
+    step_rows = step_error_rates(runs)
+    if step_rows:
+        print("\nSkill steps")
+        _print_table(
+            ("STEP", "RUNS", "ERRORED", "ERROR RATE"),
+            [(sid, str(n), str(e), f"{e / n:.0%}") for sid, n, e in step_rows],
+        )
 
     # Cost-coverage warning: runs that have token usage but no cost mean
     # pricing.json is missing the model that actually ran. Surfacing this
