@@ -34,11 +34,14 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
 from nuvel_mcp import feedback
 from nuvel_mcp.installer import install_skill
 from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
+
+if TYPE_CHECKING:  # pragma: no cover
+    from nuvel_mcp.traces import TraceStore
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "nuvel-skills", "version": "1.0.0"}
@@ -72,6 +75,22 @@ _SEPARATORS = re.compile(r"[\s\-_./]+")
 def log(*args) -> None:
     """Diagnostics go to stderr so stdout stays a clean protocol channel."""
     print(*args, file=sys.stderr, flush=True)
+
+
+HUB_TOOLS = frozenset({
+    "search_skills", "list_skills", "list_themes", "get_skill", "install_skill", "fence_value",
+})
+FEEDBACK_TOOLS = frozenset({"record_feedback", "check_skill_health", "propose_improvement"})
+# Tools the HTTP transport exposes when no explicit allow-list is given.
+HTTP_DEFAULT_TOOLS = frozenset({"record_run_trace", "check_skill_health"})
+
+
+class ToolInputError(Exception):
+    """A tool rejected its input; surfaced as a ``rejected`` tool result."""
+
+    def __init__(self, errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.errors = list(errors)
 
 
 class McpError(Exception):
@@ -362,13 +381,19 @@ class SkillsMCPServer:
 
     def __init__(
         self,
-        loader: SkillsLoader,
+        loader: SkillsLoader | None,
         theme: str | None = None,
         require_filter: list[str] | None = None,
         with_org_memory: str | None = None,
         feedback_dir: str | None = None,
+        tools: frozenset[str] | None = None,
+        trace_store: "TraceStore | None" = None,
     ):
+        # None means feedback-only mode: no hub tools or resources are served.
         self.loader = loader
+        # Optional allow-list narrowing which tools are listed and callable.
+        self._allowed_tools = tools
+        self.trace_store = trace_store
         # When set, discovery (resources/list, search_skills, list_skills,
         # list_themes, get_skill, install_skill) is scoped to this single theme. resources/read is unaffected — scoping
         # is about discovery, not access control.
@@ -487,7 +512,14 @@ class SkillsMCPServer:
             "serverInfo": SERVER_INFO,
         }
 
+    def _tool_enabled(self, name: str) -> bool:
+        if self.loader is None and name in HUB_TOOLS:
+            return False
+        return self._allowed_tools is None or name in self._allowed_tools
+
     def handle_resources_list(self, params):
+        if self.loader is None:
+            return {"resources": []}
         resources = []
         for theme, entry in self._scoped_entries():
             name = entry["name"]
@@ -508,6 +540,8 @@ class SkillsMCPServer:
         except ValueError as exc:
             raise McpError(INVALID_PARAMS, f"Invalid skill URI: {exc}")
 
+        if self.loader is None:
+            raise McpError(INVALID_PARAMS, f"Skill not found: {uri}")
         theme, entry = self.loader.find(theme, name)
         if entry is None:
             raise McpError(INVALID_PARAMS, f"Skill not found: {uri}")
@@ -525,6 +559,10 @@ class SkillsMCPServer:
         }
 
     def handle_tools_list(self, params):
+        tools = self._all_tool_definitions()["tools"]
+        return {"tools": [t for t in tools if self._tool_enabled(t["name"])]}
+
+    def _all_tool_definitions(self):
         return {
             "tools": [
                 {
@@ -831,9 +869,20 @@ class SkillsMCPServer:
         tool_name = params.get("name")
         args = params.get("arguments") or {}
         handler = self._tools.get(tool_name)
-        if handler is None:
+        if handler is None or not self._tool_enabled(tool_name):
             raise McpError(INVALID_PARAMS, f"Unknown tool: {tool_name}")
-        result = handler(args)
+        try:
+            result = handler(args)
+        except ToolInputError as exc:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(
+                        {"status": "rejected", "errors": exc.errors}, ensure_ascii=False
+                    ),
+                }],
+                "isError": True,
+            }
         # MCP tool results wrap output as a list of content blocks.
         return {
             "content": [{
@@ -1018,6 +1067,8 @@ class SkillsMCPServer:
 
     def _lookup_version(self, skill_ref: str) -> str:
         """Frontmatter version for ``name`` / ``theme/name`` ('' if unknown)."""
+        if self.loader is None:
+            return ""
         theme, entry = self.loader.find(*_split_skill_ref(skill_ref))
         if entry is None:
             return ""
@@ -1248,7 +1299,8 @@ class SkillsMCPServer:
         """Run the stdio read/dispatch/write loop until EOF on stdin."""
         stdin = stdin or sys.stdin
         stdout = stdout or sys.stdout
-        log(f"nuvel-skills MCP server starting (skills_dir={self.loader.skills_dir})")
+        where = self.loader.skills_dir if self.loader is not None else "none (feedback-only)"
+        log(f"nuvel-skills MCP server starting (skills_dir={where})")
         for line in stdin:
             line = line.strip()
             if not line:

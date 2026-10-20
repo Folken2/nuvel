@@ -10,13 +10,25 @@ import argparse
 import sys
 
 
+def _parse_tools(value: str) -> frozenset[str]:
+    return frozenset(v.strip() for v in value.split(",") if v.strip())
+
+
 def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     """Add every ``serve`` flag to ``parser``."""
     parser.add_argument(
         "--skills-dir",
-        default=".",
+        default=None,
         help="Skills hub directory (a dir with index.json, or a repo root "
-             "containing skills/index.json). Default: current directory.",
+             "containing skills/index.json). Omit to serve the feedback "
+             "tools only.",
+    )
+    parser.add_argument(
+        "--tools",
+        default=None,
+        type=_parse_tools,
+        metavar="A,B",
+        help="Comma-separated allow-list of tool names to expose.",
     )
     parser.add_argument(
         "--theme",
@@ -59,11 +71,13 @@ def run_serve(args: argparse.Namespace) -> int:
     from nuvel_mcp.server import SkillsMCPServer
     from nuvel_mcp.skills_loader import SkillsError, SkillsLoader
 
-    try:
-        loader = SkillsLoader.from_base(args.skills_dir)
-    except SkillsError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    loader = None
+    if args.skills_dir is not None:
+        try:
+            loader = SkillsLoader.from_base(args.skills_dir)
+        except SkillsError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
     require_filter = None
     if args.require:
@@ -77,6 +91,7 @@ def run_serve(args: argparse.Namespace) -> int:
         require_filter=require_filter,
         with_org_memory=args.with_org_memory,
         feedback_dir=args.feedback_dir,
+        tools=args.tools,
     )
     server.serve()
     return 0
