@@ -130,8 +130,10 @@ def _format_ok(value: str, fmt: str) -> bool:
         if _DATETIME_RE.fullmatch(value) is None:
             return False
         try:
-            datetime.fromisoformat(value)
-        except ValueError:
+            # Must also convert to UTC: normalize() does, and an offset can push
+            # year 1 or year 9999 out of range (OverflowError).
+            _parse_started_at(value)
+        except (ValueError, OverflowError):
             return False
         return True
     raise ValueError(f"unsupported format {fmt!r}")

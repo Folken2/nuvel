@@ -81,6 +81,14 @@ def test_record_run_trace_rejects_without_echo(tmp_path, example):
     assert not (tmp_path / "_runs").exists()
 
 
+@pytest.mark.parametrize("ts", ["0001-01-01T00:00:00+05:00", "9999-12-31T23:59:00-05:00"])
+def test_out_of_range_started_at_is_a_clean_rejection(tmp_path, example, ts):
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    res, body = call(s, {**example, "started_at": ts})
+    assert res["isError"] is True
+    assert body == {"status": "rejected", "errors": ["/started_at"]}
+
+
 def test_missing_trace_rejected(tmp_path):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     res = s.handle_tools_call({"name": "record_run_trace", "arguments": {}})

@@ -161,6 +161,11 @@ def test_started_at_accepts_any_offset(example):
         assert validate_skill_run({**example, "started_at": ts}) == [], ts
 
 
+@pytest.mark.parametrize("ts", ["0001-01-01T00:00:00+05:00", "9999-12-31T23:59:00-05:00"])
+def test_started_at_out_of_utc_range_is_rejected(example, ts):
+    assert validate_skill_run({**example, "started_at": ts}) == ["/started_at"]
+
+
 def test_enum_values_for_step_status_and_error_class(example):
     example["steps"][0]["status"] = "error"
     example["errors"] = [{"step": "radar.1.load-state", "class": c} for c in (
