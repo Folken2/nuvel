@@ -1,7 +1,7 @@
 # nuvel monorepo, `nuvel-mcp` package and privacy-safe skill run traces — design
 
 **Date:** 2026-10-20
-**Status:** draft — awaiting approval
+**Status:** approved (2026-10-20)
 **Author:** Folken2
 
 ## Problem
