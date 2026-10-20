@@ -5,6 +5,8 @@ import subprocess
 import sys
 import zipfile
 
+import pytest
+
 
 def _build_wheel(pkg: pathlib.Path, out: pathlib.Path) -> None:
     if importlib.util.find_spec("pip") is not None:
@@ -27,3 +29,23 @@ def test_wheel_has_no_runtime_dependencies(tmp_path):
     # Only the optional `http` extra may pull in a dependency.
     assert requires and all("extra ==" in line for line in requires)
     assert any(line.startswith("Requires-Dist: mcp") for line in requires)
+
+
+def test_wheel_carries_readme_and_license_text(tmp_path):
+    pkg = pathlib.Path(__file__).parents[1]
+    _build_wheel(pkg, tmp_path)
+    archive = zipfile.ZipFile(next(tmp_path.glob("nuvel_mcp-*.whl")))
+    names = archive.namelist()
+    meta = archive.read(next(n for n in names if n.endswith("METADATA"))).decode()
+    assert "Description-Content-Type: text/markdown" in meta
+    assert "nuvel-mcp" in meta.split("\n\n", 1)[1]  # README body as long description
+    licenses = [n for n in names if n.endswith("LICENSE") and ".dist-info/" in n]
+    assert licenses and "MIT License" in archive.read(licenses[0]).decode()
+
+
+def test_package_license_matches_the_repository_license():
+    pkg = pathlib.Path(__file__).parents[1]
+    repo_license = pkg.parents[1] / "LICENSE"
+    if not repo_license.is_file():  # an unpacked sdist has no repository around it
+        pytest.skip("not inside the repository")
+    assert (pkg / "LICENSE").read_text() == repo_license.read_text()
