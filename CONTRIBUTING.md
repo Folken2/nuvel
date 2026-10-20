@@ -79,6 +79,8 @@ To cut a release:
 
 ```bash
 # 1. Bump version in pyproject.toml AND packages/nuvel-mcp/pyproject.toml
+#    and move the nuvel-mcp range in requirements.txt to match
+#    (e.g. 0.6.0 -> nuvel-mcp>=0.6.0,<0.7)
 # 2. Commit, push, and tag
 git commit -am "release: 0.2.0"
 git tag v0.2.0
@@ -89,16 +91,20 @@ One-time setup before the first release:
 
 - Register `nuvel` on PyPI and add this repo as a Trusted Publisher
   (`pypi.org` → Account → Publishing → Add a new pending publisher).
-- Do the same for `nuvel-mcp`: configure a PyPI trusted publisher for that
-  project (same repo, workflow `release.yml`, environment `pypi`). This is a
-  manual maintainer step outside the repo and must happen before the first release.
-- The `nuvel-mcp` name is not yet registered on PyPI. Because `nuvel-cli`
-  depends on it, the maintainer must create the PyPI project (trusted
-  publisher) and publish `0.5.0.dev0` (or a placeholder) **before this branch
-  is pushed or merged**, to close a dependency-confusion window. Keep the
-  compatible range pin (`nuvel-mcp>=0.5.0.dev0,<0.6`); do not switch to an exact pin.
+- Do the same for `nuvel-mcp`: the PyPI project does not exist yet, so add a
+  *pending publisher* for it (same repo, workflow `release.yml`, environment
+  `pypi`). This is a manual maintainer step outside the repo.
 - Create a GitHub environment named `pypi` (Settings → Environments → New
   environment).
+
+### Before merging the `nuvel-mcp` branch
+
+`nuvel-cli` depends on `nuvel-mcp`, a name nobody has registered on PyPI yet.
+Before the branch that introduces it is pushed or merged, a maintainer must
+publish `nuvel-mcp` `0.5.0.dev0` (or a placeholder) through the pending
+publisher above, so no one else can claim the name in between
+(dependency confusion). Keep the compatible range pin
+(`nuvel-mcp>=0.5.0.dev0,<0.6`); do not switch to an exact pin.
 
 ## Adding a new messaging-app channel
 
