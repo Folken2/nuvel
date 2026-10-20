@@ -234,8 +234,8 @@ def build_app(server: SkillsMCPServer, authenticator: Authenticator | None,
     """The ASGI app serving ``server`` at ``/mcp`` behind ``authenticator``.
 
     ``authenticator=None`` disables authentication, which is allowed only on a
-    loopback ``bind_host`` (``ValueError`` otherwise). When ``bind_host`` is a loopback name,
-    ``Host`` and ``Origin`` must be loopback too, or one of ``allowed_hosts``
+    loopback ``bind_host`` (``ValueError`` otherwise). When ``bind_host`` is a
+    loopback name, ``Host`` and ``Origin`` must be loopback too, or one of ``allowed_hosts``
     (the public name a reverse proxy forwards): DNS-rebinding protection.
     Sessions are stateless and responses are plain JSON: every request is
     authenticated on its own.

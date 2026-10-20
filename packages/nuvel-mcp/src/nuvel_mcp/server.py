@@ -47,6 +47,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from nuvel_mcp.traces import TraceStore
 
 PROTOCOL_VERSION = "2024-11-05"
+
+
 def _package_version() -> str:
     """The installed nuvel-mcp version; '0+unknown' when run from a bare source tree."""
     try:
