@@ -52,6 +52,20 @@ def test_run_detail_returns_404_for_unknown_id(loader: TraceLoader) -> None:
     assert r.status_code == 404
 
 
+def test_run_detail_with_empty_id_is_404(loader: TraceLoader) -> None:
+    # An empty id would prefix-match every run and show the first one.
+    client = TestClient(build_app(loader))
+    assert client.get("/run/").status_code == 404
+
+
+def test_app_uses_only_public_loader_api() -> None:
+    import inspect
+
+    from nuvel.dashboard import app as app_mod
+
+    assert "loader._" not in inspect.getsource(app_mod)
+
+
 def test_feed_partial_returns_html_fragment(loader: TraceLoader) -> None:
     client = TestClient(build_app(loader))
     r = client.get("/api/runs/feed")

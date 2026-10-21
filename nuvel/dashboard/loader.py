@@ -40,6 +40,10 @@ class TraceLoader:
     def skill_roots(self) -> list[Path]:
         return list(self._skill_roots)
 
+    def static_sources(self) -> list[Path]:
+        """The configured source dirs, without the discovered `_runs` dirs."""
+        return list(self._static_sources)
+
     def sources(self) -> list[Path]:
         return self._sources
 
@@ -70,8 +74,10 @@ class TraceLoader:
         prefix, so a skill run's tenant-qualified id (``<run_id>@<tenant>``)
         addresses one run even when tenants share a run_id.
         """
+        if not id_or_prefix:
+            return None  # an empty prefix would match every run
         tiers: list[Run | None] = [None, None, None]
-        for run in self.runs_unsorted():
+        for run in self._runs_unsorted():
             if run.trace_id == id_or_prefix:
                 return run
             if tiers[1] is None and run.session_id == id_or_prefix:
@@ -83,7 +89,7 @@ class TraceLoader:
                 tiers[2] = run
         return tiers[1] or tiers[2]
 
-    def runs_unsorted(self) -> list[Run]:
+    def _runs_unsorted(self) -> list[Run]:
         out: list[Run] = []
         for f in _iter_trace_files(self._sources):
             out.extend(_parse_file_runs(f, keep_events=True))

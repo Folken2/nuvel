@@ -154,7 +154,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
 
     @app.get("/run/{trace_id:path}", response_class=HTMLResponse)
     def run_detail(request: Request, trace_id: str) -> HTMLResponse:
-        run = loader.find_by_id(trace_id)
+        run = loader.find_by_id(trace_id) if trace_id else None
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         scored = loader.scored_index().get(run.trace_id or run.session_id)
@@ -175,7 +175,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
         # Each SSE connection gets its own watcher + queue so multi-tab and
         # reconnect work cleanly. Disconnect tears down only this client's loop.
         from nuvel.dashboard.watcher import RunWatcher
-        own_watcher = RunWatcher(sources=loader._static_sources, skill_roots=loader.skill_roots())
+        own_watcher = RunWatcher(sources=loader.static_sources(), skill_roots=loader.skill_roots())
         queue: asyncio.Queue[Run] = asyncio.Queue()
         task = asyncio.create_task(own_watcher.run(queue))
         card_template = templates.get_template("_run_card.html")
