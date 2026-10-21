@@ -92,9 +92,17 @@ _GIT_LOG_OPTS: dict[str, object] = {
 _GIT_SHOW_OPTS: dict[str, object] = {
     **_GIT_DIFF_OPTS, "--oneline": "flag", "--no-patch": "flag", "-s": "flag",
 }
-# Prepended to every git invocation: never page, never run external diff or
-# textconv drivers that repo config could point at a program.
-_GIT_PREFIX = ["git", "--no-pager"]
+# Prepended to every git invocation: never page, and switch off the config
+# keys that make read-only commands run a program (fsmonitor runs on status,
+# hooks, bare-repo discovery of a model-written directory). External diff and
+# textconv drivers are disabled per subcommand below.
+_GIT_PREFIX = [
+    "git",
+    "-c", "core.fsmonitor=false",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "safe.bareRepository=explicit",
+    "--no-pager",
+]
 _GIT_SAFETY_ARGS = {
     "log": ["--no-ext-diff", "--no-textconv"],
     "diff": ["--no-ext-diff", "--no-textconv"],
@@ -237,7 +245,14 @@ def _validate_git(args: list[str]) -> list[str]:
     sub = args[0]
     options, positionals = _parse_options(args[1:], _GIT_SUBCOMMANDS[sub])
     for pos in positionals:
-        if not _GIT_POSITIONAL_RE.match(pos) or ".." in pos.split("/"):
+        # Absolute or home-relative paths make `git diff` fall back to
+        # --no-index and read arbitrary files; ".." walks out of the repo.
+        if (
+            not _GIT_POSITIONAL_RE.match(pos)
+            or pos.startswith(("/", "~"))
+            or os.path.isabs(pos)
+            or ".." in pos.split("/")
+        ):
             raise _Reject(f"Argument {pos!r} is not an allowed revision or path")
     return [*_GIT_PREFIX, sub, *_GIT_SAFETY_ARGS[sub], *options, *positionals]
 
@@ -286,6 +301,18 @@ def _run_cli_impl(command: str, cwd: str = "", base_dir: str | None = None) -> d
         return {"status": "error", "message": str(e)}
 
     base_abs = os.path.abspath(base_dir or _OUTPUT_DIR)
+    if argv[0] == "git":
+        # Everything under the output dir is model-writable (write_file), so a
+        # planted .git/config or bare-repo layout there could run commands.
+        # git only ever runs in the server's own working directory.
+        if cwd:
+            return {"status": "error", "message": "git commands do not accept cwd"}
+        here = os.path.abspath(os.getcwd())
+        if here == base_abs or here.startswith(base_abs + os.sep):
+            return {
+                "status": "error",
+                "message": "git is disabled when the working directory is inside AGENTS_OUTPUT_DIR",
+            }
     run_cwd = None
     if cwd:
         try:
@@ -301,6 +328,16 @@ def _run_cli_impl(command: str, cwd: str = "", base_dir: str | None = None) -> d
     env["GIT_PAGER"] = "cat"
     env["PAGER"] = "cat"
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    for key in list(env):
+        # Env-injected config (GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS)
+        # and repo redirection (GIT_DIR, GIT_WORK_TREE, ...) are dropped.
+        if key.startswith("GIT_CONFIG_") and key not in ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL"):
+            del env[key]
+    for key in ("GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE", "GIT_EXEC_PATH",
+                "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS"):
+        env.pop(key, None)
     env.pop("GIT_EXTERNAL_DIFF", None)
 
     try:
@@ -345,15 +382,17 @@ def run_cli(command: str, cwd: str = "", tool_context=None) -> dict:
     - `nuvel doctor`
     - `nuvel agent create --help` (or --help on any shape above)
     - `git status|log|diff|show` with read-only options (--oneline, --stat,
-      -n N, --cached, --name-only, ...)
+      -n N, --cached, --name-only, ...) — runs in the server's working
+      directory only; repo-relative paths, no `cwd`
 
     A value that starts with '-' must use the `--opt=value` form.
 
     Args:
         command: The full CLI command string, e.g.
             "nuvel agent create my-agent --description '...' --with-composio".
-        cwd: Optional directory to run in, relative to the generated-agents
-            output dir (e.g. "my-agent"). Paths escaping it are rejected.
+        cwd: Optional directory to run a nuvel command in, relative to the
+            generated-agents output dir (e.g. "my-agent"). Paths escaping it
+            are rejected. Not accepted for git commands.
     """
     return _run_cli_impl(command, cwd)
 

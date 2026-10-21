@@ -10,7 +10,10 @@ from unittest import mock
 import pytest
 
 from nuvel.tools import shell_tool
+from nuvel.tools.file_tools import _write_file_impl
 from nuvel.tools.shell_tool import _Reject, _run_cli_impl, validate_command
+
+GP = shell_tool._GIT_PREFIX
 
 
 def _argv(command: str) -> list[str]:
@@ -50,25 +53,25 @@ def _argv(command: str) -> list[str]:
         ("nuvel skills search 'human in loop' -f adk",
          ["nuvel", "skills", "search", "human in loop", "-f", "adk"]),
         ("nuvel doctor", ["nuvel", "doctor"]),
-        ("git status", ["git", "--no-pager", "status"]),
-        ("git status --short -b", ["git", "--no-pager", "status", "--short", "-b"]),
+        ("git status", [*GP, "status"]),
+        ("git status --short -b", [*GP, "status", "--short", "-b"]),
         ("git log --oneline -n 5",
-         ["git", "--no-pager", "log", "--no-ext-diff", "--no-textconv",
+         [*GP, "log", "--no-ext-diff", "--no-textconv",
           "--oneline", "-n", "5"]),
         ("git log --oneline -10",
-         ["git", "--no-pager", "log", "--no-ext-diff", "--no-textconv",
+         [*GP, "log", "--no-ext-diff", "--no-textconv",
           "--oneline", "-10"]),
         ("git log --max-count=3 main..HEAD",
-         ["git", "--no-pager", "log", "--no-ext-diff", "--no-textconv",
+         [*GP, "log", "--no-ext-diff", "--no-textconv",
           "--max-count=3", "main..HEAD"]),
         ("git diff --stat HEAD~1",
-         ["git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv",
+         [*GP, "diff", "--no-ext-diff", "--no-textconv",
           "--stat", "HEAD~1"]),
         ("git diff --cached nuvel/tools/shell_tool.py",
-         ["git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv",
+         [*GP, "diff", "--no-ext-diff", "--no-textconv",
           "--cached", "nuvel/tools/shell_tool.py"]),
         ("git show --stat HEAD",
-         ["git", "--no-pager", "show", "--no-ext-diff", "--no-textconv",
+         [*GP, "show", "--no-ext-diff", "--no-textconv",
           "--stat", "HEAD"]),
     ],
 )
@@ -120,6 +123,11 @@ def test_allowed_shapes(command, expected):
         "git show -- -c",
         "git log -- --upload-pack=id",
         "git diff ../../etc/passwd",
+        # Paths outside the repo make `git diff` fall back to --no-index.
+        "git diff /etc/passwd /dev/null",
+        "git diff /tmp/a /tmp/b",
+        "git show ~/.ssh/id_rsa",
+        "git diff ~root/.bashrc",
         "git log -n 999999",
         "git log -n -1",
         # nuvel shapes with injected options / disallowed subcommands.
@@ -225,20 +233,86 @@ def test_cwd_inside_output_dir(tmp_path):
 @pytest.mark.parametrize("cwd", ["../", "../../etc", "/etc", "my-agent/../../x"])
 def test_cwd_escape_rejected(tmp_path, cwd):
     with mock.patch.object(shell_tool.subprocess, "run") as run:
-        result = _run_cli_impl("git status", cwd=cwd, base_dir=str(tmp_path))
+        result = _run_cli_impl("nuvel doctor", cwd=cwd, base_dir=str(tmp_path))
     run.assert_not_called()
     assert result["status"] == "error"
 
 
+def test_git_rejects_cwd(tmp_path):
+    """The output dir is model-writable; a planted .git/config there must never be used."""
+    (tmp_path / "my-agent").mkdir()
+    with mock.patch.object(shell_tool.subprocess, "run") as run:
+        result = _run_cli_impl("git status", cwd="my-agent", base_dir=str(tmp_path))
+    run.assert_not_called()
+    assert "cwd" in result["message"]
+
+
+def test_git_rejected_when_process_cwd_inside_output_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with mock.patch.object(shell_tool.subprocess, "run") as run:
+        result = _run_cli_impl("git status", base_dir=str(tmp_path))
+    run.assert_not_called()
+    assert result["status"] == "error"
+
+
+def test_git_env_hardened(tmp_path, monkeypatch):
+    for key, val in {
+        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.pager",
+        "GIT_CONFIG_VALUE_0": "id", "GIT_CONFIG_PARAMETERS": "'core.pager'='id'",
+        "GIT_DIR": "/tmp/evil", "GIT_SSH_COMMAND": "id", "GIT_EXTERNAL_DIFF": "id",
+    }.items():
+        monkeypatch.setenv(key, val)
+    with mock.patch.object(shell_tool.subprocess, "run", return_value=_completed()) as run:
+        _run_cli_impl("git status", base_dir=str(tmp_path / "out"))
+    argv, env = run.call_args.args[0], run.call_args.kwargs["env"]
+    assert argv[:len(GP)] == GP and "core.fsmonitor=false" in argv
+    assert "safe.bareRepository=explicit" in argv
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    for key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF"):
+        assert key not in env
+
+
+def test_planted_fsmonitor_never_runs(tmp_path, monkeypatch):
+    """End-to-end: a repo whose config sets core.fsmonitor to a command doesn't run it."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    marker = tmp_path / "pwned"
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.fsmonitor", f"touch {marker}; false"],
+        check=True,
+    )
+    monkeypatch.chdir(repo)
+    result = _run_cli_impl("git status --short", base_dir=str(tmp_path / "out"))
+    assert result["exit_code"] == 0, result
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "path", [".git/config", "my-agent/.git/config", "my-agent/.GIT/hooks/x", ".git", "a/.Git"]
+)
+def test_write_file_refuses_git_metadata(tmp_path, path):
+    result = _write_file_impl(path, "[core]\n\tfsmonitor = id\n", str(tmp_path))
+    assert result["status"] == "error"
+    assert not any(tmp_path.rglob("*config"))
+
+
+def test_write_file_allows_gitignore(tmp_path):
+    assert _write_file_impl("my-agent/.gitignore", ".env\n", str(tmp_path))["status"] == "success"
+
+
 def test_cwd_missing_rejected(tmp_path):
     with mock.patch.object(shell_tool.subprocess, "run") as run:
-        result = _run_cli_impl("git status", cwd="nope", base_dir=str(tmp_path))
+        result = _run_cli_impl("nuvel doctor", cwd="nope", base_dir=str(tmp_path))
     run.assert_not_called()
     assert "does not exist" in result["message"]
 
 
-def test_real_git_status_runs(tmp_path):
+def test_real_git_status_runs(tmp_path, monkeypatch):
     """End-to-end: an allowed read-only git command actually executes."""
-    subprocess.run(["git", "init", "-q", str(tmp_path / "repo")], check=True)
-    result = _run_cli_impl("git status --short", cwd="repo", base_dir=str(tmp_path))
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    monkeypatch.chdir(repo)
+    result = _run_cli_impl("git status --short", base_dir=str(tmp_path / "out"))
     assert result["exit_code"] == 0, result

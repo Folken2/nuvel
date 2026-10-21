@@ -85,8 +85,10 @@ always land in the output directory), `nuvel skills list|search …`,
 `nuvel doctor`, `--help` on those, and read-only `git status|log|diff|show`.
 It cannot run `python`, `pip`, `uv`, `npm`, `npx`, or any other program, and it
 rejects git global options like `-c`. An optional `cwd` argument (e.g.
-`run_cli("nuvel doctor", cwd="<agent-name>")`) runs the command inside a
+`run_cli("nuvel doctor", cwd="<agent-name>")`) runs a nuvel command inside a
 generated agent's directory; paths outside the output directory are rejected.
+git commands take no `cwd` and only repo-relative paths. `write_file` refuses
+any path inside a `.git` directory.
 A text value starting with `-` must use the `--opt=value` form.
 
 **After scaffolding with `run_cli`, call `scaffold_agent(name, description)`** so
