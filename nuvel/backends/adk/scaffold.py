@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import shutil
 import sys
 from pathlib import Path
@@ -407,10 +408,11 @@ _LITELLM_ENV_BLOCK = (
     "# ── LiteLLM Model Gateway ──────────────────────────────────────\n"
     "# When using the LiteLLM overlay, the agent routes LLM calls\n"
     "# through a LiteLLM proxy instead of calling providers directly.\n"
-    "# Set the proxy base URL and the master key defined in\n"
-    "# {{agent_package}}/litellm/config.yaml:\n"
+    "# Set the proxy base URL and a key for it: the LITELLM_MASTER_KEY\n"
+    "# generated into {{agent_package}}/litellm/.env, or better, a scoped\n"
+    "# virtual key issued by the proxy:\n"
     "LITELLM_BASE_URL=http://localhost:4000/v1\n"
-    "LITELLM_API_KEY=sk-litellm-master-{{agent_name}}\n"
+    "LITELLM_API_KEY=\n"
     "# LiteLLM routes to OpenRouter by default. The agent never touches\n"
     "# provider keys directly — all LLM calls go through the proxy.\n"
     "# Provider keys (OPENAI_API_KEY, etc.) are set in LiteLLM's .env\n"
@@ -447,13 +449,16 @@ _LITELLM_README_BLOCK = (
     "\n"
     "```bash\n"
     "cd {{agent_package}}/litellm\n"
-    "cp .env.example .env\n"
+    "# .env already exists (gitignored) with a random LITELLM_MASTER_KEY\n"
     "# Edit .env — add your OPENROUTER_API_KEY\n"
     "docker compose up -d\n"
     "```\n"
     "\n"
-    "The proxy listens on `http://localhost:4000`. The agent connects via\n"
-    "`LITELLM_BASE_URL` and `LITELLM_API_KEY` (set in the agent's `.env`).\n"
+    "The proxy listens on `http://127.0.0.1:4000` (loopback only — the master\n"
+    "key is an admin credential). The agent connects via `LITELLM_BASE_URL`\n"
+    "and `LITELLM_API_KEY` (set in the agent's `.env`; use the master key from\n"
+    "`{{agent_package}}/litellm/.env` or a scoped virtual key). Each scaffold\n"
+    "gets its own random master key; rotate it by editing that `.env`.\n"
     "\n"
     "### Postgres (virtual keys)\n"
     "\n"
@@ -656,6 +661,30 @@ def _stamp_tree(
                 files_created.append(rel)
 
 
+def _write_litellm_env(
+    litellm_dir: Path, target: Path, files_created: list[str]
+) -> None:
+    """Seed the LiteLLM proxy's .env with a random per-project master key.
+
+    The master key is the proxy's admin credential, so it never goes into a
+    committed file: config.yaml reads os.environ/LITELLM_MASTER_KEY and
+    .env.example keeps an empty placeholder. Only this .env (gitignored via
+    the overlay's .gitignore) carries the generated value.
+    """
+    key = "sk-" + secrets.token_urlsafe(32)
+    example = (litellm_dir / ".env.example").read_text(encoding="utf-8")
+    env_text, count = re.subn(
+        r"^LITELLM_MASTER_KEY=.*$", f"LITELLM_MASTER_KEY={key}",
+        example, count=1, flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("litellm .env.example has no LITELLM_MASTER_KEY= line")
+    env_file = litellm_dir / ".env"
+    env_file.write_text(env_text, encoding="utf-8")
+    env_file.chmod(0o600)
+    files_created.append(str(env_file.relative_to(target)))
+
+
 # ── Scaffolding ─────────────────────────────────────────────────────
 
 
@@ -768,6 +797,7 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "eval", target, replacements, files_created)
         if with_litellm:
             _stamp_tree(OVERLAYS_DIR / "litellm", target, replacements, files_created)
+            _write_litellm_env(target / package / "litellm", target, files_created)
 
         return {
             "status": "ok",
