@@ -31,11 +31,13 @@ uvx nuvel-mcp serve --transport http
 
 `client create` prints a `client_id` and a `client_secret` (shown once). A
 workload exchanges them for an access token with the `client_credentials` grant,
-then sends it as a bearer token to `/mcp`:
+then sends it as a bearer token to `/mcp`. On the default loopback bind the
+server is `http://127.0.0.1:8080`; for a remote deployment use its public URL,
+`$NUVEL_MCP_PUBLIC_URL`, instead:
 
 ```bash
 curl -s -u "$NUVEL_CLIENT_ID:$NUVEL_CLIENT_SECRET" \
-  -d grant_type=client_credentials "$NUVEL_MCP_PUBLIC_URL/token"
+  -d grant_type=client_credentials "http://127.0.0.1:8080/token"
 # -> {"access_token": "...", ...}; call /mcp with
 #    Authorization: Bearer $ACCESS_TOKEN
 ```
