@@ -26,7 +26,6 @@ import argparse
 import json
 import os
 import sys
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -86,69 +85,99 @@ _RUNS_DIRNAME = "_runs"
 # Directories never worth descending into while looking for `_runs` trees.
 _PRUNED_DIRS = frozenset({"node_modules", "venv", "__pycache__"})
 
-# Per-command memo of `_skill_run_dirs`, active only inside `discovery_cache()`.
-_walk_cache: dict[Path, list[Path]] | None = None
-
-
-@contextmanager
-def discovery_cache() -> Iterator[None]:
-    """Memoise `_skill_run_dirs` for the duration of one command.
-
-    Eval discovers trace dirs two or three times per run; without this each
-    call walks every `--source` tree again. Not for long-lived processes (the
-    dashboard re-scans on purpose), so it is opt-in and scoped.
-    """
-    global _walk_cache
-    outer = _walk_cache
-    if outer is None:
-        _walk_cache = {}
-    try:
-        yield
-    finally:
-        _walk_cache = outer
-
-
 def _skill_run_dirs(root: Path) -> list[Path]:
     """Every directory at or under a `_runs` directory found in `root`.
 
     Hidden directories and vendored trees (`node_modules`, virtualenvs,
-    `__pycache__`) are not descended into.
+    `__pycache__`) are not descended into, and neither are symlinks.
     """
-    if _walk_cache is not None and root in _walk_cache:
-        return list(_walk_cache[root])
-    found = _walk_skill_run_dirs(root)
-    if _walk_cache is not None:
-        _walk_cache[root] = found
-    return list(found)
+    return _walk_skill_run_dirs(root)[0]
 
 
-def _walk_skill_run_dirs(root: Path) -> list[Path]:
+def _mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _walk_skill_run_dirs(root: Path) -> tuple[list[Path], tuple[int | None, ...]]:
+    """`(dirs, stamps)`: the `_runs` dirs under `root` (pre-order, sorted) and
+    the mtimes of `root` and of each of those dirs.
+
+    Each stamp is taken *before* that directory is listed, so an entry added
+    while the walk runs bumps the mtime past the stamp and is seen next time.
+    """
     if not root.is_dir():
-        return []
-    inside = root.name == _RUNS_DIRNAME  # the whole tree is under `_runs`
+        return [], (None,)
     found: list[Path] = []
-    for dirpath, dirnames, _files in os.walk(root):
-        dirnames[:] = sorted(
-            d for d in dirnames if d not in _PRUNED_DIRS and not d.startswith(".")
-        )
-        here = Path(dirpath)
-        if inside or _RUNS_DIRNAME in here.relative_to(root).parts:
+    stamps: list[int | None] = [_mtime_ns(root)]
+    stack = [(root, root.name == _RUNS_DIRNAME)]  # (dir, inside a `_runs` tree)
+    while stack:
+        here, inside = stack.pop()
+        if inside:
             found.append(here)
-    return found
+            if here != root:
+                stamps.append(_mtime_ns(here))
+        try:
+            with os.scandir(here) as entries:
+                names = sorted(
+                    e.name for e in entries
+                    if e.is_dir(follow_symlinks=False)
+                    and e.name not in _PRUNED_DIRS and not e.name.startswith(".")
+                )
+        except OSError:
+            continue
+        for name in reversed(names):  # pop() order = sorted pre-order
+            stack.append((here / name, inside or name == _RUNS_DIRNAME))
+    return found, tuple(stamps)
 
 
-def _with_skill_run_dirs(sources: Iterable[Path], skill_roots: Iterable[Path]) -> list[Path]:
-    """`sources` plus every `_runs` directory currently under `skill_roots`.
+class SkillRunDirIndex:
+    """The `_runs` dirs under fixed skill roots, for long-lived readers.
 
-    Long-lived readers (dashboard) call this on each scan so a `plugin.skill`
-    directory created after startup is picked up.
+    The dashboard asks on every request and poll, so a `plugin.skill` dir
+    created after startup shows up without a restart. A root is re-walked only
+    when its own mtime or the mtime of a dir in one of its `_runs` trees changed
+    since the last walk (a new `plugin.skill` dir, or a new day file, which
+    happens once a day per skill); otherwise the last result is reused (a stat
+    per dir, no listing). Appends to an existing day file change no dir.
+    A `_runs` dir created deeper than a direct child of the root, inside a
+    subtree that already existed, changes neither and is not picked up until
+    something else does; skill roots are trace-store dirs, whose `_runs` is a
+    direct child.
     """
-    out = list(sources)
-    for root in skill_roots:
-        for d in _skill_run_dirs(root):
-            if d not in out:
-                out.append(d)
-    return out
+
+    def __init__(self, skill_roots: Iterable[Path]) -> None:
+        self._roots = list(skill_roots)
+        self._walks: dict[Path, tuple[tuple[int | None, ...], list[Path]]] = {}
+
+    def roots(self) -> list[Path]:
+        return list(self._roots)
+
+    def _root_dirs(self, root: Path) -> list[Path]:
+        last = self._walks.get(root)
+        if last is not None:
+            stamps, dirs = last
+            current = (_mtime_ns(root) if root.is_dir() else None,
+                       *(_mtime_ns(d) for d in dirs))
+            if current == stamps:
+                return dirs
+        dirs, stamps = _walk_skill_run_dirs(root)
+        self._walks[root] = (stamps, dirs)
+        return dirs
+
+    def dirs(self) -> list[Path]:
+        out: list[Path] = []
+        for root in self._roots:
+            out.extend(d for d in self._root_dirs(root) if d not in out)
+        return out
+
+    def with_sources(self, sources: Iterable[Path]) -> list[Path]:
+        """`sources` plus every `_runs` dir currently under the skill roots."""
+        out = list(sources)
+        out.extend(d for d in self.dirs() if d not in out)
+        return out
 
 
 # Eval writes scored.jsonl as a sibling of trace files; never treat it

@@ -161,3 +161,28 @@ def test_loader_and_watcher_pick_up_new_plugin_skill_dir(tmp_path: Path) -> None
         return got.session_id
 
     assert asyncio.run(go()) == "after-start"
+
+
+def test_home_request_walks_each_skill_root_at_most_once(tmp_path: Path, monkeypatch) -> None:
+    from nuvel import traces_cli
+
+    root = tmp_path / "traces"
+    d = root / "_runs" / "chief-of-staff.radar"
+    d.mkdir(parents=True)
+    (d / "2026-10-21.jsonl").write_text(json.dumps(_skill_run("success", "ok")) + "\n")
+    calls: list[Path] = []
+    real = traces_cli._walk_skill_run_dirs
+    monkeypatch.setattr(traces_cli, "_walk_skill_run_dirs",
+                        lambda r: (calls.append(r), real(r))[1])
+    client = TestClient(build_app(TraceLoader([], skill_roots=[root])))
+    assert "chief-of-staff:radar" in client.get("/").text
+    assert len(calls) == 1
+    client.get("/")  # nothing changed: no re-walk
+    assert len(calls) == 1
+    late = root / "_runs" / "chief-of-staff.inbox"
+    late.mkdir()
+    rec = _skill_run("success", "ok")
+    rec["skill"]["name"] = "inbox"
+    (late / "2026-10-21.jsonl").write_text(json.dumps(rec) + "\n")
+    assert "chief-of-staff:inbox" in client.get("/").text
+    assert len(calls) == 2

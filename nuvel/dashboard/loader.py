@@ -19,8 +19,8 @@ from nuvel.traces_cli import (
     Run,
     _iter_trace_files,
     _parse_file_runs,
+    SkillRunDirIndex,
     _sort_runs,
-    _with_skill_run_dirs,
 )
 
 
@@ -29,16 +29,16 @@ class TraceLoader:
 
     def __init__(self, sources: list[Path], skill_roots: list[Path] | None = None) -> None:
         self._static_sources = sources
-        self._skill_roots = list(skill_roots or [])
+        self._skill_dirs = SkillRunDirIndex(skill_roots or [])
 
     @property
     def _sources(self) -> list[Path]:
-        # Re-scanned on every access so `_runs/<plugin>.<skill>` dirs created
-        # after startup show up without a restart.
-        return _with_skill_run_dirs(self._static_sources, self._skill_roots)
+        # Checked on every access so `_runs/<plugin>.<skill>` dirs created after
+        # startup show up without a restart; unchanged roots are not re-walked.
+        return self._skill_dirs.with_sources(self._static_sources)
 
     def skill_roots(self) -> list[Path]:
-        return list(self._skill_roots)
+        return self._skill_dirs.roots()
 
     def static_sources(self) -> list[Path]:
         """The configured source dirs, without the discovered `_runs` dirs."""

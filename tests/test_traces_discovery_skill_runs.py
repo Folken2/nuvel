@@ -54,18 +54,60 @@ def test_walk_prunes_vendored_and_hidden_dirs(tmp_path: Path) -> None:
     assert got == [root / "_runs", root / "_runs" / "p.s"]
 
 
-def test_discovery_cache_walks_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _count_walks(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    calls: list[Path] = []
+    real = traces_cli._walk_skill_run_dirs
+
+    def counting(root: Path):
+        calls.append(root)
+        return real(root)
+
+    monkeypatch.setattr(traces_cli, "_walk_skill_run_dirs", counting)
+    return calls
+
+
+def test_skill_run_dir_index_skips_unchanged_roots(tmp_path: Path,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "src"
+    day = root / "_runs" / "p.s" / "2026-10-21.jsonl"
+    _write(day, _rec("r1"))
+    calls = _count_walks(monkeypatch)
+    index = traces_cli.SkillRunDirIndex([root])
+    first = index.dirs()
+    assert first == [root / "_runs", root / "_runs" / "p.s"]
+    # Appending to a day file (the steady state) changes no dir: no re-walk.
+    with day.open("a") as f:
+        f.write(json.dumps(_rec("r2")) + "\n")
+    assert index.dirs() == first
+    assert index.with_sources([tmp_path / "static"]) == [tmp_path / "static", *first]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("new_dir", [
+    "_runs/p.t",           # a new plugin.skill dir
+    "_runs/p.s/nested",    # a dir deeper inside a known `_runs` tree
+])
+def test_skill_run_dir_index_rewalks_when_a_runs_dir_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_dir: str
+) -> None:
     root = tmp_path / "src"
     (root / "_runs" / "p.s").mkdir(parents=True)
-    calls = []
-    real = os.walk
-    monkeypatch.setattr(traces_cli.os, "walk", lambda *a, **k: (calls.append(a), real(*a, **k))[1])
-    with traces_cli.discovery_cache():
-        traces_cli._discover_trace_dirs([str(root)])
-        traces_cli._discover_trace_dirs([str(root)])
-    assert len(calls) == 1
-    traces_cli._discover_trace_dirs([str(root)])  # no cache outside the context
+    calls = _count_walks(monkeypatch)
+    index = traces_cli.SkillRunDirIndex([root])
+    index.dirs()
+    (root / new_dir).mkdir()
+    assert root / new_dir in index.dirs()
     assert len(calls) == 2
+
+
+def test_skill_run_dir_index_sees_a_runs_dir_created_later(tmp_path: Path) -> None:
+    root = tmp_path / "feedback"
+    index = traces_cli.SkillRunDirIndex([root])
+    assert index.dirs() == []  # root does not exist yet
+    root.mkdir()
+    assert index.dirs() == []
+    (root / "_runs" / "p.s").mkdir(parents=True)
+    assert index.dirs() == [root / "_runs", root / "_runs" / "p.s"]
 
 
 def test_eval_root_excludes_source_inside_runs_tree(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -60,3 +61,23 @@ async def test_watcher_ignores_files_seen_in_baseline(tmp_path: Path) -> None:
 
     watcher.stop()
     await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_watcher_scans_off_the_event_loop(tmp_path: Path) -> None:
+    loop_thread = threading.get_ident()
+    scan_threads: list[int] = []
+    watcher = RunWatcher(sources=[tmp_path], poll_seconds=0.05)
+    real = watcher._snapshot
+
+    def spy():
+        scan_threads.append(threading.get_ident())
+        return real()
+
+    watcher._snapshot = spy  # type: ignore[method-assign]
+    task = asyncio.create_task(watcher.run(asyncio.Queue()))
+    await asyncio.sleep(0.3)
+    watcher.stop()
+    await asyncio.wait_for(task, timeout=2.0)
+    assert len(scan_threads) >= 2  # the baseline plus at least one poll
+    assert loop_thread not in scan_threads
