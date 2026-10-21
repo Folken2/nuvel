@@ -683,6 +683,32 @@ def test_malformed_content_length_is_400(server_factory, value):
         assert value not in data.split(b"\r\n\r\n", 1)[1]  # never echoed
 
 
+@pytest.mark.parametrize("lengths", [("10", "10"), ("10", "20"), ("0", "0")])
+def test_duplicate_content_length_is_400_and_closes(server_factory, lengths):
+    """RFC 9112 6.3: more than one Content-Length is a request-desync risk."""
+    client = server_factory()
+    body = json.dumps(INIT).encode()
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Authorization: Bearer {client.token}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {lengths[0]}\r\ncontent-length: {lengths[1]}\r\n\r\n").encode()
+    # No "Connection: close": the server itself must close, or the leftover
+    # bytes would be read as a second request on this connection.
+    data, elapsed = _raw(client, head, body)
+    assert data.startswith(b"HTTP/1.1 400"), data
+    assert data.count(b"HTTP/1.1 ") == 1
+    assert b"Invalid Content-Length" in data and b"Connection: close" in data
+    assert elapsed < TIMEOUT
+
+
+def test_content_length_with_chunked_transfer_encoding_is_still_refused(server_factory):
+    client = server_factory()
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Authorization: Bearer {client.token}\r\nContent-Length: 5\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n").encode()
+    data, _ = _raw(client, head)
+    assert data.startswith(b"HTTP/1.1 411"), data
+
+
 def test_body_shorter_than_content_length_at_eof_is_400(server_factory):
     import socket
     client = server_factory()

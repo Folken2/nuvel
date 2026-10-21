@@ -600,6 +600,12 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _read_body(self) -> bytes:
         if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Chunked bodies are not supported")
+        # More than one Content-Length (equal or not) is refused outright
+        # (RFC 9112 6.3): a proxy reading another one than us would desync the
+        # connection, so it is closed, never reused.
+        if len(self.headers.get_all("Content-Length") or []) > 1:
+            self.close_connection = True
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
         # ASCII digits only: int() would also take "+1", "-0", "1_0" and
         # non-ASCII digits, none of which a valid Content-Length may be.
         raw = self.headers.get("Content-Length", "0").strip()
