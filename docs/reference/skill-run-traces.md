@@ -169,6 +169,13 @@ and `install_skill` are exposed only when named in `--tools`.
   under an in-process lock. The index picks up other processes' lines, but two server
   processes appending the same `(tenant, run_id)` at the same instant can both accept
   it. Readers should treat `(tenant, run_id)` as the dedup key.
+- **An in-place rewrite within one ctime tick can go unnoticed.** The duplicate index
+  trusts a day file whose ctime is unchanged since it last read it. A rewrite in place
+  (for example one of the same size) that lands within the same coarse filesystem
+  ctime tick as that read (some filesystems record whole seconds), and neither shrinks
+  the file below the offset nor replaces it, is therefore not detected, and the index
+  keeps keys the file no longer holds. Day files are append-only: editing a live day
+  file by hand is unsupported.
 - **The local store only grows.** There is no retention, rotation or per-tenant quota:
   every accepted trace is a line on disk forever, and one authenticated tenant can fill
   the disk. That is fine for a single-user or small
