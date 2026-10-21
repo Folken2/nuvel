@@ -48,6 +48,7 @@ from __future__ import annotations
 import http.cookies
 import ipaddress
 import json
+import math
 import os
 import queue
 import re
@@ -90,6 +91,8 @@ DEFAULT_MAX_SESSIONS = 64
 DEFAULT_SESSION_TTL = 3600.0
 DEFAULT_PING_INTERVAL = 15.0
 DEFAULT_READ_TIMEOUT = 30.0
+DEFAULT_REQUEST_DEADLINE = 30.0
+DEFAULT_MAX_CONNECTIONS = 128
 CORS_MAX_AGE = 600
 
 SESSION_HEADER = "Mcp-Session-Id"
@@ -123,12 +126,29 @@ class HttpConfig:
     max_sessions: int = DEFAULT_MAX_SESSIONS
     session_ttl: float = DEFAULT_SESSION_TTL
     ping_interval: float = DEFAULT_PING_INTERVAL
-    # Seconds a client may stall while sending request headers or body.
+    # Seconds one socket read (or write) may stall; also how long an idle
+    # keep-alive connection is kept. Must be > 0.
     read_timeout: float = DEFAULT_READ_TIMEOUT
+    # Wall-clock seconds a client gets to send a whole request (request line,
+    # headers and body), however slowly it trickles. Must be > 0.
+    request_deadline: float = DEFAULT_REQUEST_DEADLINE
+    # Handler threads (open connections, SSE streams included) served at once;
+    # further connections are refused with 503. Must be >= 1.
+    max_connections: int = DEFAULT_MAX_CONNECTIONS
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
     # The origin clients reach this server at (NUVEL_MCP_PUBLIC_URL). It is the
     # OAuth issuer and resource; unset, the origin is derived from Host.
     public_url: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("read_timeout", "request_deadline"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                env = "NUVEL_MCP_" + name.upper()
+                raise ValueError(f"{env} must be a number of seconds greater than 0 (got {value})")
+        if self.max_connections < 1:
+            raise ValueError("NUVEL_MCP_MAX_CONNECTIONS must be at least 1 "
+                             f"(got {self.max_connections})")
 
     @classmethod
     def from_env(cls) -> "HttpConfig":
@@ -138,6 +158,8 @@ class HttpConfig:
             max_sessions=_env_int("NUVEL_MCP_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
             session_ttl=_env_float("NUVEL_MCP_SESSION_TTL", DEFAULT_SESSION_TTL),
             read_timeout=_env_float("NUVEL_MCP_READ_TIMEOUT", DEFAULT_READ_TIMEOUT),
+            request_deadline=_env_float("NUVEL_MCP_REQUEST_DEADLINE", DEFAULT_REQUEST_DEADLINE),
+            max_connections=_env_int("NUVEL_MCP_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
             allowed_origins=frozenset(
                 o for o in (_normalize_origin(x) for x in origins.split(",")) if o
             ),
@@ -300,6 +322,72 @@ class SessionStore:
 # --- HTTP server -----------------------------------------------------------------------
 
 
+class _DeadlineReader:
+    """Request-side reader with a wall-clock deadline.
+
+    Replaces ``rfile``: every ``recv`` runs with the time left until the
+    deadline as its socket timeout, so a client trickling bytes cannot hold the
+    handler thread past it. Between reads the socket timeout is ``idle``
+    (which also bounds writes). The leftover buffer carries over to the next
+    keep-alive request.
+    """
+
+    def __init__(self, sock: socket.socket, idle: float):
+        self._sock = sock
+        self._idle = idle
+        self._buf = bytearray()
+        self._deadline = math.inf
+
+    def arm(self, seconds: float) -> None:
+        self._deadline = time.monotonic() + seconds
+
+    def _fill(self) -> bool:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("request deadline exceeded")
+        self._sock.settimeout(min(remaining, self._idle))
+        try:
+            data = self._sock.recv(65536)
+        except TimeoutError:
+            raise
+        except OSError:  # reset by peer: same as EOF
+            data = b""
+        finally:
+            self._sock.settimeout(self._idle)
+        self._buf += data
+        return bool(data)
+
+    def readline(self, limit: int = -1) -> bytes:
+        start = 0
+        while True:
+            end = self._buf.find(b"\n", start)
+            if end >= 0:
+                end += 1
+                break
+            if 0 <= limit <= len(self._buf):
+                end = limit
+                break
+            start = len(self._buf)
+            if not self._fill():
+                end = len(self._buf)
+                break
+        if limit >= 0:
+            end = min(end, limit)
+        line = bytes(self._buf[:end])
+        del self._buf[:end]
+        return line
+
+    def read(self, size: int) -> bytes:
+        while len(self._buf) < size and self._fill():
+            pass
+        data = bytes(self._buf[:size])
+        del self._buf[:size]
+        return data
+
+    def close(self) -> None:
+        pass
+
+
 class McpHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server carrying the MCP dispatcher, config, sessions and
     the OAuth provider (``None`` only when auth is deliberately off)."""
@@ -321,7 +409,32 @@ class McpHTTPServer(ThreadingHTTPServer):
         self.oauth = oauth_provider
         self.sessions = SessionStore(config.max_sessions, config.session_ttl)
         self.stopping = threading.Event()
+        self._slots = threading.BoundedSemaphore(config.max_connections)
         super().__init__(address, McpRequestHandler)
+
+    def process_request(self, request, client_address) -> None:
+        # Cap handler threads: when full, answer 503 from the accept loop
+        # (one short non-blocking write) without spawning a thread.
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(1.0)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\n"
+                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     @property
     def url(self) -> str:
@@ -359,10 +472,19 @@ _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 class McpRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
-        # StreamRequestHandler applies ``timeout`` to the socket: a stalled
-        # header or body read frees the thread. SSE streams only write.
-        self.timeout = self.server.config.read_timeout or None
         super().setup()
+        # Reads go through a wall-clock deadline (see handle_one_request); SSE
+        # streams only write, so they are unaffected.
+        self.connection.settimeout(self.server.config.read_timeout)
+        self.rfile.close()
+        self.rfile = _DeadlineReader(self.connection, self.server.config.read_timeout)
+
+    def handle_one_request(self) -> None:
+        # One deadline for request line + headers + body (an idle keep-alive
+        # connection counts too). Expiry closes the connection quietly; a body
+        # that outlives it gets 408 in _read_body.
+        self.rfile.arm(self.server.config.request_deadline)
+        super().handle_one_request()
 
     server: McpHTTPServer
     protocol_version = "HTTP/1.1"

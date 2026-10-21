@@ -588,3 +588,102 @@ def test_more_than_one_authorization_header_is_401(server_factory):
                 f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode()
         data, _ = _raw(client, head, body)
         assert data.startswith(b"HTTP/1.1 401"), data
+
+
+# --- Total request deadline, connection cap, bad settings -------------------------
+
+
+def _drip(client, head: bytes, payload: bytes, interval: float) -> tuple[bytes, float]:
+    """Send ``head`` then ``payload`` one byte per ``interval`` seconds until the
+    server closes the connection; return (response bytes, elapsed seconds)."""
+    import socket
+    started = time.monotonic()
+    chunks = []
+    with socket.create_connection((client.host, client.port), timeout=TIMEOUT) as sock:
+        sock.sendall(head)
+        sock.settimeout(interval)
+        for byte in payload:
+            try:
+                sock.sendall(bytes([byte]))
+            except OSError:
+                break
+            try:
+                data = sock.recv(4096)
+            except TimeoutError:
+                continue
+            except ConnectionResetError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+            break
+        else:
+            return b"", time.monotonic() - started
+    return b"".join(chunks), time.monotonic() - started
+
+
+def test_slow_drip_body_hits_the_total_deadline_with_408(server_factory):
+    # Each gap is far under the per-recv timeout, so only the deadline can stop it.
+    client = server_factory(read_timeout=5.0, request_deadline=0.6)
+    data, elapsed = _drip(client, _post_head(client, 1000), b"x" * 200, 0.1)
+    assert data.startswith(b"HTTP/1.1 408"), data
+    assert 0.5 <= elapsed < 2.5
+
+
+def test_slow_drip_headers_are_closed_at_the_total_deadline(server_factory):
+    client = server_factory(read_timeout=5.0, request_deadline=0.6)
+    head = b"POST /mcp HTTP/1.1\r\nHost: x\r\n"
+    data, elapsed = _drip(client, head, b"X-Pad: " + b"a" * 200, 0.1)
+    assert data == b"" or data.startswith(b"HTTP/1.1 4"), data
+    assert elapsed < 2.5  # the server hung up; we did not run out of bytes first
+
+
+def test_request_deadline_leaves_normal_requests_and_sse_alone(server_factory):
+    client = server_factory(read_timeout=5.0, request_deadline=0.4, ping_interval=0.1)
+    session = client.initialize()
+    conn, resp = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+    try:
+        assert resp.status == 200
+        time.sleep(1.0)  # well past the request deadline
+        assert client.post({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}, session)[0] == 200
+        assert not resp.isclosed()
+    finally:
+        conn.close()
+
+
+def test_connections_over_the_cap_get_503_and_a_slot_frees_up(server_factory):
+    import socket
+    client = server_factory(max_connections=2, read_timeout=5.0, request_deadline=5.0)
+    stalled = [socket.create_connection((client.host, client.port), timeout=TIMEOUT)
+               for _ in range(2)]
+    try:
+        for sock in stalled:
+            sock.sendall(b"POST /mcp HTTP/1.1\r\n")
+        time.sleep(0.3)  # let the accept loop hand both to handler threads
+        data, _ = _raw(client, b"", wait=0)
+        assert data.startswith(b"HTTP/1.1 503") and b"Retry-After: 1" in data
+        stalled.pop().close()  # frees a slot once its handler sees EOF
+        deadline = time.monotonic() + TIMEOUT
+        status = None
+        while time.monotonic() < deadline:
+            status = client.post(INIT)[0]
+            if status == 200:
+                break
+            time.sleep(0.1)
+        assert status == 200
+    finally:
+        for sock in stalled:
+            sock.close()
+
+
+@pytest.mark.parametrize("name, value", [
+    ("NUVEL_MCP_READ_TIMEOUT", "-1"), ("NUVEL_MCP_READ_TIMEOUT", "0"),
+    ("NUVEL_MCP_READ_TIMEOUT", "nan"), ("NUVEL_MCP_REQUEST_DEADLINE", "-5"),
+    ("NUVEL_MCP_REQUEST_DEADLINE", "0"), ("NUVEL_MCP_MAX_CONNECTIONS", "0"),
+])
+def test_bad_timeout_and_cap_settings_are_rejected_at_startup(monkeypatch, capsys, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        HttpConfig.from_env()
+    assert cli_main(["serve", "--transport", "http", "--no-auth"]) == 2
+    assert name in capsys.readouterr().err
