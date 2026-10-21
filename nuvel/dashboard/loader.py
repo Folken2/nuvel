@@ -17,9 +17,9 @@ from nuvel.eval.schema import ScoredRun
 from nuvel.eval.writer import load_scored_index
 from nuvel.traces_cli import (
     Run,
+    SkillRunDirIndex,
     _iter_trace_files,
     _parse_file_runs,
-    SkillRunDirIndex,
     _sort_runs,
 )
 
