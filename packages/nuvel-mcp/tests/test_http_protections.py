@@ -367,3 +367,30 @@ def test_healthz_feedback_only(launch):
     assert body["skills"] == 0
     # Feedback-only: the hub tools are gone, leaving record_run_trace + check_skill_health.
     assert body["tools"] == 2
+
+
+def test_storage_errors_are_not_leaked_to_the_http_caller(hub, tmp_path):
+    """Re-pointed from the removed SDK transport: a failing trace store must not
+    put its filesystem path into the response."""
+    class BrokenStore:
+        def append(self, record):
+            raise OSError("disk full at /srv/secret-path/_runs")
+
+        def query(self, plugin, skill, since, tenant):
+            return []
+
+    server = SkillsMCPServer(SkillsLoader.from_base(hub), feedback_dir=tmp_path,
+                             tools=HTTP_DEFAULT_TOOLS, trace_store=BrokenStore())
+    httpd = make_server(server, "127.0.0.1", 0, HttpConfig(ping_interval=0.2), None, no_auth=True)
+    thread = threading.Thread(target=httpd.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        client = Client(httpd)
+        session = client.initialize()
+        status, _, data = client.post(call("record_run_trace", {"trace": trace()}), session)
+    finally:
+        httpd.stop()
+        httpd.server_close()
+        thread.join(TIMEOUT)
+    assert status == 200
+    assert "secret-path" not in (data.decode() if isinstance(data, bytes) else data)

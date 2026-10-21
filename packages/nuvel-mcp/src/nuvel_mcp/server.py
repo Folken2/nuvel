@@ -1289,7 +1289,8 @@ class SkillsMCPServer:
         try:
             stored = self._trace_store().append(record)
         except OSError as exc:
-            raise McpError(INTERNAL_ERROR, f"Could not store the run trace: {exc}")
+            log(f"Could not store the run trace: {exc}")  # detail stays server-side
+            raise McpError(INTERNAL_ERROR, "Could not store the run trace") from None
         if not stored:
             return {"status": "duplicate", "run_id": record["run_id"]}
 

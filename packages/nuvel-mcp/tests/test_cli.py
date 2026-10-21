@@ -111,8 +111,10 @@ def test_http_path_never_imports_the_mcp_sdk():
     assert res.returncode == 0, res.stderr
 
 
-def test_http_extra_pins_the_verified_sdk_floor():
-    import tomllib
-    from pathlib import Path
-    data = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
-    assert data["project"]["optional-dependencies"]["http"] == ["mcp>=1.30,<2"]
+@pytest.mark.parametrize("flag", [["--auth", "bearer"], ["--allowed-host", "skills.example.com"]])
+def test_removed_sdk_transport_flags_are_rejected_by_argparse(flag, capsys):
+    from nuvel_mcp.cli import main
+    with pytest.raises(SystemExit) as e:
+        main(["serve", *flag])
+    assert e.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err

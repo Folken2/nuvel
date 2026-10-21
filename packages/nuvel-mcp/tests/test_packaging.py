@@ -26,9 +26,8 @@ def test_wheel_has_no_runtime_dependencies(tmp_path):
     meta = next(n for n in archive.namelist() if n.endswith("METADATA"))
     lines = archive.read(meta).decode().splitlines()
     requires = [line for line in lines if line.startswith("Requires-Dist:")]
-    # Only the optional `http` extra may pull in a dependency.
-    assert requires and all("extra ==" in line for line in requires)
-    assert any(line.startswith("Requires-Dist: mcp") for line in requires)
+    assert requires == [], requires  # zero runtime dependencies, and no extras either
+    assert not [line for line in lines if line.startswith("Provides-Extra:")]
 
 
 def test_wheel_carries_readme_and_license_text(tmp_path):
