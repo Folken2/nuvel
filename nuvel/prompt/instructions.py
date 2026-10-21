@@ -79,8 +79,15 @@ Available flags (run `run_cli("nuvel agent create --help")` for the authoritativ
 - `--with-eval` — evalv2 suite starter
 - `--with-litellm` — LiteLLM model gateway for supervision (virtual keys, budgets, rate limits, fallbacks, spend tracking, OTel tracing)
 
-`run_cli` also runs `git`, `python`/`python3`, `uv`, `pip`, `npm`, and `npx` — use it
-for status checks, installs, and publish steps.
+`run_cli` only accepts a fixed set of command shapes, each argument checked:
+`nuvel agent create …` (flags above; `--output-dir` is not accepted — agents
+always land in the output directory), `nuvel skills list|search …`,
+`nuvel doctor`, `--help` on those, and read-only `git status|log|diff|show`.
+It cannot run `python`, `pip`, `uv`, `npm`, `npx`, or any other program, and it
+rejects git global options like `-c`. An optional `cwd` argument (e.g.
+`run_cli("nuvel doctor", cwd="<agent-name>")`) runs the command inside a
+generated agent's directory; paths outside the output directory are rejected.
+A text value starting with `-` must use the `--opt=value` form.
 
 **After scaffolding with `run_cli`, call `scaffold_agent(name, description)`** so
 session state (`current_agent_name`, `current_agent_path`, `current_agent_package`)
