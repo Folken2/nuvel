@@ -1,147 +1,179 @@
 # Deploy the Skills MCP server over HTTP
 
 `nuvel-mcp` speaks stdio by default, which is right for an MCP client on your own
-machine. To collect [skill run traces](../reference/skill-run-traces.md) from
-agents running elsewhere, serve it over **Streamable HTTP** behind an
-authenticator.
+machine. To serve a skills hub, or to collect
+[skill run traces](../reference/skill-run-traces.md) from agents running
+elsewhere, serve it over HTTP. The transport is pure standard library: there is
+nothing extra to install, and `nuvel-mcp` has no dependencies and no extras.
 
-## Run it
+It speaks Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` and `/messages`,
+and answers `GET /healthz`. It is its own OAuth 2.1 authorization server (PKCE,
+dynamic client registration, refresh-token rotation, GitHub as the login
+provider), so every MCP request needs a bearer access token.
 
-The HTTP transport needs the optional `http` extra (it pulls in the official
-`mcp` SDK, version 1.30 or newer; the stdio server stays dependency-free):
-
-```bash
-export NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN,globex:$GLOBEX_MCP_TOKEN"
-uvx --from "nuvel-mcp[http]" nuvel-mcp serve --transport http --auth bearer
-```
-
-The endpoint is `http://127.0.0.1:8765/mcp` (change it with `--host` / `--port`).
-Without the extra, `--transport http` exits with
-`pip install "nuvel-mcp[http]"`.
-
-`--auth bearer` reads `$NUVEL_MCP_TOKENS` as `name:token,name:token`. A client
-sends `Authorization: Bearer <token>`; the matching **name** becomes the caller's
-principal and is stamped as the `tenant` of every trace it records. The token
-itself is never stored or logged. Generate tokens with something like
-`openssl rand -hex 32` and keep them in your secret manager, not in shell history.
-
-Point an MCP client at it, for example Claude Code:
+## Run it locally
 
 ```bash
-claude mcp add --transport http nuvel-skills https://mcp.example.com/mcp \
-  --header "Authorization: Bearer $ACME_MCP_TOKEN"
+nuvel-mcp serve --transport http --skills-dir ./skills
 ```
 
-## Put it behind TLS
+This binds `127.0.0.1:8080` (change with `--host` / `--port`) and needs a login
+provider. For local tests only, `NUVEL_OAUTH_DEV_LOGIN=1` enables a built-in dev
+login that is refused on any non-loopback bind. To skip OAuth entirely on your
+own machine:
 
-Bearer tokens must never cross a network in clear text. `nuvel-mcp` does not
-terminate TLS itself; run it behind something that does:
+```bash
+nuvel-mcp serve --transport http --no-auth --skills-dir ./skills
+```
 
-- **Reverse proxy on the same host** — keep the default `--host 127.0.0.1` and
-  let Caddy, nginx or similar terminate TLS and forward to `127.0.0.1:8765`.
-  The proxy forwards the public `Host` (`mcp.example.com`), which a loopback bind
-  rejects with `421` unless you allow it with `--allowed-host`:
+`--no-auth` is **loopback-only** (refused on any other `--host`) and prints a
+warning: every method and tool, writes included, is open to anything that can
+reach the port. With `--no-auth` there is no caller identity, so run traces are
+stored without a `tenant`, the same as stdio.
 
-  ```bash
-  export NUVEL_MCP_TOKENS="acme:$ACME_MCP_TOKEN"   # name:token pairs, from your secret store
-  nuvel-mcp serve --transport http --auth bearer --allowed-host mcp.example.com
-  ```
+`--skills-dir` is optional. Without it the server runs feedback-only: just the
+trace and health tools.
 
-  `--allowed-host` requires `--auth`: a proxied public name is reachable from
-  outside the machine, exactly like a non-loopback `--host`.
+## Deploy it for other people
 
-  Caddy (passes the client's `Host` upstream by default; run `nuvel-mcp` with
-  the command above):
+Binding a non-loopback address takes a deliberate `--allow-remote`, plus a public
+URL and a GitHub OAuth app:
 
-  ```text
-  mcp.example.com {
-      reverse_proxy 127.0.0.1:8765
-  }
-  ```
+```bash
+export NUVEL_MCP_PUBLIC_URL="https://mcp.example.com"
+export NUVEL_OAUTH_GITHUB_CLIENT_ID="$GITHUB_OAUTH_CLIENT_ID"
+export NUVEL_OAUTH_GITHUB_CLIENT_SECRET="$GITHUB_OAUTH_CLIENT_SECRET"
+export NUVEL_OAUTH_ALLOWED_USERS="alice,bob"
+nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./skills
+```
 
-  nginx (same `nuvel-mcp` command):
+| Setting | What it does |
+|---|---|
+| `--allow-remote` | Required to bind a non-loopback `--host`. |
+| `NUVEL_MCP_PUBLIC_URL` | The origin clients reach the server at (for example `https://mcp.example.com`). It is the OAuth issuer and the audience of every token. Required on a non-loopback bind. |
+| `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | A GitHub OAuth app whose callback URL is `<NUVEL_MCP_PUBLIC_URL>/oauth/callback`. This is how people log in when they connect an interactive client. |
+| `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to log in. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
+| `NUVEL_OAUTH_REDIRECT_ALLOWLIST` | Extra redirect URIs accepted at client registration, beyond `https://` and loopback ones. |
+| `NUVEL_MCP_OAUTH_STORE` | The token and client store (default `~/.nuvel/oauth.json`, mode 0600). Tokens and secrets are kept only as hashes. Put it on a persistent volume. |
+| `NUVEL_MCP_ALLOWED_ORIGINS`, `NUVEL_MCP_MAX_BODY_BYTES`, `NUVEL_MCP_MAX_SESSIONS`, `NUVEL_MCP_SESSION_TTL` | Optional tuning of the origin allow-list and the request and session caps. |
 
-  ```nginx
-  location /mcp {
-      proxy_pass http://127.0.0.1:8765;
-      proxy_set_header Host $host;
-  }
-  ```
+Keep the GitHub secret and every other credential in your secret manager and
+inject it as an environment variable; never put one on a command line or in a
+file you commit.
 
-  Alternatively, have the proxy rewrite `Host` to the upstream address (Caddy:
-  `header_up Host {upstream_hostport}`; nginx: `proxy_set_header Host 127.0.0.1:8765;`),
-  in which case no `--allowed-host` is needed. Keep `--auth bearer` anyway: the
-  proxy makes the server public whichever way `Host` arrives.
+### Clients for agents and services
 
-- **Container platform** (Railway, Fly, Cloud Run, Kubernetes) — bind
-  `--host 0.0.0.0 --port $PORT` and expose the service only through the
-  platform's HTTPS endpoint.
+Interactive clients register themselves dynamically and log in through GitHub.
+For an agent or service that has no browser, issue a client from the server's
+host. It uses the same store, so the running server sees it at once:
 
-Binding anything other than `127.0.0.1`, `localhost` or `::1` without `--auth`
-is refused before the server starts. Without `--auth`, every process on the
-machine can call the server, so use that only for local testing.
+```bash
+nuvel-mcp client create --name acme-agent        # prints client_id and client_secret once
+nuvel-mcp client list                            # no secrets
+nuvel-mcp client delete "$CLIENT_ID"             # also revokes its tokens
+nuvel-mcp token revoke "$TOKEN_OR_CLIENT_ID"     # one token, or all of a client's
+```
 
-On a loopback bind the server also checks `Host` and `Origin`, with or without
-`--auth`. Without these checks any website the user visits could reach the server
-through DNS rebinding: the browser treats the rebound page as same-origin. A
-`Host` other than `127.0.0.1`, `localhost`, `[::1]` or a `--allowed-host` name
-(any port, case-insensitive) gets `421`, and an `Origin` that is present and not
-`http://` or `https://` one of those names gets `403`. `--allowed-host` takes a
-bare host name (no scheme, port or path), is repeatable, requires `--auth`, and
-the checks stay on when `--auth` is set. On a public bind
-(`--host 0.0.0.0`) `Host` is not checked; `--auth` is required there instead.
+Add `--redirect-uri` to `client create` for a client that also uses the
+authorization-code flow. The `client_secret` is shown only at creation. A service
+exchanges its `client_id` and `client_secret` for an access token with the
+`client_credentials` grant at `POST <NUVEL_MCP_PUBLIC_URL>/token` (HTTP Basic
+authentication), then sends `Authorization: Bearer <access_token>` to `/mcp`.
+
+Tokens carry the scopes `skills:read` (every MCP method and the read tools) and
+`skills:write` (the tools that write). Point an MCP client at the server, for
+example Claude Code, which runs the OAuth flow itself:
+
+```bash
+claude mcp add --transport http nuvel-skills https://mcp.example.com/mcp
+```
+
+## Behind a reverse proxy
+
+`nuvel-mcp` does not terminate TLS. Run it behind something that does, and tell
+it its public address with `NUVEL_MCP_PUBLIC_URL`; without that setting it would
+derive the OAuth origin from the request's `Host` header.
+
+```bash
+export NUVEL_MCP_PUBLIC_URL="https://mcp.example.com"
+nuvel-mcp serve --transport http --skills-dir ./skills        # still on 127.0.0.1:8080
+```
+
+Caddy:
+
+```text
+mcp.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+nginx (SSE needs buffering off):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+}
+```
+
+Because the proxy and the server share a machine, the server can stay on
+loopback and you do not need `--allow-remote`. On a container platform (Railway,
+Fly, Cloud Run, Kubernetes) bind `--allow-remote --host 0.0.0.0 --port $PORT`
+instead, set `NUVEL_MCP_PUBLIC_URL` to the platform's HTTPS URL, and expose the
+service only through it.
+
+A browser request whose `Origin` is not loopback, your public origin or one in
+`NUVEL_MCP_ALLOWED_ORIGINS` is refused with `403`, with or without `--no-auth`.
+That stops a web page the user visits from reaching a loopback server through DNS
+rebinding.
 
 ## What is exposed over HTTP, and why
 
-By default HTTP exposes exactly two tools:
+OAuth decides who may call the server; the defaults below decide what a caller can
+do. They apply to every HTTP server, whether or not you use `--no-auth`.
 
-| Tool | Why it is safe to expose |
+**Default tool set.** Without `--tools`, HTTP exposes:
+
+| Tool | Why it is exposed |
 |---|---|
+| `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value` | The hub read tools: serving the hub is what a remote server is for. |
 | `record_run_trace` | Takes a closed-schema `nuvel.skill_run/1` trace with no free-text fields; anything else is rejected without being echoed. |
-| `check_skill_health` | Read-only. Over HTTP `plugin` is required, and the result is only `{"skill", "plugin", "runs"}`: the run-trace summary for the caller's tenant. Nothing from the local feedback store (outcome counts, queued proposals and their free text) is returned. |
+| `check_skill_health` | Read-only; see remote mode below. |
 
-Everything else is off unless you name it in `--tools`:
+Off unless you name them in `--tools`:
 
 - `record_feedback` and `propose_improvement` accept **free text**, which can
   carry user content a hosted endpoint should never receive.
   `propose_improvement` can also file GitHub issues with the server's
   `GITHUB_TOKEN` on behalf of any caller.
-- The hub tools (`search_skills`, `get_skill`, `install_skill`, …) serve a
-  local skills hub, and `install_skill` writes to the server's filesystem.
-
-Whatever you enable, no tool returns data from the local feedback store over HTTP:
-`get_skill`, for example, leaves out its `health` report.
+- `install_skill` writes to the server's filesystem.
 
 stdio keeps the full tool set: it runs on the user's own machine, where free text
 never leaves.
 
-## Request limits
+**Remote mode.** Every HTTP request runs in remote mode: no tool returns data
+derived from the local feedback store (outcome counts, queued proposals and their
+free text). `get_skill` leaves out its `health` report, and `check_skill_health`
+requires `plugin` and returns only `{"skill", "plugin", "runs"}`: the run-trace
+summary for the caller's own tenant.
 
-Every request is checked before the MCP SDK sees it:
+**Tenant is the OAuth `client_id`.** For each authenticated request, the token's
+`client_id` is the caller's tenant: it is stamped on every trace it records and
+scopes what `check_skill_health` returns, so two clients never see each other's
+runs. It is never the `subject` (a person's GitHub login). Use one client per
+tenant, which is what `client create` is for.
+
+## Request limits
 
 | Condition | Response |
 |---|---|
-| `Host` not loopback or `--allowed-host` (loopback bind only) | `421` |
-| `Origin` present and not loopback or `--allowed-host` (loopback bind only) | `403` |
-| Missing or wrong token, or more than one `Authorization` header | `401` |
-| Body over 65536 bytes (by `Content-Length`, or counted while streaming a chunked body) | `413` |
+| Missing, invalid or expired access token | `401` |
+| Valid token without the scope the method needs | `403` |
+| `Origin` not allowed | `403` |
+| Body over the cap (`NUVEL_MCP_MAX_BODY_BYTES`, default 65536) | `413` |
 | Body that is not valid JSON | `400` |
 
-None of these responses echo the request body. Sessions are stateless and
-responses are plain JSON, so every request is authenticated on its own.
-
-## Bring your own authenticator
-
-`--auth module:factory` imports `module` and calls `factory()` with no arguments.
-It must return an object with
-`authenticate(headers: Mapping[str, str]) -> str | None` (see
-`nuvel_mcp.auth.Authenticator`): return the principal name to accept the
-request, `None` to reject it with `401`. Header names are matched
-case-insensitively. A factory that returns anything else, including `None`, is
-refused at startup (exit 1): it never turns authentication off. The `--auth` value is only ever read from the command line.
-
-## What this package does not do
-
-Managed hosting, an OAuth provider, the tenant model and hosted trace storage live
-in the private nuvel-cloud service, which plugs in through `--auth` and
-`--trace-store`. This package only makes the open-source server deployable.
+Error responses do not echo the request body, and a failing trace store reports a
+generic error to the caller; the detail goes to the server log only.
