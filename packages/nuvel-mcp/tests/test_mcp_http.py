@@ -21,7 +21,7 @@ import pytest
 
 from nuvel_mcp.cli import main as cli_main
 from nuvel_mcp.http_transport import HttpConfig, prefers_sse
-from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.server import HTTP_DEFAULT_TOOLS, SkillsMCPServer
 from nuvel_mcp.skills_loader import SkillsLoader
 from _mcp_http_helpers import (
     INIT,
@@ -55,8 +55,8 @@ def hub(tmp_path):
 def server_factory(hub, tmp_path):
     started = []
 
-    def factory(**config):
-        httpd, thread = start(hub, make_provider(tmp_path / "oauth.json"), **config)
+    def factory(tools=None, **config):
+        httpd, thread = start(hub, make_provider(tmp_path / "oauth.json"), tools=tools, **config)
         started.append((httpd, thread))
         return Client(httpd, service_token(httpd))
 
@@ -110,7 +110,7 @@ def test_tools_list_over_http(client):
     status, _, data = client.post({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, session)
     assert status == 200
     names = {t["name"] for t in json.loads(data)["result"]["tools"]}
-    assert {"search_skills", "get_skill", "propose_improvement"} <= names
+    assert names == HTTP_DEFAULT_TOOLS
 
 
 @pytest.mark.parametrize("session", [None, "not-a-real-session"])
@@ -366,7 +366,7 @@ def test_healthz(client):
     assert body["status"] == "ok" and body["transport"] == "http"
     assert body["skills"] == 3 and body["themes"] == 2
     # Counts only: unauthenticated callers learn nothing about the catalog.
-    assert body["tools"] == len(TOOLS)
+    assert body["tools"] == len(HTTP_DEFAULT_TOOLS)
     assert set(body) == {"status", "transport", "skills", "themes", "tools"}
     for name in ("rollback", "onboarding", "hr", "search_skills"):
         assert name not in data.decode()
@@ -411,7 +411,9 @@ def test_requests_without_a_token_are_401_on_both_transports(client):
         stream.close()
 
 
-def test_every_tool_works_with_a_token(client, tmp_path):
+def test_every_tool_works_with_a_token_when_opted_in(server_factory, tmp_path):
+    # Gated tools (free text, filesystem writes) need an explicit --tools.
+    client = server_factory(tools=frozenset(TOOLS))
     session = client.initialize()
     args = {"search_skills": {"query": "rollback"}, "list_skills": {}, "list_themes": {},
             "get_skill": {"name": "rollback"},
@@ -421,7 +423,7 @@ def test_every_tool_works_with_a_token(client, tmp_path):
             "record_feedback": {"skill_name": "rollback", "skill_version": "1.0.0",
                                 "outcome": "partial", "severity": "minor",
                                 "what_didnt": "step 2 was unclear"},
-            "check_skill_health": {"skill_name": "rollback"},
+            "check_skill_health": {"skill_name": "rollback", "plugin": "chief-of-staff"},
             "record_run_trace": {"trace": json.loads(
                 (Path(__file__).parent / "fixtures" / "skill_run_example.json").read_text())}}
     assert set(args) == set(TOOLS)

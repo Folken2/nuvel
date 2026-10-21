@@ -33,7 +33,10 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         type=_parse_tools,
         metavar="A,B",
-        help="Comma-separated allow-list of tool names to expose.",
+        help="Comma-separated allow-list of tool names to expose. Default: every "
+             "tool on stdio; over HTTP the hub read tools plus record_run_trace "
+             "and check_skill_health (record_feedback, propose_improvement and "
+             "install_skill only when named here).",
     )
     parser.add_argument(
         "--theme",

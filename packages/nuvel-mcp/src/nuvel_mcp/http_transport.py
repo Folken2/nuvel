@@ -32,6 +32,13 @@ An unauthenticated request gets ``401`` with
 ``make_server(..., no_auth=True)`` (``--no-auth``) turns all of this off for
 loopback development.
 
+Every server built here runs its dispatcher in remote mode
+(``SkillsMCPServer.enable_remote_mode``): nothing read from the feedback store
+is served, and without an explicit ``tools`` allow-list only
+``HTTP_DEFAULT_TOOLS`` are exposed. Each authenticated dispatch runs with
+``nuvel_mcp.auth.current_principal`` set to the token's ``client_id``, the
+tenant that run traces are stamped and scoped with (``None`` with no auth).
+
 Diagnostics go to stderr; request bodies, query strings, tokens and codes are
 never logged.
 """
@@ -56,6 +63,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from nuvel_mcp import oauth
+from nuvel_mcp.auth import current_principal
 from nuvel_mcp.oauth import (
     FORBIDDEN,
     UNAUTHORIZED,
@@ -301,6 +309,9 @@ class McpHTTPServer(ThreadingHTTPServer):
         if ":" in host.strip("[]"):
             self.address_family = socket.AF_INET6
             address = (host.strip("[]"), address[1])
+        # Every HTTP server runs in remote mode with the gated default tool
+        # set (unless the caller chose an explicit allow-list).
+        mcp.enable_remote_mode()
         self.mcp = mcp
         self.config = config
         self.oauth = oauth_provider
@@ -538,8 +549,20 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     # --- dispatch -------------------------------------------------------------------
 
-    def _dispatch_all(self, messages) -> list:
-        """Run each message through the shared dispatcher; collect responses."""
+    def _dispatch_all(self, messages, info: TokenInfo | None) -> list:
+        """Run each message through the shared dispatcher; collect responses.
+
+        The caller's tenant is the token's ``client_id`` (never its subject, a
+        person's login); ``None`` when auth is off. Dispatch is synchronous on
+        this thread, so the tool handlers see it via ``current_principal``.
+        """
+        reset = current_principal.set(info.client_id if info else None)
+        try:
+            return self._dispatch_each(messages)
+        finally:
+            current_principal.reset(reset)
+
+    def _dispatch_each(self, messages) -> list:
         responses = []
         for message in messages:
             if not isinstance(message, dict):
@@ -680,7 +703,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             "transport": "http",
             "skills": len(entries),
             "themes": len({theme for theme, _ in entries}),
-            "tools": len(mcp._tools),
+            "tools": len(mcp.handle_tools_list({})["tools"]),
         })
 
     def _session_or_404(self, session_id: str | None, kind: str, info: TokenInfo | None) -> Session:
@@ -712,7 +735,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             session = self._session_or_404(self.headers.get(SESSION_HEADER), "streamable", info)
 
         try:
-            responses = self._dispatch_all(messages)
+            responses = self._dispatch_all(messages, info)
         except BaseException:
             if is_init:
                 self.server.sessions.terminate(session.id)
@@ -763,7 +786,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         session = self._session_or_404(self._query().get("sessionId"), "legacy", info)
         messages, _ = self._parse_jsonrpc(self._read_body())
         self._check_scopes(info, messages)
-        for response in self._dispatch_all(messages):
+        for response in self._dispatch_all(messages, info):
             session.send(response)
         self._send(HTTPStatus.ACCEPTED)
 

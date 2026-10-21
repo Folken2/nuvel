@@ -74,7 +74,8 @@ async def test_tools_list_is_exactly_the_http_defaults(app):
 
     async with lifespan(app):
         result = await mcp_session(app, "s3cret", go)
-    assert {t.name for t in result.tools} == HTTP_DEFAULT_TOOLS
+    # No hub (feedback-only), so the hub read tools in the default set drop out.
+    assert {t.name for t in result.tools} == {"record_run_trace", "check_skill_health"}
 
 
 async def test_record_run_trace_is_stamped_with_the_authenticated_tenant(app, tmp_path, example):

@@ -96,9 +96,15 @@ HUB_TOOLS = frozenset({
 FEEDBACK_TOOLS = frozenset({
     "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
 })
-# Tools the HTTP transport exposes when no explicit allow-list is given.
 RUN_OUTCOMES = ("success", "partial", "failure", "blocked", "skipped")
-HTTP_DEFAULT_TOOLS = frozenset({"record_run_trace", "check_skill_health"})
+# Tools the HTTP transport exposes when no explicit allow-list (--tools) is
+# given: the hub read tools plus run traces and their health summary. Off
+# unless named: record_feedback / propose_improvement (free-text input) and
+# install_skill (writes to the server's filesystem).
+HTTP_DEFAULT_TOOLS = frozenset({
+    "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
+    "record_run_trace", "check_skill_health",
+})
 
 
 class ToolInputError(Exception):
@@ -584,6 +590,16 @@ class SkillsMCPServer:
             },
             "serverInfo": SERVER_INFO,
         }
+
+    def enable_remote_mode(self) -> None:
+        """Prepare this server to be served over HTTP (called by the transport).
+
+        Turns on ``health_runs_only`` and, when no explicit allow-list was
+        given, narrows the tools to :data:`HTTP_DEFAULT_TOOLS`.
+        """
+        self.health_runs_only = True
+        if self._allowed_tools is None:
+            self._allowed_tools = HTTP_DEFAULT_TOOLS
 
     def _tool_enabled(self, name: str) -> bool:
         if self.loader is None and name in HUB_TOOLS:

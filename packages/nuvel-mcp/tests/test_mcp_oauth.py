@@ -28,7 +28,7 @@ import pytest
 from nuvel_mcp.cli import main as cli_main
 from nuvel_mcp.http_transport import make_server
 from nuvel_mcp.oauth import OAuthConfig, OAuthProvider, stdio_gate
-from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.server import HTTP_DEFAULT_TOOLS, SkillsMCPServer
 from nuvel_mcp.skills_loader import SkillsLoader
 from _mcp_http_helpers import (
     INIT,
@@ -344,7 +344,7 @@ def test_full_code_flow_then_authenticated_calls(anon, httpd):
     assert tokens["scope"] == ALL_SCOPES and tokens["refresh_token"]
     status, _, data = tools_list(httpd, tokens["access_token"])
     assert status == 200
-    assert {t["name"] for t in json.loads(data)["result"]["tools"]} == set(TOOLS)
+    assert {t["name"] for t in json.loads(data)["result"]["tools"]} == HTTP_DEFAULT_TOOLS
 
 
 def test_code_redirect_carries_state_and_issuer(anon, httpd):

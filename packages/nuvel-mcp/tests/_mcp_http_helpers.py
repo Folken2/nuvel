@@ -81,8 +81,12 @@ def make_provider(store_path: Path, **overrides) -> OAuthProvider:
     return OAuthProvider(OAuthConfig(store_path=store_path, **{"dev_login": True, **overrides}))
 
 
-def start(hub, provider: OAuthProvider | None = None, no_auth: bool = False, **config):
-    mcp = SkillsMCPServer(SkillsLoader.from_base(hub))
+def start(hub, provider: OAuthProvider | None = None, no_auth: bool = False,
+          tools: frozenset[str] | None = None, **config):
+    """Bind and run a server; ``hub=None`` is feedback-only mode, ``tools`` the
+    explicit allow-list (``--tools``)."""
+    loader = SkillsLoader.from_base(hub) if hub is not None else None
+    mcp = SkillsMCPServer(loader, tools=tools)
     cfg = HttpConfig(**{"ping_interval": 0.2, **config})
     httpd = make_server(mcp, "127.0.0.1", 0, cfg, provider, no_auth=no_auth)
     thread = threading.Thread(target=httpd.serve_forever, args=(0.05,), daemon=True)

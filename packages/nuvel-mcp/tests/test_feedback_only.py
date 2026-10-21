@@ -29,7 +29,10 @@ def test_constants():
         "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
     }
     assert "search_skills" in HUB_TOOLS and not (HUB_TOOLS & FEEDBACK_TOOLS)
-    assert HTTP_DEFAULT_TOOLS == {"record_run_trace", "check_skill_health"}
+    assert HTTP_DEFAULT_TOOLS == {
+        "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
+        "record_run_trace", "check_skill_health",
+    }
 
 
 def test_tools_allowlist_filters_list_and_call(tmp_path):
