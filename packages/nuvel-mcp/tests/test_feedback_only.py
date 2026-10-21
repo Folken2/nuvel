@@ -50,6 +50,23 @@ def test_hub_tool_unavailable_without_loader(tmp_path):
 
 def test_explicit_skills_dir_without_index_still_errors(tmp_path, capsys):
     assert main(["serve", "--skills-dir", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "index.json" in err or str(tmp_path) in err, err
+
+
+def test_tools_allowlist_with_a_real_hub_loader(tmp_path):
+    from _mcp_http_helpers import make_hub
+    from nuvel_mcp.skills_loader import SkillsLoader
+
+    loader = SkillsLoader(make_hub(tmp_path))
+    s = SkillsMCPServer(loader, feedback_dir=tmp_path / "fb",
+                        tools=frozenset({"search_skills", "check_skill_health"}))
+    assert {t["name"] for t in s.handle_tools_list({})["tools"]} == {
+        "search_skills", "check_skill_health"}
+    result = s.handle_tools_call({"name": "search_skills", "arguments": {"query": "rollback"}})
+    assert not result.get("isError")
+    with pytest.raises(McpError):
+        s.handle_tools_call({"name": "list_skills", "arguments": {}})
 
 
 def test_tools_flag_parsed_to_frozenset():

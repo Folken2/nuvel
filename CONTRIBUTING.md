@@ -31,6 +31,9 @@ cp .env.example .env
 # add your OPENROUTER_API_KEY
 ```
 
+Contributors using `uv` can instead run `uv sync --all-extras` to install the
+project with every extra (the `nuvel-mcp` package is a workspace member).
+
 Run the test suite:
 
 ```bash

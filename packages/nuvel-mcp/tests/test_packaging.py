@@ -8,14 +8,27 @@ import zipfile
 import pytest
 
 
+_OFFLINE_MARKERS = (
+    "Could not find a version that satisfies", "No matching distribution",
+    "Failed to establish a new connection", "Temporary failure in name resolution",
+    "Network is unreachable", "Failed to fetch", "dns error", "error sending request",
+    "Connection refused", "Max retries exceeded",
+)
+
+
 def _build_wheel(pkg: pathlib.Path, out: pathlib.Path) -> None:
     if importlib.util.find_spec("pip") is not None:
         cmd = [sys.executable, "-m", "pip", "wheel", "--no-deps", "-w", str(out), str(pkg)]
     elif shutil.which("uv"):
         cmd = ["uv", "build", "--wheel", "--out-dir", str(out), str(pkg)]
     else:
-        raise RuntimeError("neither pip nor uv is available to build the wheel")
-    subprocess.run(cmd, check=True)
+        pytest.skip("neither pip nor uv is available to build the wheel")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        output = res.stdout + res.stderr
+        if any(m in output for m in _OFFLINE_MARKERS):
+            pytest.skip("cannot fetch the build backend (offline sandbox?)")
+        raise AssertionError(f"wheel build failed:\n{output}")
 
 
 def test_wheel_has_no_runtime_dependencies(tmp_path):

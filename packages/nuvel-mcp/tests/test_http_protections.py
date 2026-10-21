@@ -37,8 +37,11 @@ from _mcp_http_helpers import (
     make_provider,
     service_token,
     start,
+    dev_login,
+    exchange,
+    pkce,
+    register,
 )
-from test_mcp_oauth import dev_login, exchange, pkce, register
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "skill_run_example.json"

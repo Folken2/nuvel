@@ -627,3 +627,13 @@ class TestFeedbackTools(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_org_memory_import_error_names_the_missing_module(monkeypatch, tmp_path, capsys):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nuvel.memory.factory", None)  # forces ImportError
+    server = SkillsMCPServer(None, feedback_dir=tmp_path)
+    assert server._resolve_templates("hi {{ x }}", ["x"]) is None
+    err = capsys.readouterr().err
+    assert "nuvel.memory.factory" in err and "nuvel-cli" in err

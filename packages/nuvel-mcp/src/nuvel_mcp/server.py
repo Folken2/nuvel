@@ -96,7 +96,6 @@ HUB_TOOLS = frozenset({
 FEEDBACK_TOOLS = frozenset({
     "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
 })
-RUN_OUTCOMES = ("success", "partial", "failure", "blocked", "skipped")
 # Tools the HTTP transport exposes when no explicit allow-list (--tools) is
 # given: the hub read tools plus run traces and their health summary. Off
 # unless named: record_feedback / propose_improvement (free-text input) and
@@ -105,6 +104,7 @@ HTTP_DEFAULT_TOOLS = frozenset({
     "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
     "record_run_trace", "check_skill_health",
 })
+RUN_OUTCOMES = ("success", "partial", "failure", "blocked", "skipped")
 
 
 class ToolInputError(Exception):
@@ -1324,7 +1324,9 @@ class SkillsMCPServer:
 
             from nuvel.memory.factory import build_default_service
         except ImportError as exc:  # nuvel-cli / ADK stack not installed
-            log(f"--with-org-memory needs nuvel-cli installed: {exc}")
+            missing = exc.name or "nuvel.memory"
+            log(f"--with-org-memory needs the module {missing!r}, which is not installed "
+                f"(install nuvel-cli): {exc}")
             return None
         except Exception as exc:
             log(f"OrgMemoryService unavailable (--with-org-memory): {exc}")

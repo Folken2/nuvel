@@ -4,6 +4,7 @@ import io
 import json
 import shutil
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -42,8 +43,6 @@ def other_run(example, run_id, **over):
 
 def test_runs_block_counts_traces(tmp_path, example):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     record(s, {**example, "started_at": now})
     record(s, other_run(
@@ -127,8 +126,6 @@ def test_plugin_adds_runs_to_feedback_report(tmp_path):
 
 
 def test_tenant_scoping_by_principal(tmp_path, example):
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     for tenant, rid in (("acme", example["run_id"]), ("other", "22222222-2222-4222-8222-222222222222")):

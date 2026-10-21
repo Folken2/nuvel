@@ -29,6 +29,20 @@ uvx nuvel-mcp client create --name acme-radar
 uvx nuvel-mcp serve --transport http
 ```
 
+`client create` prints a `client_id` and a `client_secret` (shown once). A
+workload exchanges them for an access token with the `client_credentials` grant,
+then sends it as a bearer token to `/mcp`:
+
+```bash
+curl -s -u "$NUVEL_CLIENT_ID:$NUVEL_CLIENT_SECRET" \
+  -d grant_type=client_credentials "$NUVEL_MCP_PUBLIC_URL/token"
+# -> {"access_token": "...", ...}; call /mcp with
+#    Authorization: Bearer $ACCESS_TOKEN
+```
+
+The [deployment guide](https://folken2.github.io/nuvel/how-to/deploy-skills-mcp/)
+covers scopes and the interactive flow.
+
 Over HTTP the default tools are the hub read tools plus `record_run_trace` and
 `check_skill_health`; `record_feedback`, `propose_improvement` and
 `install_skill` are exposed only when named in `--tools`. The tenant of each

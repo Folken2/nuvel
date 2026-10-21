@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 
@@ -105,9 +107,12 @@ def test_http_path_never_imports_the_mcp_sdk():
         "from nuvel_mcp import cli, http_transport\n"
         "http_transport.serve_http = lambda *a, **k: None\n"
         "assert cli.main(['serve', '--transport', 'http', '--no-auth']) == 0\n"
-        "assert 'mcp' not in sys.modules, 'http imported the mcp SDK'\n"
+        "for mod in ('mcp', 'starlette', 'anyio', 'uvicorn', 'httpx'):\n"
+        "    assert mod not in sys.modules, f'http imported third-party {mod}'\n"
     )
-    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("NUVEL_MCP_", "NUVEL_OAUTH_"))}
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert res.returncode == 0, res.stderr
 
 
