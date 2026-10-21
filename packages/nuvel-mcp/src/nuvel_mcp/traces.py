@@ -33,7 +33,8 @@ from typing import Protocol, runtime_checkable
 SCHEMA_ID = "nuvel.skill_run/1"
 SCHEMA_RESOURCE = "schemas/skill_run.v1.schema.json"
 
-IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,79}$")
+#: ``\A``/``\Z`` (not ``^``/``$``) so even ``.match`` rejects a trailing newline.
+IDENTIFIER_RE = re.compile(r"\A[a-z0-9][a-z0-9_.:-]{0,79}\Z")
 
 #: Keywords the validator implements. Anything else in the schema file raises.
 VALIDATION_KEYWORDS = frozenset({
@@ -44,6 +45,7 @@ VALIDATION_KEYWORDS = frozenset({
 #: Keywords that carry no validation meaning and are ignored.
 ANNOTATION_KEYWORDS = frozenset({"$schema", "title", "description"})
 FORMATS = frozenset({"uuid", "date-time"})
+TYPES = frozenset({"object", "array", "string", "boolean", "integer"})
 
 _UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _DATETIME_RE = re.compile(
@@ -55,7 +57,7 @@ _UNSAFE_KEY = "*"
 
 
 def check_schema_keywords(schema: dict) -> None:
-    """Raise ``ValueError`` if *schema* uses a keyword or format we don't implement."""
+    """Raise ``ValueError`` if *schema* uses a keyword, type or format we don't implement."""
 
     def walk(node: object, where: str) -> None:
         if not isinstance(node, dict):
@@ -65,7 +67,9 @@ def check_schema_keywords(schema: dict) -> None:
                 continue
             if key not in VALIDATION_KEYWORDS:
                 raise ValueError(f"unsupported schema keyword {key!r} at {where or '/'}")
-            if key == "format" and value not in FORMATS:
+            if key == "type" and not (isinstance(value, str) and value in TYPES):
+                raise ValueError(f"unsupported type {value!r} at {where or '/'}")
+            if key == "format" and not (isinstance(value, str) and value in FORMATS):
                 raise ValueError(f"unsupported format {value!r} at {where or '/'}")
             if key == "properties":
                 for name, sub in value.items():
@@ -104,8 +108,9 @@ def validate_skill_run(trace: object) -> list[str]:
     return list(dict.fromkeys(p or ROOT_PATH for p in errors))
 
 
-def _safe_key(key: str) -> str:
-    return key if IDENTIFIER_RE.fullmatch(key) else _UNSAFE_KEY
+def _safe_key(key: object) -> str:
+    # JSON keys are strings, but a caller may hand us any dict; never TypeError.
+    return key if isinstance(key, str) and IDENTIFIER_RE.fullmatch(key) else _UNSAFE_KEY
 
 
 def _type_ok(value: object, expected: str) -> bool:

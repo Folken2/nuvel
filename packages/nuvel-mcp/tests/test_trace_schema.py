@@ -35,10 +35,17 @@ def deep_set(obj, path, value):
 
 def test_constants_and_schema_file():
     assert SCHEMA_ID == "nuvel.skill_run/1"
-    assert IDENTIFIER_RE.pattern == r"^[a-z0-9][a-z0-9_.:-]{0,79}$"
+    assert IDENTIFIER_RE.pattern == r"\A[a-z0-9][a-z0-9_.:-]{0,79}\Z"
     schema = load_schema()
     assert schema["properties"]["schema"]["const"] == SCHEMA_ID
     assert schema["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("value", ["radar\n", "radar\nx", "\nradar"])
+def test_identifier_re_rejects_newlines_even_with_match(value):
+    assert IDENTIFIER_RE.match(value) is None
+    assert IDENTIFIER_RE.fullmatch(value) is None
+    assert IDENTIFIER_RE.search(value) is None
 
 
 def test_spec_example_validates(example):
@@ -70,7 +77,7 @@ def test_underscores_allowed(example):
 def test_unknown_keys_rejected_everywhere(example, where):
     t = copy.deepcopy(example)
     deep_get(t, where)["note"] = 1
-    assert validate_skill_run(t)
+    assert validate_skill_run(t) == ["/" + "/".join(map(str, (*where, "note")))]
 
 
 def test_unknown_key_in_error_entry_rejected(example):
@@ -210,7 +217,15 @@ def test_unknown_unsafe_keys_are_not_echoed(example):
     assert errors == ["/*"]
 
 
-def test_unknown_schema_keyword_raises_at_load(monkeypatch):
+@pytest.mark.parametrize("key", [3, 1.5, None, ("a", "b"), True])
+@pytest.mark.parametrize("where", [(), ("plugin",), ("steps", 1, "counts"), ("routing",), ("safety",)])
+def test_non_string_keys_reported_as_star(example, where, key):
+    t = copy.deepcopy(example)
+    deep_get(t, where)[key] = 1
+    assert validate_skill_run(t) == ["/" + "/".join(map(str, (*where, "*")))]
+
+
+def test_check_schema_keywords_rejects_unsupported_keyword_and_format():
     schema = copy.deepcopy(load_schema())
     schema["properties"]["host"]["minLength"] = 1
     with pytest.raises(ValueError, match="minLength"):
@@ -218,6 +233,14 @@ def test_unknown_schema_keyword_raises_at_load(monkeypatch):
     schema = copy.deepcopy(load_schema())
     schema["properties"]["run_id"]["format"] = "email"
     with pytest.raises(ValueError, match="format"):
+        traces.check_schema_keywords(schema)
+
+
+@pytest.mark.parametrize("bad_type", ["number", "null", "Integer", ["string", "null"], 3, None])
+def test_check_schema_keywords_rejects_unsupported_type(bad_type):
+    schema = copy.deepcopy(load_schema())
+    schema["properties"]["steps"]["items"]["properties"]["id"]["type"] = bad_type
+    with pytest.raises(ValueError, match="type"):
         traces.check_schema_keywords(schema)
 
 
