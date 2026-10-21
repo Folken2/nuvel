@@ -29,13 +29,15 @@ from nuvel.eval.drift import detect_drift
 from nuvel.eval.report import render_drift, render_report, render_worst
 from nuvel.eval.scorer import ScoreSession
 from nuvel.eval.writer import load_scored_index
-from nuvel.traces_cli import _discover_trace_dirs, _parse_since
+from nuvel.traces_cli import _discover_trace_dirs, _parse_since, discovery_cache
 
 
 def _load_all_scored(sources: list[str] | None) -> list:
     """Aggregate every ``scored.jsonl`` across discovered trace directories."""
     out = []
-    for d in _discover_trace_dirs(sources, include_skill_runs=False):
+    with discovery_cache():
+        dirs = _discover_trace_dirs(sources, include_skill_runs=False)
+    for d in dirs:
         idx = load_scored_index(d / "scored.jsonl")
         out.extend(idx.values())
     return out

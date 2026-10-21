@@ -70,3 +70,94 @@ def test_no_skill_steps_heading_without_skill_runs(tmp_path: Path) -> None:
         json.dumps({"trace_id": "t1", "session_id": "s1", "event": "run_start", "agent": "a"}) + "\n"
     )
     assert "Skill steps" not in _client(root).get("/").text
+
+
+def test_malicious_step_id_is_escaped(tmp_path: Path) -> None:
+    root = tmp_path / "traces"
+    d = root / "_runs" / "chief-of-staff.radar"
+    d.mkdir(parents=True)
+    rec = _skill_run("failure", "error")
+    rec["steps"][0]["id"] = "<script>alert(1)</script>"
+    (d / "2026-10-21.jsonl").write_text(json.dumps(rec) + "\n")
+    html = _client(root).get("/").text
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def test_skill_steps_table_is_capped_at_50(tmp_path: Path) -> None:
+    root = tmp_path / "traces"
+    d = root / "_runs" / "chief-of-staff.radar"
+    d.mkdir(parents=True)
+    rec = _skill_run("success", "ok")
+    rec["steps"] = [{"id": f"step.{i:03d}", "status": "error" if i < 5 else "ok"} for i in range(60)]
+    (d / "2026-10-21.jsonl").write_text(json.dumps(rec) + "\n")
+    html = _client(root).get("/").text
+    assert html.count("<code>step.") == 50
+    assert "+10 more" in html
+    assert "step.000" in html and "step.059" not in html
+
+
+def test_same_run_id_in_two_tenants_both_reachable(tmp_path: Path) -> None:
+    from urllib.parse import quote
+
+    root = tmp_path / "traces"
+    d = root / "_runs" / "chief-of-staff.radar"
+    d.mkdir(parents=True)
+    recs = []
+    for tenant, outcome in (("acme", "failure"), ("globex/eu", "success"), (None, "blocked")):
+        r = _skill_run(outcome, "ok")
+        r["run_id"] = "dup"
+        if tenant:
+            r["tenant"] = tenant
+        recs.append(r)
+    (d / "2026-10-21.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    loader = _loader(root)
+    runs = loader.runs()
+    assert len(runs) == 3
+    client = TestClient(build_app(loader))
+    home = client.get("/").text
+    seen = set()
+    for run in runs:
+        assert loader.find_by_id(run.trace_id).subtype == run.subtype
+        href = "/run/" + quote(run.trace_id, safe="")
+        assert f'href="{href}"' in home
+        resp = client.get(href)
+        assert resp.status_code == 200
+        seen.add(run.subtype)
+    assert seen == {"failure", "success", "blocked"}
+
+
+def test_loader_and_watcher_pick_up_new_plugin_skill_dir(tmp_path: Path) -> None:
+    import asyncio
+
+    from nuvel.dashboard.watcher import RunWatcher
+    from nuvel.traces_cli import _discover_trace_dirs
+
+    root = tmp_path / "traces"
+    (root / "_runs" / "chief-of-staff.radar").mkdir(parents=True)
+    sources = _discover_trace_dirs([str(root)])
+    loader = TraceLoader(sources, skill_roots=[root])
+    assert loader.runs() == []
+    new = root / "_runs" / "chief-of-staff.inbox"
+    rec = _skill_run("success", "ok")
+    rec["run_id"] = "late"
+    new.mkdir()
+    (new / "2026-10-21.jsonl").write_text(json.dumps(rec) + "\n")
+    assert [r.session_id for r in loader.runs()] == ["late"]
+
+    async def go() -> str:
+        w = RunWatcher(sources, poll_seconds=0.1, skill_roots=[root])
+        q: asyncio.Queue = asyncio.Queue()
+        task = asyncio.create_task(w.run(q))
+        await asyncio.sleep(0.3)
+        late = root / "_runs" / "chief-of-staff.later"
+        late.mkdir()
+        r2 = _skill_run("success", "ok")
+        r2["run_id"] = "after-start"
+        (late / "2026-10-21.jsonl").write_text(json.dumps(r2) + "\n")
+        got = await asyncio.wait_for(q.get(), timeout=3.0)
+        w.stop()
+        await asyncio.wait_for(task, timeout=2.0)
+        return got.session_id
+
+    assert asyncio.run(go()) == "after-start"

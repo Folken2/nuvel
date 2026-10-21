@@ -24,6 +24,7 @@ from nuvel.traces_cli import (
     _agent_label_for,
     _collect_runs,
     _discover_trace_dirs,
+    discovery_cache,
 )
 
 
@@ -144,6 +145,10 @@ class ScoreSession:
     rubric_resolver: Callable[[str], Rubric] = load_rubric
 
     async def run(self) -> ScoreReport:
+        with discovery_cache():
+            return await self._run()
+
+    async def _run(self) -> ScoreReport:
         report = ScoreReport()
         dirs = _discover_trace_dirs(self.sources, include_skill_runs=False)
         if not dirs:
