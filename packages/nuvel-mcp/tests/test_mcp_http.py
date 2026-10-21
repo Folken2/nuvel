@@ -750,6 +750,68 @@ def test_rejection_before_reading_a_declared_body_closes_the_connection(server_f
     assert elapsed < TIMEOUT
 
 
+_HIDDEN = b"GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n"
+
+
+@pytest.mark.parametrize("framing, status", [
+    (b"Transfer-Encoding: gzip, chunked\r\n", b"411"),
+    (b"Transfer-Encoding: identity\r\n", b"411"),
+    (b"Transfer-Encoding: chunked \r\n", b"411"),
+    (b"Transfer-Encoding: identity\r\nTransfer-Encoding: chunked\r\n", b"411"),
+    (b"Transfer-Encoding: Chunked\r\n", b"411"),
+    (b"Content-Length: %d\r\nTransfer-Encoding: identity\r\n" % len(_HIDDEN), b"411"),
+    (b"Content-Length: \r\n", b"400"),
+    (b"Content-Length : %d\r\n" % len(_HIDDEN), b"400"),
+    (b"X-Pad : 1\r\nContent-Length: %d\r\n" % len(_HIDDEN), b"400"),
+    (b"X-Pad: a\r\n Content-Length: %d\r\n" % len(_HIDDEN), b"400"),  # obs-fold
+    (b"Content-Length: +%d\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: abc\r\n", b"400"),
+    ("Content-Length: \u0661\u0662\r\n".encode("utf-8"), b"400"),
+])
+@pytest.mark.parametrize("auth", ["none", "valid"])
+def test_bad_framing_is_refused_once_and_closes(server_factory, framing, status, auth):
+    """One framing gate before Origin/auth/routing: a smuggled request hidden in
+    the body never gets its own response, whatever the route would have said."""
+    client = server_factory()
+    auth_line = f"Authorization: Bearer {client.token}\r\n".encode() if auth == "valid" else b""
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n".encode()
+            + auth_line + b"Content-Type: application/json\r\n" + framing + b"\r\n")
+    data, elapsed = _raw(client, head, _HIDDEN)
+    assert data.startswith(b"HTTP/1.1 " + status), data
+    assert data.count(b"HTTP/1.1 ") == 1, data
+    assert b"Connection: close" in data
+    assert elapsed < TIMEOUT  # the server closed the connection
+
+
+def test_oversized_declared_body_is_413_before_auth_and_closes(server_factory):
+    client = server_factory(max_body_bytes=16)
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Content-Length: {len(_HIDDEN)}\r\n\r\n").encode()
+    data, elapsed = _raw(client, head, _HIDDEN)
+    assert data.startswith(b"HTTP/1.1 413"), data
+    assert data.count(b"HTTP/1.1 ") == 1 and b"Connection: close" in data
+    assert elapsed < TIMEOUT
+
+
+def test_valid_posts_keep_the_connection_alive(server_factory):
+    client = server_factory()
+    conn = client.conn()
+    try:
+        headers = {"Authorization": f"Bearer {client.token}",
+                   "Content-Type": "application/json", "Accept": "application/json"}
+        for msg_id in (1, 2, 3):
+            conn.request("POST", "/mcp", body=json.dumps(dict(INIT, id=msg_id)),
+                         headers=headers)
+            resp = conn.getresponse()
+            assert resp.status == 200
+            assert json.loads(resp.read())["id"] == msg_id
+            assert resp.getheader("Connection") != "close"
+        sock = conn.sock
+        assert sock is not None  # still the same, open connection
+    finally:
+        conn.close()
+
+
 def test_content_length_with_chunked_transfer_encoding_is_still_refused(server_factory):
     client = server_factory()
     head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"

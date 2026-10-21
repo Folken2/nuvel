@@ -499,6 +499,10 @@ _HTML_HEADERS = {
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
+# RFC 9110 field-name: a token.
+_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
 class McpRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
@@ -597,18 +601,39 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _send_reject(self, exc: _Reject, msg_id=None) -> None:
         self._send_json(exc.status, error_response(msg_id, exc.code, exc.message), exc.headers)
 
-    def _read_body(self) -> bytes:
-        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
-            raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Chunked bodies are not supported")
-        # (Duplicate Content-Length headers were already refused in _handle.)
+    def _check_framing(self) -> int:
+        """The one framing gate, run before Origin, auth and routing: return the
+        declared body length or raise. Every refusal here leaves the connection
+        marked to close (see ``_handle``), so a body is never misread as the
+        next request.
+        """
+        # A header line the parser could not take as "token: value" (e.g.
+        # whitespace before the colon) or a line starting with whitespace.
+        if self.headers.defects:
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
+        for name, value in self.headers.items():
+            if not _TOKEN.fullmatch(name) or "\r" in value or "\n" in value:  # obs-fold too
+                raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
+        # No transfer coding is supported, in any form or count.
+        if "Transfer-Encoding" in self.headers:
+            raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Transfer-Encoding is not supported")
+        lengths = self.headers.get_all("Content-Length") or []
+        if not lengths:
+            return 0
+        # More than one Content-Length, equal or not, is refused (RFC 9112 6.3).
         # ASCII digits only: int() would also take "+1", "-0", "1_0" and
         # non-ASCII digits, none of which a valid Content-Length may be.
-        raw = self.headers.get("Content-Length", "0").strip()
-        if not (raw.isascii() and raw.isdigit()):
+        raw = lengths[0].strip()
+        if len(lengths) > 1 or not (raw.isascii() and raw.isdigit()):
             raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
         length = int(raw)
         if length > self.server.config.max_body_bytes:
             raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large")
+        return length
+
+    def _read_body(self) -> bytes:
+        # Framing was decided by _check_framing; this only reads what it allowed.
+        length = self._body_length
         try:
             body = self.rfile.read(length) if length else b""
         except (TimeoutError, OSError):  # client stalled (socket.timeout) or vanished
@@ -617,7 +642,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         if len(body) < length:  # EOF before the declared length: never parse a partial body
             self.close_connection = True
             raise _Reject(HTTPStatus.BAD_REQUEST, "Incomplete request body")
-        self.close_connection = self._client_wants_close  # body consumed: keep-alive is safe
+        # The gate passed and the whole declared body was read: keep-alive is safe.
+        self.close_connection = self._client_wants_close
         return body
 
     def _read_form(self) -> dict[str, str]:
@@ -807,19 +833,17 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     # --- verbs ----------------------------------------------------------------------
 
     def _handle(self, route) -> None:
-        # Until a route consumes the request body, any reply must close the
-        # connection — otherwise the unread bytes would be parsed as the next request.
+        # Keep-alive is allowed again only once the framing gate has passed and
+        # the declared body is fully read (at once when it is empty, else in
+        # _read_body). Any other reply closes the connection, so unread bytes
+        # are never parsed as the next request.
         self._client_wants_close = self.close_connection
-        lengths = self.headers.get_all("Content-Length") or []
-        if (len(lengths) > 1 or any(v.strip() not in ("", "0") for v in lengths)
-                or "Transfer-Encoding" in self.headers):
-            self.close_connection = True
+        self.close_connection = True
+        self._body_length = 0
         try:
-            # Decided here, once, before Origin, auth and routing: more than one
-            # Content-Length (equal or not) is refused (RFC 9112 6.3), since a
-            # proxy honouring another one than us would desync the connection.
-            if len(lengths) > 1:
-                raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+            self._body_length = self._check_framing()
+            if self._body_length == 0:
+                self.close_connection = self._client_wants_close
             self._check_origin()
             route()
         except _Reject as exc:
