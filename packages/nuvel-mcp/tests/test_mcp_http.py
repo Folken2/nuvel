@@ -700,6 +700,56 @@ def test_duplicate_content_length_is_400_and_closes(server_factory, lengths):
     assert elapsed < TIMEOUT
 
 
+def _smuggle_probe(client) -> bytes:
+    """A complete second request, hidden as 'body' bytes: if the server ever
+    parses it, a 404 for this path shows up as a second response."""
+    return b"GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n"
+
+
+@pytest.mark.parametrize("auth", [None, "Bearer not-a-real-token", "valid"])
+@pytest.mark.parametrize("path", ["/mcp", "/messages", "/no-such-route"])
+def test_duplicate_content_length_is_refused_before_auth_and_routing(server_factory, auth, path):
+    client = server_factory()
+    hidden = _smuggle_probe(client)
+    auth_line = ""
+    if auth:
+        auth_line = f"Authorization: {'Bearer ' + client.token if auth == 'valid' else auth}\r\n"
+    head = (f"POST {path} HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n{auth_line}"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: 0\r\nContent-Length: {len(hidden)}\r\n\r\n").encode()
+    data, elapsed = _raw(client, head, hidden)
+    assert data.startswith(b"HTTP/1.1 400"), data
+    assert b"Invalid Content-Length" in data and b"Connection: close" in data
+    assert data.count(b"HTTP/1.1 ") == 1, data  # the hidden request never ran
+    assert elapsed < TIMEOUT  # closed by the server
+
+
+def test_disallowed_origin_with_duplicate_content_length_is_400(server_factory):
+    client = server_factory()
+    hidden = _smuggle_probe(client)
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            "Origin: https://evil.example\r\n"
+            f"Content-Length: 0\r\nContent-Length: {len(hidden)}\r\n\r\n").encode()
+    data, _ = _raw(client, head, hidden)
+    assert data.startswith(b"HTTP/1.1 400"), data
+    assert data.count(b"HTTP/1.1 ") == 1, data
+
+
+@pytest.mark.parametrize("auth_line", ["", "Authorization: Bearer not-a-real-token\r\n"])
+def test_rejection_before_reading_a_declared_body_closes_the_connection(server_factory,
+                                                                          auth_line):
+    client = server_factory()
+    hidden = _smuggle_probe(client)
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n{auth_line}"
+            f"Content-Type: application/json\r\nContent-Length: {len(hidden)}\r\n\r\n"
+            ).encode()
+    data, elapsed = _raw(client, head, hidden)
+    assert data.startswith(b"HTTP/1.1 401"), data
+    assert b"Connection: close" in data
+    assert data.count(b"HTTP/1.1 ") == 1, data
+    assert elapsed < TIMEOUT
+
+
 def test_content_length_with_chunked_transfer_encoding_is_still_refused(server_factory):
     client = server_factory()
     head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"

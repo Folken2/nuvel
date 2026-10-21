@@ -600,12 +600,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _read_body(self) -> bytes:
         if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Chunked bodies are not supported")
-        # More than one Content-Length (equal or not) is refused outright
-        # (RFC 9112 6.3): a proxy reading another one than us would desync the
-        # connection, so it is closed, never reused.
-        if len(self.headers.get_all("Content-Length") or []) > 1:
-            self.close_connection = True
-            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+        # (Duplicate Content-Length headers were already refused in _handle.)
         # ASCII digits only: int() would also take "+1", "-0", "1_0" and
         # non-ASCII digits, none of which a valid Content-Length may be.
         raw = self.headers.get("Content-Length", "0").strip()
@@ -815,10 +810,16 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # Until a route consumes the request body, any reply must close the
         # connection — otherwise the unread bytes would be parsed as the next request.
         self._client_wants_close = self.close_connection
-        if (self.headers.get("Content-Length", "0").strip() not in ("", "0")
+        lengths = self.headers.get_all("Content-Length") or []
+        if (len(lengths) > 1 or any(v.strip() not in ("", "0") for v in lengths)
                 or "Transfer-Encoding" in self.headers):
             self.close_connection = True
         try:
+            # Decided here, once, before Origin, auth and routing: more than one
+            # Content-Length (equal or not) is refused (RFC 9112 6.3), since a
+            # proxy honouring another one than us would desync the connection.
+            if len(lengths) > 1:
+                raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
             self._check_origin()
             route()
         except _Reject as exc:
