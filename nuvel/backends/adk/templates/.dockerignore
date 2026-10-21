@@ -11,6 +11,7 @@ venv/
 
 # Secrets (provided via Railway env vars)
 .env
+**/.env
 
 # Runtime state (persisted via Railway volumes if needed)
 traces/

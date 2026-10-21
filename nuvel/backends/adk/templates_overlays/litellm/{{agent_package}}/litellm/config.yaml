@@ -35,7 +35,7 @@ model_list:
   #     api_key: os.environ/GEMINI_API_KEY
 
 general_settings:
-  master_key: sk-litellm-master-{{agent_name}}
+  master_key: os.environ/LITELLM_MASTER_KEY          # admin key — set in .env, never commit
   database_url: os.environ/DATABASE_URL                # Postgres connection (virtual key storage)
 
 litellm_settings:
