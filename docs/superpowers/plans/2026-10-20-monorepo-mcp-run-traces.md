@@ -367,3 +367,46 @@ Global constraints for Phase 5 (in addition to the above, which they override wh
 
 **Files:** `CHANGELOG.md` (one coherent Unreleased section covering #94 + this branch), `docs/reference/skill-run-traces.md` (tenancy = OAuth client_id; HTTP tool set), `docs/reference/cli.md`, `.claude/skills/nuvel/SKILL.md`, `CLAUDE.md` monorepo section (no extras), `packages/nuvel-mcp/README.md`, `CONTRIBUTING.md` (pre-merge PyPI gate unchanged).
 - [ ] `mkdocs build --strict` passes; grep shows no remaining references to `--auth bearer`, `NUVEL_MCP_TOKENS`, `--allowed-host`, `nuvel-mcp[http]` or `mcp>=1.30`. Commit `docs: reconcile MCP docs with #94's transport and OAuth`.
+
+---
+
+## Phase 6 — Close the deferred review observations (user request 2026-10-21)
+
+Source: every "minor (deferred)" line in the two archived SDD ledgers plus the Phase 5 final review's minors, minus items already done or made obsolete by removing the SDK transport (bearer auth, `http.py`, `--allowed-host`, the `http` extra). Global constraints of Phases 1–5 still bind (zero deps, no extras, no echo, tenant = client_id, Folken2 + Opus 5.5 trailer). Each task: tests first where behaviour changes; full suite green; one or more `fix:`/`test:`/`docs:` commits.
+
+### Task 15: Server and HTTP transport hardening (`packages/nuvel-mcp/src/nuvel_mcp/server.py`, `http_transport.py`, `cli.py`)
+1. `propose_improvement`: no exception text (`{exc}`), GitHub error body, `relay_error = str(exc)`, `queue_path` or `feedback_dir` in tool results or the queue file — class name (+ HTTP status) only; detail to the server log. Update the "unreachable" test.
+2. Unknown tool name: the error result must not echo the caller-supplied name (fixed message).
+3. `_runs_summary`: tolerate records missing `step` / `class` (skip, don't KeyError) from custom stores.
+4. 503 at the connection cap: drain the client's pending request bytes briefly (non-blocking, bounded) before closing, so the client reliably receives the 503.
+5. `_read_body`: a body shorter than `Content-Length` at EOF → 400, not parsed.
+6. Run-id dedupe keys on `(tenant, run_id)` (another tenant's run_id is not reported as duplicate) and documents that the window is the UTC day file.
+7. Startup warning (stderr) when `NUVEL_MCP_MAX_SESSIONS >= NUVEL_MCP_MAX_CONNECTIONS`.
+8. CLI: warn on unknown names in `--tools` (and exit 2 if none of them is a real tool); warn when HTTP-only flags (`--host`, `--port`, `--allow-remote`, `--no-auth`) are given with `--transport stdio`.
+9. Comments: in `http_transport.py`, why a missing Origin + foreign Host is acceptable (all dispatch is POST; browsers send Origin on POST; GET paths expose counts/streams only); which code path carries the principal.
+10. Tests: chunked → 411; non-numeric / negative / non-ASCII `Content-Length` → 400; principal is reset after a handler raises; propose_improvement over stdio returns no path/exception text.
+
+### Task 16: Trace schema, validator and store (`traces.py`, `schemas/`, tests)
+1. `IDENTIFIER_RE`: anchor with `\A…\Z` (keep `.fullmatch` callers) so `.match("radar\n")` also fails.
+2. `validate_skill_run`: non-string dict keys → reported as `*`, never `TypeError`.
+3. `check_schema_keywords`: validate `type` values at load (unknown type → error), matching the docstring.
+4. `LocalTraceStore`: bounded lock registry (e.g. per-path locks evicted when unused, or a fixed striped lock pool) and an in-memory per-day-file `run_id` index so append doesn't rescan the file each time (rebuilt lazily from disk).
+5. Docs (`docs/reference/skill-run-traces.md`): local store growth / no per-tenant quota — a pluggable store is the scale story.
+6. Tests: `test_unknown_keys_rejected_everywhere` asserts the exact path; rename `test_unknown_schema_keyword_raises_at_load` and drop its unused fixture.
+
+### Task 17: Traces CLI, dashboard and eval (`nuvel/traces_cli.py`, `nuvel/dashboard/`, `nuvel/eval/`)
+1. `_skill_run_dirs`: prune `.git`, `node_modules`, `.venv`/`venv`, `__pycache__`, hidden dirs while walking a `--source`; hoist the `_runs` name check; cache discovery per command so eval doesn't walk 2–3×.
+2. Eval: an explicit `--source` pointing inside a `_runs` tree is not used as an eval root.
+3. `_agent_label_for`: skill-run files get `plugin:skill`, not `(local)`.
+4. Dashboard: the watcher picks up `plugin.skill` dirs created after startup (re-scan `_runs` roots on each poll); cap the "Skill steps" table (top 50 by error rate, with a "+N more" note).
+5. Tests: HTML-escaping of a malicious step id in the dashboard (`<script>` → escaped); `nuvel eval report` / `drift` (`_load_all_scored`) ignore skill runs end to end.
+
+### Task 18: Packaging, shim, CLI tests and docs hygiene
+1. Shim: `DeprecationWarning` with `stacklevel` that points at the importing user's frame (verify with a test that inspects `warning.filename`).
+2. `server.py` org-memory ImportError message names the actual missing module.
+3. `test_cli.py` shared-flags test: compare parsers via a public helper (e.g. walk `parser._actions` once in a small util, or compare `--help` output) instead of reaching through `_subparsers._group_actions` repeatedly; `test_mcp_compat.py` re-import test pops the aliased submodules too.
+4. `test_http_path_never_imports_the_mcp_sdk`: run the subprocess with `NUVEL_MCP_*` / `NUVEL_OAUTH_*` stripped from env; also assert `starlette`, `anyio`, `uvicorn` are not imported.
+5. Packaging test: skip with a clear reason when no network/build backend is available (offline sandboxes) instead of failing.
+6. Tests: `--tools` allow-list with a real hub loader; `test_explicit_skills_dir_without_index_still_errors` asserts the stderr message; move `datetime` imports to module top in `test_health_runs.py`; move OAuth flow helpers from `test_mcp_oauth.py` into `_mcp_http_helpers.py`.
+7. Cosmetic: `RUN_OUTCOMES` placement relative to the `HTTP_DEFAULT_TOOLS` comment.
+8. Docs: `packages/nuvel-mcp/README.md` explains how a client obtains and uses a token (client_credentials one-liner + link); CONTRIBUTING notes `uv sync --all-extras` for contributors using uv.
