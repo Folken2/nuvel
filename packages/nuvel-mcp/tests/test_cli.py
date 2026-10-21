@@ -118,3 +118,71 @@ def test_removed_sdk_transport_flags_are_rejected_by_argparse(flag, capsys):
         main(["serve", *flag])
     assert e.value.code == 2
     assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def _serve_stub(monkeypatch):
+    """Stub both transports; return the list of servers that would have run."""
+    from nuvel_mcp import http_transport
+    from nuvel_mcp import server as server_mod
+    ran = []
+    monkeypatch.setattr(server_mod.SkillsMCPServer, "serve", lambda self, *a, **k: ran.append(self))
+    monkeypatch.setattr(http_transport, "serve_http", lambda mcp, *a, **k: ran.append(mcp))
+    return ran
+
+
+@pytest.mark.parametrize("transport", [["--transport", "stdio"], ["--transport", "http", "--no-auth"]])
+def test_unknown_tools_warn_but_known_ones_still_serve(monkeypatch, tmp_path, capsys, transport):
+    from nuvel_mcp.cli import main
+    ran = _serve_stub(monkeypatch)
+    assert main(["serve", *transport, "--feedback-dir", str(tmp_path),
+                 "--tools", "record_run_trace,recrod_feedback"]) == 0
+    assert len(ran) == 1
+    err = capsys.readouterr().err
+    assert "recrod_feedback" in err and "unknown" in err.lower()
+
+
+def test_no_real_tool_in_tools_exits_2(monkeypatch, tmp_path, capsys):
+    from nuvel_mcp.cli import main
+    ran = _serve_stub(monkeypatch)
+    assert main(["serve", "--feedback-dir", str(tmp_path), "--tools", "nope,also_nope"]) == 2
+    assert ran == []
+    err = capsys.readouterr().err
+    assert "nope" in err and "--tools" in err
+
+
+def test_known_tools_do_not_warn(monkeypatch, tmp_path, capsys):
+    from nuvel_mcp.cli import main
+    _serve_stub(monkeypatch)
+    assert main(["serve", "--feedback-dir", str(tmp_path),
+                 "--tools", "record_run_trace,check_skill_health"]) == 0
+    assert "unknown" not in capsys.readouterr().err.lower()
+
+
+@pytest.mark.parametrize("flags, named", [
+    (["--host", "0.0.0.0"], "--host"),
+    (["--port", "9000"], "--port"),
+    (["--allow-remote"], "--allow-remote"),
+])
+def test_http_only_flags_with_stdio_warn(monkeypatch, tmp_path, capsys, flags, named):
+    from nuvel_mcp.cli import main
+    ran = _serve_stub(monkeypatch)
+    assert main(["serve", "--feedback-dir", str(tmp_path), *flags]) == 0
+    assert len(ran) == 1  # stdio still runs
+    err = capsys.readouterr().err
+    assert named in err and "stdio" in err
+
+
+def test_no_auth_with_stdio_is_still_an_error(monkeypatch, tmp_path, capsys):
+    from nuvel_mcp.cli import main
+    ran = _serve_stub(monkeypatch)
+    assert main(["serve", "--feedback-dir", str(tmp_path), "--no-auth"]) == 2
+    assert ran == []
+    assert "--no-auth" in capsys.readouterr().err
+
+
+def test_plain_stdio_does_not_warn(monkeypatch, tmp_path, capsys):
+    from nuvel_mcp.cli import main
+    _serve_stub(monkeypatch)
+    assert main(["serve", "--feedback-dir", str(tmp_path)]) == 0
+    err = capsys.readouterr().err
+    assert "--host" not in err and "--port" not in err and "unknown" not in err.lower()

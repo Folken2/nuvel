@@ -14,6 +14,10 @@ import os
 import sys
 import time
 
+# --host / --port defaults; a different value with --transport stdio is ignored.
+_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_PORT = 8080
+
 
 def _parse_tools(value: str) -> frozenset[str]:
     return frozenset(v.strip() for v in value.split(",") if v.strip())
@@ -90,14 +94,14 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--host",
-        default="127.0.0.1",
+        default=_DEFAULT_HOST,
         help="HTTP bind address (default 127.0.0.1). A non-loopback address "
              "requires --allow-remote.",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8080,
+        default=_DEFAULT_PORT,
         help="HTTP port (default 8080; 0 picks a free port).",
     )
     parser.add_argument(
@@ -151,11 +155,44 @@ def add_oauth_commands(subparsers: argparse._SubParsersAction) -> None:
     p_revoke.set_defaults(func=_cmd_token_revoke)
 
 
+def _check_tools(tools: frozenset[str] | None) -> bool:
+    """Warn about unknown ``--tools`` names; False when none is a real tool."""
+    from nuvel_mcp.server import FEEDBACK_TOOLS, HUB_TOOLS
+
+    if tools is None:
+        return True
+    known = HUB_TOOLS | FEEDBACK_TOOLS
+    unknown = sorted(tools - known)
+    if unknown:
+        print(f"Warning: --tools: unknown tool name(s) ignored: {', '.join(unknown)} "
+              f"(known tools: {', '.join(sorted(known))}).", file=sys.stderr)
+    if not tools & known:
+        print("Error: --tools names no known tool, so nothing would be served.",
+              file=sys.stderr)
+        return False
+    return True
+
+
+def _warn_http_only_flags(args: argparse.Namespace) -> None:
+    """With --transport stdio, say so when HTTP-only flags were given."""
+    given = [flag for flag, set_ in (
+        ("--host", args.host != _DEFAULT_HOST),
+        ("--port", args.port != _DEFAULT_PORT),
+        ("--allow-remote", args.allow_remote),
+    ) if set_]
+    if given:
+        print(f"Warning: {', '.join(given)} only apply to --transport http; "
+              "ignored with --transport stdio.", file=sys.stderr)
+
+
 def run_serve(args: argparse.Namespace) -> int:
     from nuvel_mcp.feedback import resolve_feedback_dir
     from nuvel_mcp.server import SkillsMCPServer
     from nuvel_mcp.skills_loader import SkillsError, SkillsLoader
     from nuvel_mcp.traces import load_trace_store
+
+    if not _check_tools(args.tools):
+        return 2
 
     loader = None
     if args.skills_dir is not None:
@@ -198,6 +235,7 @@ def run_serve(args: argparse.Namespace) -> int:
             print("Error: --no-auth applies to --transport http; stdio is ungated "
                   "unless --require-auth is set.", file=sys.stderr)
             return 2
+        _warn_http_only_flags(args)
         if args.require_auth:
             error = _gate_stdio(server)
             if error:
