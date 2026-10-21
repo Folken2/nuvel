@@ -391,6 +391,30 @@ class _DeadlineReader:
         pass
 
 
+# Upper bound on the bytes a refused (503) connection's unread request may be
+# drained of before closing; the drain itself never waits for more.
+_DRAIN_LIMIT = 256 * 1024
+
+
+def _drain_pending(sock: socket.socket) -> None:
+    """Read and discard whatever request bytes are already queued on ``sock``.
+
+    Closing a TCP socket with unread data sends a reset, which can make the
+    client drop the response it was just sent; draining first gives it a clean
+    close. Non-blocking and bounded, so it cannot stall the accept loop.
+    """
+    sock.setblocking(False)
+    drained = 0
+    try:
+        while drained < _DRAIN_LIMIT:
+            data = sock.recv(65536)
+            if not data:
+                break
+            drained += len(data)
+    except (BlockingIOError, InterruptedError):
+        pass
+
+
 class McpHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server carrying the MCP dispatcher, config, sessions and
     the OAuth provider (``None`` only when auth is deliberately off)."""
@@ -417,12 +441,14 @@ class McpHTTPServer(ThreadingHTTPServer):
 
     def process_request(self, request, client_address) -> None:
         # Cap handler threads: when full, answer 503 from the accept loop
-        # (one short non-blocking write) without spawning a thread.
+        # (one short write) without spawning a thread.
         if not self._slots.acquire(blocking=False):
             try:
                 request.settimeout(1.0)
                 request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\n"
                                 b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+                request.shutdown(socket.SHUT_WR)
+                _drain_pending(request)
             except OSError:
                 pass
             self.shutdown_request(request)
@@ -527,7 +553,19 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     def _check_origin(self) -> None:
         """DNS-rebinding guard: a present Origin must be loopback, our public
-        origin, or allow-listed."""
+        origin, or allow-listed.
+
+        A request with no Origin passes even when its Host is foreign (a
+        rebound name). That is acceptable because every path that dispatches
+        or changes state (POST /mcp, POST /messages, DELETE /mcp and the OAuth
+        POSTs) is a non-GET request, and browsers send Origin on every non-GET
+        request, same-origin ones included -- which is what a rebinding page's
+        requests are -- so they are caught here. A non-browser client that
+        omits Origin is not a rebinding attack. GET paths are readable without
+        Origin, but expose only counts (/healthz), public OAuth metadata and the
+        login pages (whose state changes are POSTs); the streams (GET /mcp,
+        GET /sse) need a bearer token (``--no-auth`` is loopback-only).
+        """
         origin = self.headers.get("Origin")
         if origin and not self._origin_ok(origin):
             raise _Reject(HTTPStatus.FORBIDDEN, "Origin not allowed")
@@ -562,12 +600,12 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _read_body(self) -> bytes:
         if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Chunked bodies are not supported")
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
+        # ASCII digits only: int() would also take "+1", "-0", "1_0" and
+        # non-ASCII digits, none of which a valid Content-Length may be.
+        raw = self.headers.get("Content-Length", "0").strip()
+        if not (raw.isascii() and raw.isdigit()):
             raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
-        if length < 0:
-            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+        length = int(raw)
         if length > self.server.config.max_body_bytes:
             raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large")
         try:
@@ -575,6 +613,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         except (TimeoutError, OSError):  # client stalled (socket.timeout) or vanished
             self.close_connection = True
             raise _Reject(HTTPStatus.REQUEST_TIMEOUT, "Request timed out")
+        if len(body) < length:  # EOF before the declared length: never parse a partial body
+            self.close_connection = True
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Incomplete request body")
         self.close_connection = self._client_wants_close  # body consumed: keep-alive is safe
         return body
 
@@ -696,6 +737,10 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         The caller's tenant is the token's ``client_id`` (never its subject, a
         person's login); ``None`` when auth is off. Dispatch is synchronous on
         this thread, so the tool handlers see it via ``current_principal``.
+        This is the only place the principal is set for HTTP: both POST /mcp
+        and the legacy POST /messages route through here, and the ``finally``
+        resets it even when dispatch raises, so a keep-alive connection's next
+        request never inherits it.
         """
         reset = current_principal.set(info.client_id if info else None)
         try:
@@ -1081,7 +1126,13 @@ def make_server(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFA
         oauth_provider = None
     elif oauth_provider is None:
         raise ValueError("the gated HTTP transport needs an OAuthProvider (or no_auth=True)")
-    return McpHTTPServer((host, port), mcp, config or HttpConfig.from_env(), oauth_provider)
+    config = config or HttpConfig.from_env()
+    if config.max_sessions >= config.max_connections:
+        log(f"Warning: NUVEL_MCP_MAX_SESSIONS ({config.max_sessions}) >= "
+            f"NUVEL_MCP_MAX_CONNECTIONS ({config.max_connections}): every open SSE stream "
+            "holds a connection, so streams can use up all connections before the "
+            "session cap applies. Keep sessions below connections.")
+    return McpHTTPServer((host, port), mcp, config, oauth_provider)
 
 
 def serve_http(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,

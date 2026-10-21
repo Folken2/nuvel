@@ -655,13 +655,48 @@ def test_open_sse_stream_outlives_the_read_timeout(server_factory):
         conn.close()
 
 
-def test_chunked_body_is_411(server_factory):
+@pytest.mark.parametrize("encoding", ["chunked", "Chunked", "CHUNKED"])
+def test_chunked_body_is_411(server_factory, encoding):
     client = server_factory()
     head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
             f"Authorization: Bearer {client.token}\r\n"
-            "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n").encode()
+            f"Transfer-Encoding: {encoding}\r\n\r\n0\r\n\r\n").encode()
     data, _ = _raw(client, head)
     assert data.startswith(b"HTTP/1.1 411")
+
+
+@pytest.mark.parametrize("value", [
+    b"abc", b"12abc", b"-1", b"-0", b"+10", b"1_0", b"0x10", b"1e3", b"",
+    "\u0661\u0662".encode("utf-8"),  # Arabic-Indic digits
+    b"\xb2",                         # latin-1 superscript two
+])
+def test_malformed_content_length_is_400(server_factory, value):
+    client = server_factory()
+    body = json.dumps(INIT).encode()
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Authorization: Bearer {client.token}\r\nContent-Type: application/json\r\n"
+            "Connection: close\r\n").encode() + b"Content-Length: " + value + b"\r\n\r\n"
+    data, _ = _raw(client, head, body)
+    assert data.startswith(b"HTTP/1.1 400"), data
+    assert b"Invalid Content-Length" in data
+    if value:
+        assert value not in data.split(b"\r\n\r\n", 1)[1]  # never echoed
+
+
+def test_body_shorter_than_content_length_at_eof_is_400(server_factory):
+    import socket
+    client = server_factory()
+    body = json.dumps(INIT).encode()  # a complete, valid JSON-RPC message ...
+    head = _post_head(client, len(body) + 50)  # ... that is shorter than declared
+    with socket.create_connection((client.host, client.port), timeout=TIMEOUT) as sock:
+        sock.sendall(head + body)
+        sock.shutdown(socket.SHUT_WR)  # EOF before the declared length
+        chunks = []
+        while data := sock.recv(4096):
+            chunks.append(data)
+    data = b"".join(chunks)
+    assert data.startswith(b"HTTP/1.1 400"), data
+    assert b"Mcp-Session-Id" not in data and b'"result"' not in data
 
 
 def test_more_than_one_authorization_header_is_401(server_factory):
@@ -760,6 +795,68 @@ def test_connections_over_the_cap_get_503_and_a_slot_frees_up(server_factory):
     finally:
         for sock in stalled:
             sock.close()
+
+
+def test_connection_cap_503_drains_pending_bytes_before_closing(server_factory):
+    """With request bytes still unread, closing would send a TCP reset, which
+    can discard the 503 before the client reads it. The server drains them, so
+    the client reads the 503 and then a clean end-of-stream."""
+    import socket
+    client = server_factory(max_connections=1)
+    httpd = client.httpd
+    assert httpd._slots.acquire(blocking=False)  # the cap is reached
+    listener = socket.create_server(("127.0.0.1", 0))
+    try:
+        with socket.create_connection(listener.getsockname(), timeout=TIMEOUT) as sock:
+            body = json.dumps(INIT).encode() + b" " * 8000
+            sock.sendall(_post_head(client, len(body)) + body)
+            conn, addr = listener.accept()
+            time.sleep(0.2)  # the request bytes are now queued on the server side
+            httpd.process_request(conn, addr)
+            data = sock.recv(4096)
+            assert data.startswith(b"HTTP/1.1 503"), data
+            assert b"Retry-After: 1" in data
+            assert sock.recv(4096) == b""  # FIN, not ConnectionResetError
+    finally:
+        listener.close()
+        httpd._slots.release()
+
+
+def test_dispatch_resets_the_principal_after_a_handler_raises():
+    """``_dispatch_all`` restores the caller's principal even when dispatch
+    raises, so a keep-alive connection's next request never inherits it."""
+    from types import SimpleNamespace
+
+    from nuvel_mcp.auth import current_principal
+    from nuvel_mcp.http_transport import McpRequestHandler
+
+    seen = []
+
+    def boom(messages):
+        seen.append(current_principal.get())
+        raise RuntimeError("handler failed")
+
+    fake = SimpleNamespace(_dispatch_each=boom)
+    info = SimpleNamespace(client_id="tenant-a")
+    assert current_principal.get() is None
+    with pytest.raises(RuntimeError):
+        McpRequestHandler._dispatch_all(fake, [{}], info)
+    assert seen == ["tenant-a"]
+    assert current_principal.get() is None
+
+
+def test_sessions_at_or_over_the_connection_cap_warn_at_startup(hub, tmp_path, capsys):
+    from nuvel_mcp.http_transport import make_server
+
+    for sessions, connections, warned in ((64, 128, False), (8, 8, True), (9, 8, True)):
+        mcp = SkillsMCPServer(SkillsLoader.from_base(hub))
+        cfg = HttpConfig(max_sessions=sessions, max_connections=connections)
+        httpd = make_server(mcp, "127.0.0.1", 0, cfg, no_auth=True)
+        httpd.server_close()
+        err = capsys.readouterr().err
+        assert ("NUVEL_MCP_MAX_SESSIONS" in err) is warned, (sessions, connections, err)
+        if warned:
+            assert "NUVEL_MCP_MAX_CONNECTIONS" in err
 
 
 @pytest.mark.parametrize("name, value", [
