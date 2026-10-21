@@ -24,6 +24,7 @@ import importlib
 import json
 import re
 import threading
+from collections import OrderedDict
 from datetime import date, datetime, timezone
 from functools import lru_cache
 from importlib import resources
@@ -243,7 +244,11 @@ class TraceStore(Protocol):
     """Where normalised traces go. ``nuvel-cloud`` plugs in its own."""
 
     def append(self, trace: dict) -> bool:
-        """Store a normalised trace; ``False`` if its ``run_id`` is a duplicate."""
+        """Store a normalised trace; ``False`` if it is a duplicate.
+
+        A duplicate is the same ``(tenant, run_id)`` already stored; another
+        tenant's identical ``run_id`` is not one.
+        """
         ...
 
     def query(self, plugin: str, skill: str, since: datetime, tenant: str | None) -> list[dict]:
@@ -254,27 +259,77 @@ class TraceStore(Protocol):
         ...
 
 
+class _DayIndex:
+    """Dedupe keys already in one day file, and how far into it they were read."""
+
+    __slots__ = ("inode", "offset", "keys")
+
+    def __init__(self, inode: int):
+        self.inode = inode
+        self.offset = 0
+        self.keys: set[tuple[object, object]] = set()
+
+
 class LocalTraceStore:
     """JSONL files at ``{feedback_dir}/_runs/{plugin}.{skill}/{YYYY-MM-DD}.jsonl``.
 
-    One line per run, dated by the normalised (UTC) ``started_at``. Appends are
-    serialised per file by a lock (check-then-write for ``run_id`` idempotency)
-    and each line is a single ``write()`` in append mode.
+    One line per run, dated by the normalised (UTC) ``started_at``. Each line is
+    a single ``write()`` in append mode.
+
+    Idempotency: a run is a duplicate when its ``(tenant, run_id)`` is already in
+    the same UTC day file (``tenant`` absent counts as its own key). Appends to a
+    file are serialised by one of ``LOCK_STRIPES`` process-wide locks (a fixed
+    pool, so the registry never grows with the number of files), and the check
+    runs against an in-memory index of that file's keys.
+
+    The index stores the byte offset it has read up to and the file's inode. On
+    every append it reads only the complete lines past that offset, so lines
+    written by another process (or another store instance) are picked up before
+    the check; if the file shrank or was replaced (different inode) the index is
+    rebuilt from the start. At most ``MAX_INDEXED_FILES`` day files are indexed
+    per store; the least recently used is dropped and rebuilt lazily from disk.
     """
 
-    _locks: dict[Path, threading.Lock] = {}
-    _locks_guard = threading.Lock()
+    LOCK_STRIPES = 64
+    MAX_INDEXED_FILES = 64
+
+    _lock_pool: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(LOCK_STRIPES))
 
     def __init__(self, feedback_dir: Path):
         self.feedback_dir = Path(feedback_dir)
+        self._index: OrderedDict[Path, _DayIndex] = OrderedDict()
+        self._index_guard = threading.Lock()
 
     def _skill_dir(self, plugin: str, skill: str) -> Path:
         return self.feedback_dir / RUNS_DIRNAME / f"{plugin}.{skill}"
 
     @classmethod
     def _lock_for(cls, path: Path) -> threading.Lock:
-        with cls._locks_guard:
-            return cls._locks.setdefault(path, threading.Lock())
+        return cls._lock_pool[hash(str(path)) % len(cls._lock_pool)]
+
+    def _keys_for(self, path: Path) -> set[tuple[object, object]]:
+        """Bring *path*'s index up to date with the file. Caller holds its lock."""
+        with self._index_guard:
+            entry = self._index.pop(path, None)
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            entry = _DayIndex(inode=-1)
+        else:
+            if entry is None or entry.inode != stat.st_ino or stat.st_size < entry.offset:
+                entry = _DayIndex(inode=stat.st_ino)
+            if stat.st_size > entry.offset:
+                records, consumed = _read_complete_lines(path, entry.offset)
+                entry.offset += consumed
+                entry.keys.update(
+                    _dedupe_key(r) for r in records
+                    if isinstance(r.get("run_id"), str) and isinstance(r.get("tenant"), (str, type(None)))
+                )
+        with self._index_guard:
+            self._index[path] = entry
+            while len(self._index) > self.MAX_INDEXED_FILES:
+                self._index.popitem(last=False)
+        return entry.keys
 
     def append(self, trace: dict) -> bool:
         plugin, skill = trace["plugin"]["name"], trace["skill"]["name"]
@@ -283,12 +338,17 @@ class LocalTraceStore:
         day = _parse_started_at(trace["started_at"]).date().isoformat()
         path = (self._skill_dir(plugin, skill) / f"{day}.jsonl").resolve()
         line = json.dumps(trace, ensure_ascii=False, separators=(",", ":")) + "\n"
+        key = _dedupe_key(trace)
         with self._lock_for(path):
-            if any(t.get("run_id") == trace["run_id"] for t in _read_jsonl(path)):
+            keys = self._keys_for(path)
+            if key in keys:
                 return False
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
+            # The offset is not advanced: the next append re-reads this line
+            # along with anything another process wrote meanwhile.
+            keys.add(key)
         return True
 
     def query(self, plugin: str, skill: str, since: datetime, tenant: str | None) -> list[dict]:
@@ -329,6 +389,34 @@ class LocalTraceStore:
 def _name(trace: dict, key: str) -> object:
     entry = trace.get(key)
     return entry.get("name") if isinstance(entry, dict) else None
+
+
+def _dedupe_key(trace: dict) -> tuple[object, object]:
+    return (trace.get("tenant"), trace.get("run_id"))
+
+
+def _read_complete_lines(path: Path, offset: int) -> tuple[list[dict], int]:
+    """JSON objects on the complete lines of *path* after byte *offset*.
+
+    Returns the records and how many bytes were consumed; a trailing line with
+    no newline yet (a write still in progress) is left for the next read.
+    """
+    try:
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            data = fh.read()
+    except FileNotFoundError:
+        return [], 0
+    end = data.rfind(b"\n") + 1
+    records = []
+    for raw in data[:end].splitlines():
+        try:
+            record = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records, end
 
 
 def _read_jsonl(path: Path) -> list[dict]:

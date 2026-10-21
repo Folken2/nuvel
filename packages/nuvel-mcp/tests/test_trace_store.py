@@ -5,11 +5,12 @@ import sys
 import types
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from nuvel_mcp import traces as traces_mod
 from nuvel_mcp.traces import LocalTraceStore, load_trace_store, normalize
 
 FIXTURE = Path(__file__).parent / "fixtures" / "skill_run_example.json"
@@ -82,6 +83,149 @@ def test_concurrent_duplicate_appends_record_once(tmp_path, example):
     assert results.count(True) == 1
     lines = next((tmp_path / "_runs").rglob("*.jsonl")).read_text().splitlines()
     assert len(lines) == 1
+
+
+DAY = Path("_runs") / "chief-of-staff.radar" / "2026-10-20.jsonl"
+
+
+@pytest.mark.parametrize("first,second,stored", [
+    ("acme", "other", True),   # another tenant's identical run_id is stored
+    ("acme", "acme", False),   # same tenant's repeat is a duplicate
+    (None, "acme", True),      # no tenant is its own key
+    ("acme", None, True),
+    (None, None, False),
+])
+def test_dedupe_keys_on_tenant_and_run_id(tmp_path, example, first, second, stored):
+    store = LocalTraceStore(tmp_path)
+    assert store.append(normalize(example, first)) is True
+    assert store.append(normalize(example, second)) is stored
+    assert len((tmp_path / DAY).read_text().splitlines()) == (2 if stored else 1)
+
+
+def test_dedupe_window_is_the_utc_day_file(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    assert store.append(normalize({**example, "started_at": "2026-10-20T10:00:00Z"}, None)) is True
+    assert store.append(normalize({**example, "started_at": "2026-10-21T10:00:00Z"}, None)) is True
+
+
+def test_append_reads_only_new_bytes(tmp_path, example, monkeypatch):
+    store = LocalTraceStore(tmp_path)
+    offsets = []
+    real = traces_mod._read_complete_lines
+
+    def spy(path, offset):
+        offsets.append(offset)
+        return real(path, offset)
+
+    monkeypatch.setattr(traces_mod, "_read_complete_lines", spy)
+    monkeypatch.setattr(traces_mod, "_read_jsonl", lambda p: pytest.fail("append rescanned the file"))
+    sizes_before = []
+    for _ in range(5):
+        path = tmp_path / DAY
+        sizes_before.append(path.stat().st_size if path.exists() else 0)
+        store.append(normalize({**example, "run_id": str(uuid.uuid4())}, None))
+    # Each append reads from where the previous append's own line began: one
+    # line, never the whole file (the first append has no file to read).
+    assert offsets == sizes_before[:-1] and offsets[1:] and all(offsets[1:])
+
+
+def test_index_sees_lines_appended_by_another_process(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    assert store.append(normalize({**example, "run_id": str(uuid.uuid4())}, None)) is True
+    foreign = normalize(example, "acme")
+    with (tmp_path / DAY).open("a", encoding="utf-8") as fh:  # what another process does
+        fh.write(json.dumps(foreign) + "\n")
+    assert store.append(foreign) is False
+    assert store.append(normalize(example, "other")) is True
+
+
+def test_index_waits_for_a_partial_trailing_line_to_complete(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    store.append(normalize({**example, "run_id": str(uuid.uuid4())}, None))
+    foreign = json.dumps(normalize(example, None))
+    path = tmp_path / DAY
+    with path.open("a", encoding="utf-8") as fh:  # another process, mid-write
+        fh.write(foreign[:20])
+    # Our append lands after the partial bytes; the index must not skip past them.
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(foreign[20:] + "\n")
+    assert store.append(normalize(example, None)) is False
+
+
+def test_index_does_not_consume_a_partial_line(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    store.append(normalize({**example, "run_id": str(uuid.uuid4())}, None))
+    path = tmp_path / DAY
+    complete = path.stat().st_size
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"run_id": "half')
+    entries, consumed = traces_mod._read_complete_lines(path, complete)
+    assert entries == [] and consumed == 0
+
+
+def test_index_skips_malformed_lines(tmp_path, example):
+    path = tmp_path / DAY
+    path.parent.mkdir(parents=True)
+    path.write_text('not json\n[1]\n{"run_id": ["x"]}\n{"run_id": "a", "tenant": {"x": 1}}\n\xff\n',
+                    encoding="latin-1")
+    store = LocalTraceStore(tmp_path)
+    assert store.append(normalize(example, None)) is True
+    assert store.append(normalize(example, None)) is False
+
+
+def test_index_rebuilds_when_the_file_is_replaced(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    kept = normalize({**example, "run_id": str(uuid.uuid4())}, None)
+    dropped = normalize({**example, "run_id": str(uuid.uuid4())}, None)
+    store.append(kept)
+    store.append(dropped)
+    path = tmp_path / DAY
+    replacement = path.with_suffix(".tmp")
+    replacement.write_text(json.dumps(kept) + "\n", encoding="utf-8")
+    replacement.replace(path)  # rotated / compacted by another process
+    assert store.append(dropped) is True
+    assert store.append(kept) is False
+
+
+def test_index_rebuilds_when_the_file_shrinks(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    t = normalize(example, None)
+    store.append(t)
+    (tmp_path / DAY).write_text("", encoding="utf-8")  # truncated in place
+    assert store.append(t) is True
+
+
+def test_index_is_bounded_and_evicted_entries_reload_from_disk(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    first = normalize({**example, "started_at": "2026-01-01T10:00:00Z"}, None)
+    store.append(first)
+    for i in range(LocalTraceStore.MAX_INDEXED_FILES + 10):
+        day = date(2026, 3, 1) + timedelta(days=i)
+        store.append(normalize({**example, "run_id": str(uuid.uuid4()),
+                                "started_at": f"{day.isoformat()}T10:00:00Z"}, None))
+    assert len(store._index) <= LocalTraceStore.MAX_INDEXED_FILES
+    assert store.append(first) is False
+
+
+def test_lock_registry_is_bounded(tmp_path):
+    store = LocalTraceStore(tmp_path)
+    paths = [tmp_path / f"{i}.jsonl" for i in range(1000)]
+    locks = {id(store._lock_for(p)) for p in paths}
+    assert len(locks) <= LocalTraceStore.LOCK_STRIPES
+    assert store._lock_for(paths[0]) is store._lock_for(Path(str(paths[0])))
+
+
+def test_concurrent_mixed_appends_keep_index_exact(tmp_path, example):
+    run_ids = [str(uuid.uuid4()) for _ in range(10)]
+    tenants = [None, "acme", "other"]
+    work = [normalize({**example, "run_id": r}, t) for r in run_ids for t in tenants] * 4
+    stores = [LocalTraceStore(tmp_path) for _ in range(3)]  # separate indexes, shared file
+    with ThreadPoolExecutor(16) as ex:
+        results = list(ex.map(lambda ix: stores[ix[0] % 3].append(ix[1]), enumerate(work)))
+    assert results.count(True) == len(run_ids) * len(tenants)
+    lines = [json.loads(l) for l in (tmp_path / DAY).read_text().splitlines()]
+    keys = [(l.get("tenant"), l["run_id"]) for l in lines]
+    assert len(keys) == len(set(keys)) == len(run_ids) * len(tenants)
 
 
 def _run(example, started_at, tenant=None, skill="radar"):
