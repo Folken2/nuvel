@@ -89,6 +89,7 @@ DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_MAX_SESSIONS = 64
 DEFAULT_SESSION_TTL = 3600.0
 DEFAULT_PING_INTERVAL = 15.0
+DEFAULT_READ_TIMEOUT = 30.0
 CORS_MAX_AGE = 600
 
 SESSION_HEADER = "Mcp-Session-Id"
@@ -122,6 +123,8 @@ class HttpConfig:
     max_sessions: int = DEFAULT_MAX_SESSIONS
     session_ttl: float = DEFAULT_SESSION_TTL
     ping_interval: float = DEFAULT_PING_INTERVAL
+    # Seconds a client may stall while sending request headers or body.
+    read_timeout: float = DEFAULT_READ_TIMEOUT
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
     # The origin clients reach this server at (NUVEL_MCP_PUBLIC_URL). It is the
     # OAuth issuer and resource; unset, the origin is derived from Host.
@@ -134,6 +137,7 @@ class HttpConfig:
             max_body_bytes=_env_int("NUVEL_MCP_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
             max_sessions=_env_int("NUVEL_MCP_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
             session_ttl=_env_float("NUVEL_MCP_SESSION_TTL", DEFAULT_SESSION_TTL),
+            read_timeout=_env_float("NUVEL_MCP_READ_TIMEOUT", DEFAULT_READ_TIMEOUT),
             allowed_origins=frozenset(
                 o for o in (_normalize_origin(x) for x in origins.split(",")) if o
             ),
@@ -354,6 +358,12 @@ _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
 class McpRequestHandler(BaseHTTPRequestHandler):
+    def setup(self) -> None:
+        # StreamRequestHandler applies ``timeout`` to the socket: a stalled
+        # header or body read frees the thread. SSE streams only write.
+        self.timeout = self.server.config.read_timeout or None
+        super().setup()
+
     server: McpHTTPServer
     protocol_version = "HTTP/1.1"
     server_version = "nuvel-skills-mcp"
@@ -435,7 +445,11 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
         if length > self.server.config.max_body_bytes:
             raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large")
-        body = self.rfile.read(length) if length else b""
+        try:
+            body = self.rfile.read(length) if length else b""
+        except (TimeoutError, OSError):  # client stalled (socket.timeout) or vanished
+            self.close_connection = True
+            raise _Reject(HTTPStatus.REQUEST_TIMEOUT, "Request timed out")
         self.close_connection = self._client_wants_close  # body consumed: keep-alive is safe
         return body
 
@@ -497,6 +511,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         return {"WWW-Authenticate": "Bearer " + ", ".join(params)}
 
     def _bearer(self) -> str | None:
+        if len(self.headers.get_all("Authorization") or []) > 1:
+            return None  # ambiguous credentials: refuse before any token check
         scheme, _, presented = (self.headers.get("Authorization") or "").partition(" ")
         if scheme.lower() != "bearer" or not presented.strip():
             return None

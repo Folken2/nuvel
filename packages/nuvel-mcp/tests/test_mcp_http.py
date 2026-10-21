@@ -503,3 +503,88 @@ def test_cli_serves_http_and_shuts_down_on_sigterm(hub, tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+# --- Slow clients, chunked bodies, duplicate credentials --------------------------
+
+
+def _raw(client, head: bytes, then: bytes = b"", wait: float = 0.0) -> tuple[bytes, float]:
+    """Send ``head`` (+ ``then``), return (everything read until EOF/timeout, seconds)."""
+    import socket
+    started = time.monotonic()
+    with socket.create_connection((client.host, client.port), timeout=TIMEOUT) as sock:
+        sock.sendall(head)
+        if then:
+            sock.sendall(then)
+        chunks = []
+        try:
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                chunks.append(data)
+        except (TimeoutError, ConnectionResetError):
+            pass
+    return b"".join(chunks), time.monotonic() - started
+
+
+def _post_head(client, length: int) -> bytes:
+    return (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Authorization: Bearer {client.token}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {length}\r\n\r\n").encode()
+
+
+def test_lying_content_length_times_out_with_408(server_factory):
+    client = server_factory(read_timeout=0.5)
+    data, elapsed = _raw(client, _post_head(client, 1000), b"x" * 10)
+    assert data.startswith(b"HTTP/1.1 408")
+    assert b"xxxxxxxxxx" not in data
+    assert elapsed < TIMEOUT
+
+
+def test_stalled_headers_free_the_thread(server_factory):
+    client = server_factory(read_timeout=0.5)
+    data, elapsed = _raw(client, b"POST /mcp HTTP/1.1\r\nHost: x\r\n")
+    assert elapsed < TIMEOUT  # connection closed by the server, not by our own timeout
+    assert b"200" not in data
+
+
+def test_normal_request_still_works_with_a_read_timeout(server_factory):
+    client = server_factory(read_timeout=0.5)
+    assert client.post(INIT)[0] == 200
+
+
+def test_open_sse_stream_outlives_the_read_timeout(server_factory):
+    client = server_factory(read_timeout=0.3)
+    session = client.initialize()
+    conn, resp = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+    try:
+        assert resp.status == 200
+        time.sleep(1.0)  # > 3x the read timeout, with pings flowing (ping_interval 0.2)
+        status, _, _ = client.post({"jsonrpc": "2.0", "method": "notifications/initialized"},
+                                   session)
+        assert status in (200, 202)
+        assert resp.fp is not None and not resp.isclosed()
+    finally:
+        conn.close()
+
+
+def test_chunked_body_is_411(server_factory):
+    client = server_factory()
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Authorization: Bearer {client.token}\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n").encode()
+    data, _ = _raw(client, head)
+    assert data.startswith(b"HTTP/1.1 411")
+
+
+def test_more_than_one_authorization_header_is_401(server_factory):
+    client = server_factory()
+    body = json.dumps(INIT).encode()
+    for second in (client.token, "wrong"):  # a valid token must not rescue it
+        head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+                f"Authorization: Bearer {client.token}\r\n"
+                f"authorization: Bearer {second}\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode()
+        data, _ = _raw(client, head, body)
+        assert data.startswith(b"HTTP/1.1 401"), data

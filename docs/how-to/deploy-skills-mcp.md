@@ -55,7 +55,7 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to log in. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
 | `NUVEL_OAUTH_REDIRECT_ALLOWLIST` | Extra redirect URIs accepted at client registration, beyond `https://` and loopback ones. |
 | `NUVEL_MCP_OAUTH_STORE` | The token and client store (default `~/.nuvel/oauth.json`, mode 0600). Tokens and secrets are kept only as hashes. Put it on a persistent volume. |
-| `NUVEL_MCP_ALLOWED_ORIGINS`, `NUVEL_MCP_MAX_BODY_BYTES`, `NUVEL_MCP_MAX_SESSIONS`, `NUVEL_MCP_SESSION_TTL` | Optional tuning of the origin allow-list and the request and session caps. |
+| `NUVEL_MCP_ALLOWED_ORIGINS`, `NUVEL_MCP_MAX_BODY_BYTES`, `NUVEL_MCP_MAX_SESSIONS`, `NUVEL_MCP_SESSION_TTL`, `NUVEL_MCP_READ_TIMEOUT` | Optional tuning of the origin allow-list, the request and session caps and the request read timeout. |
 
 Keep the GitHub secret and every other credential in your secret manager and
 inject it as an environment variable; never put one on a command line or in a
@@ -169,10 +169,12 @@ tenant, which is what `client create` is for.
 
 | Condition | Response |
 |---|---|
-| Missing, invalid or expired access token | `401` |
+| Missing, invalid or expired access token, or more than one `Authorization` header | `401` |
 | Valid token without the scope the method needs | `403` |
 | `Origin` not allowed | `403` |
 | Body over the cap (`NUVEL_MCP_MAX_BODY_BYTES`, default 1 MiB) | `413` |
+| Body sent with `Transfer-Encoding: chunked` | `411` |
+| Client stalls sending headers or body for longer than `NUVEL_MCP_READ_TIMEOUT` seconds (default 30) | `408` for a stalled body; a stalled header just closes the connection |
 | Body that is not valid JSON | `400` |
 
 Error responses do not echo the request body, and a failing trace store reports a
