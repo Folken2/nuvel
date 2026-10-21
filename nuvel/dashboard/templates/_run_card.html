@@ -1,4 +1,4 @@
-<a href="/run/{{ run.trace_id or run.session_id }}" class="ed-run">
+<a href="/run/{{ (run.trace_id or run.session_id)|urlencode|replace("/", "%2F") }}" class="ed-run">
   <div class="time">{{ run.started_at_short }}</div>
   <div>
     <div class="agent">{{ run.agent_display }}</div>

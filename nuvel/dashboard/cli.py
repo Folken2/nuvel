@@ -12,6 +12,7 @@ import uvicorn
 from nuvel.dashboard.app import build_app
 from nuvel.dashboard.loader import TraceLoader
 from nuvel.traces_cli import _discover_trace_dirs
+from nuvel_mcp.feedback import resolve_feedback_dir
 
 
 def _resolve_sources(args: argparse.Namespace) -> list[Path]:
@@ -19,6 +20,13 @@ def _resolve_sources(args: argparse.Namespace) -> list[Path]:
         fixtures = Path(__file__).resolve().parent / "fixtures"
         return [fixtures]
     return _discover_trace_dirs(args.source)
+
+
+def _skill_roots(args: argparse.Namespace) -> list[Path]:
+    """Roots whose `_runs` trees are re-scanned while the dashboard runs."""
+    if args.demo:
+        return []
+    return [resolve_feedback_dir()] + [Path(s) for s in args.source or []]
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -34,10 +42,11 @@ def _port_in_use(host: str, port: int) -> bool:
 
 def _cmd_dashboard(args: argparse.Namespace) -> int:
     sources = _resolve_sources(args)
-    loader = TraceLoader(sources=sources)
+    skill_roots = _skill_roots(args)
+    loader = TraceLoader(sources=sources, skill_roots=skill_roots)
 
     from nuvel.dashboard.watcher import RunWatcher
-    watcher = None if args.demo else RunWatcher(sources=sources)
+    watcher = None if args.demo else RunWatcher(sources=sources, skill_roots=skill_roots)
 
     app = build_app(loader, watcher=watcher)
 

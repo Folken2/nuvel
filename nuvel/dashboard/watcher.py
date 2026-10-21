@@ -18,6 +18,7 @@ from nuvel.traces_cli import (
     Run,
     _iter_trace_files,
     _parse_file_runs,
+    _with_skill_run_dirs,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,16 @@ logger = logging.getLogger(__name__)
 class RunWatcher:
     """Polls trace dirs and emits newly-arrived runs onto a queue."""
 
-    def __init__(self, sources: list[Path], poll_seconds: float = 1.0) -> None:
-        self._sources = sources
+    def __init__(
+        self,
+        sources: list[Path],
+        poll_seconds: float = 1.0,
+        skill_roots: list[Path] | None = None,
+    ) -> None:
+        self._static_sources = sources
+        # Roots re-walked for `_runs` dirs on every poll, so a `plugin.skill`
+        # directory created after startup is picked up.
+        self._skill_roots = list(skill_roots or [])
         self._poll = poll_seconds
         # TODO: bound this set (e.g. LRU cap at 10k) once the dashboard is
         # used in long-running scenarios. For the demo / short sessions it
@@ -43,7 +52,8 @@ class RunWatcher:
 
     def _snapshot(self) -> dict[str, Run]:
         out: dict[str, Run] = {}
-        for f in _iter_trace_files(self._sources):
+        sources = _with_skill_run_dirs(self._static_sources, self._skill_roots)
+        for f in _iter_trace_files(sources):
             # keep_events=True so RunView.has_error correctly detects
             # streamed-in error runs at render time.
             for run in _parse_file_runs(f, keep_events=True):

@@ -20,17 +20,28 @@ from nuvel.traces_cli import (
     _iter_trace_files,
     _parse_file_runs,
     _sort_runs,
+    _with_skill_run_dirs,
 )
 
 
 class TraceLoader:
     """Loads `Run` records from a fixed list of source directories."""
 
-    def __init__(self, sources: list[Path]) -> None:
-        self._sources = sources
+    def __init__(self, sources: list[Path], skill_roots: list[Path] | None = None) -> None:
+        self._static_sources = sources
+        self._skill_roots = list(skill_roots or [])
+
+    @property
+    def _sources(self) -> list[Path]:
+        # Re-scanned on every access so `_runs/<plugin>.<skill>` dirs created
+        # after startup show up without a restart.
+        return _with_skill_run_dirs(self._static_sources, self._skill_roots)
+
+    def skill_roots(self) -> list[Path]:
+        return list(self._skill_roots)
 
     def sources(self) -> list[Path]:
-        return list(self._sources)
+        return self._sources
 
     def runs(self) -> list[Run]:
         """Return all runs across sources, newest first. Events kept so
@@ -53,14 +64,27 @@ class TraceLoader:
         return out
 
     def find_by_id(self, id_or_prefix: str) -> Run | None:
-        """Find a single run by trace_id or session_id (prefix match)."""
+        """Find a single run by trace_id or session_id (prefix match).
+
+        An exact trace_id wins over an exact session_id, which wins over a
+        prefix, so a skill run's tenant-qualified id (``<run_id>@<tenant>``)
+        addresses one run even when tenants share a run_id.
+        """
+        tiers: list[Run | None] = [None, None, None]
+        for run in self.runs_unsorted():
+            if run.trace_id == id_or_prefix:
+                return run
+            if tiers[1] is None and run.session_id == id_or_prefix:
+                tiers[1] = run
+            elif tiers[2] is None and (
+                (run.trace_id and run.trace_id.startswith(id_or_prefix))
+                or (run.session_id and run.session_id.startswith(id_or_prefix))
+            ):
+                tiers[2] = run
+        return tiers[1] or tiers[2]
+
+    def runs_unsorted(self) -> list[Run]:
+        out: list[Run] = []
         for f in _iter_trace_files(self._sources):
-            for run in _parse_file_runs(f, keep_events=True):
-                if (
-                    run.trace_id == id_or_prefix
-                    or run.session_id == id_or_prefix
-                    or (run.trace_id and run.trace_id.startswith(id_or_prefix))
-                    or (run.session_id and run.session_id.startswith(id_or_prefix))
-                ):
-                    return run
-        return None
+            out.extend(_parse_file_runs(f, keep_events=True))
+        return out

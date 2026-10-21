@@ -24,6 +24,7 @@ from nuvel.traces_cli import Run, step_error_rates
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent
 _ERROR_EVENTS = {"llm_error", "tool_exception"}
+_MAX_STEP_ROWS = 50  # "Skill steps" table cap; the rest collapse to "+N more"
 
 
 def _short_int(n: int) -> str:
@@ -124,6 +125,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
 
     def _home_context(runs: list[Run]) -> dict:
         scored = loader.scored_index()
+        all_rates = step_error_rates(runs)  # sorted worst-first
         views = [_view(r, scored.get(r.trace_id or r.session_id)) for r in runs]
         agents = sorted({r.agent.split("/")[0] for r in runs})
         total_tokens = sum(r.total_tokens or 0 for r in runs)
@@ -138,8 +140,9 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
             "recent_error": next((v for v in views if v.has_error), None),
             "step_rates": [
                 {"step": sid, "runs": n, "errors": bad}
-                for sid, n, bad in step_error_rates(runs)
+                for sid, n, bad in all_rates[:_MAX_STEP_ROWS]
             ],
+            "step_rates_more": max(0, len(all_rates) - _MAX_STEP_ROWS),
             "window_label": "all time",
             "live": watcher is not None,
         }
@@ -149,7 +152,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
         runs = loader.runs()
         return templates.TemplateResponse(request, "home.html", _home_context(runs))
 
-    @app.get("/run/{trace_id}", response_class=HTMLResponse)
+    @app.get("/run/{trace_id:path}", response_class=HTMLResponse)
     def run_detail(request: Request, trace_id: str) -> HTMLResponse:
         run = loader.find_by_id(trace_id)
         if run is None:
@@ -172,7 +175,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
         # Each SSE connection gets its own watcher + queue so multi-tab and
         # reconnect work cleanly. Disconnect tears down only this client's loop.
         from nuvel.dashboard.watcher import RunWatcher
-        own_watcher = RunWatcher(sources=loader.sources())
+        own_watcher = RunWatcher(sources=loader._static_sources, skill_roots=loader.skill_roots())
         queue: asyncio.Queue[Run] = asyncio.Queue()
         task = asyncio.create_task(own_watcher.run(queue))
         card_template = templates.get_template("_run_card.html")
