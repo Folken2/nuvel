@@ -92,7 +92,7 @@ in UTC, `tenant` stamped by the server) through a `TraceStore`:
 
 ```python
 class TraceStore(Protocol):
-    def append(self, trace: dict) -> bool: ...   # False if the run_id is a duplicate
+    def append(self, trace: dict) -> bool: ...   # False if (tenant, run_id) is a duplicate
     def query(self, plugin, skill, since, tenant) -> list[dict]: ...  # tenant None = all
 ```
 
@@ -105,6 +105,25 @@ The default `LocalTraceStore` writes one line per run to
 dated by the UTC `started_at`. `_runs` cannot collide with a skill feedback directory
 (skill keys start with an alphanumeric character). `--trace-store module:factory`
 plugs in another store; the factory is called with no arguments.
+
+### Duplicates
+
+`append` returns `False` (and `record_run_trace` answers `duplicate`) when the same
+**`(tenant, run_id)`** is already in the trace's **UTC day file**. The key includes the
+tenant, so another tenant sending an identical `run_id` is stored, not reported as a
+duplicate (and learns nothing about the other tenant); a trace without a tenant (stdio,
+`--no-auth`) is its own key. The dedupe window is that one day file: a `run_id`
+resent with a `started_at` on another UTC day is stored again.
+
+The check does not rescan the file. Each store keeps an in-memory index per day file
+(the keys seen, the byte offset read up to, and the file's inode) and, on every append,
+reads only the complete lines past that offset before checking. Lines written by
+another process or store instance are therefore seen; a trailing line still being
+written is left for the next read. If the file shrank or its inode changed (truncated,
+rotated, replaced) the index is rebuilt from the start. At most 64 day files are
+indexed per store (least recently used dropped, rebuilt lazily from disk), and appends
+are serialised by a fixed pool of 64 striped locks, so neither grows with the number of
+files.
 
 ## Relay
 
@@ -143,9 +162,15 @@ and `install_skill` are exposed only when named in `--tools`.
 
 ## Known limitations
 
-- **Duplicate detection is per process.** The `run_id` check runs under an in-process
-  lock, so two server processes appending to the same store can both accept the same
-  `run_id`. Readers should treat `run_id` as the dedup key.
+- **Duplicate detection is not atomic across processes.** The check-then-write runs
+  under an in-process lock. The index picks up other processes' lines, but two server
+  processes appending the same `(tenant, run_id)` at the same instant can both accept
+  it. Readers should treat `(tenant, run_id)` as the dedup key.
+- **The local store only grows.** There is no retention, rotation or per-tenant quota:
+  every accepted trace is a line on disk forever, and one authenticated tenant can fill
+  the disk. That is fine for a single-user or small
+  team server; at scale, plug in a store with its own retention and quotas through
+  `--trace-store module:factory` (that is the scale story, not the JSONL files).
 - **Directory names can collide.** `{plugin}.{skill}` is ambiguous when identifiers
   contain `.` (plugin `a.b` + skill `c` and plugin `a` + skill `b.c`), so both land in
   the same files. Records keep the full `plugin` and `skill`, and
