@@ -8,12 +8,28 @@ import zipfile
 import pytest
 
 
-_OFFLINE_MARKERS = (
-    "Could not find a version that satisfies", "No matching distribution",
-    "Failed to establish a new connection", "Temporary failure in name resolution",
-    "Network is unreachable", "Failed to fetch", "dns error", "error sending request",
-    "Connection refused", "Max retries exceeded",
+# Only a failure to fetch the build backend (setuptools/wheel from
+# build-system.requires) or to resolve a host name skips; anything else, such
+# as an unrelated "Connection refused", fails the test.
+_BACKEND_REQUIREMENTS = ("setuptools", "wheel")
+_BACKEND_FETCH_MARKERS = (
+    "Could not find a version that satisfies the requirement {req}",  # pip
+    "No matching distribution found for {req}",  # pip
+    "Failed to fetch: `https://pypi.org/simple/{req}/`",  # uv
 )
+_NAME_RESOLUTION_MARKERS = (
+    "Temporary failure in name resolution",  # glibc
+    "nodename nor servname provided",  # macOS
+    "Name or service not known",
+    "dns error",  # uv
+)
+
+
+def _is_backend_fetch_failure(output: str) -> bool:
+    if any(m in output for m in _NAME_RESOLUTION_MARKERS):
+        return True
+    return any(m.format(req=req) in output
+               for m in _BACKEND_FETCH_MARKERS for req in _BACKEND_REQUIREMENTS)
 
 
 def _build_wheel(pkg: pathlib.Path, out: pathlib.Path) -> None:
@@ -26,9 +42,26 @@ def _build_wheel(pkg: pathlib.Path, out: pathlib.Path) -> None:
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         output = res.stdout + res.stderr
-        if any(m in output for m in _OFFLINE_MARKERS):
+        if _is_backend_fetch_failure(output):
             pytest.skip("cannot fetch the build backend (offline sandbox?)")
         raise AssertionError(f"wheel build failed:\n{output}")
+
+
+@pytest.mark.parametrize("output, offline", [
+    ("ERROR: Could not find a version that satisfies the requirement setuptools>=77", True),
+    ("ERROR: No matching distribution found for setuptools>=77", True),
+    ("Failed to resolve requirements from `build-system.requires`\n"
+     "  Caused by: Failed to fetch: `https://pypi.org/simple/setuptools/`", True),
+    ("getaddrinfo failed: Temporary failure in name resolution", True),
+    ("[Errno 8] nodename nor servname provided, or not known", True),
+    ("dns error: failed to lookup address information", True),
+    # Unrelated failures must fail the test, not skip it.
+    ("ConnectionRefusedError: [Errno 61] Connection refused", False),
+    ("Max retries exceeded with url: /simple/foo/", False),
+    ("error: invalid command 'bdist_wheel'", False),
+])
+def test_only_build_backend_fetch_failures_skip(output, offline):
+    assert _is_backend_fetch_failure(output) is offline
 
 
 def test_wheel_has_no_runtime_dependencies(tmp_path):
