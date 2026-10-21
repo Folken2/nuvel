@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -62,8 +63,13 @@ def _discover_trace_dirs(
 
     for src in extra or []:
         p = Path(src)
-        if p.is_dir() and p not in roots:
-            roots.append(p)
+        if not p.is_dir() or p in roots:
+            continue
+        # Eval never scores skill runs: an explicit source that sits inside a
+        # `_runs` tree is not a trace root for it.
+        if not include_skill_runs and _RUNS_DIRNAME in p.resolve().parts:
+            continue
+        roots.append(p)
 
     # Skill run traces (nuvel.skill_run/1) live one level deeper, under
     # `_runs/<plugin>.<skill>/`. Only `_runs` trees are walked recursively.
@@ -76,17 +82,73 @@ def _discover_trace_dirs(
     return roots
 
 
+_RUNS_DIRNAME = "_runs"
+# Directories never worth descending into while looking for `_runs` trees.
+_PRUNED_DIRS = frozenset({"node_modules", "venv", "__pycache__"})
+
+# Per-command memo of `_skill_run_dirs`, active only inside `discovery_cache()`.
+_walk_cache: dict[Path, list[Path]] | None = None
+
+
+@contextmanager
+def discovery_cache() -> Iterator[None]:
+    """Memoise `_skill_run_dirs` for the duration of one command.
+
+    Eval discovers trace dirs two or three times per run; without this each
+    call walks every `--source` tree again. Not for long-lived processes (the
+    dashboard re-scans on purpose), so it is opt-in and scoped.
+    """
+    global _walk_cache
+    outer = _walk_cache
+    if outer is None:
+        _walk_cache = {}
+    try:
+        yield
+    finally:
+        _walk_cache = outer
+
+
 def _skill_run_dirs(root: Path) -> list[Path]:
-    """Every directory at or under a `_runs` directory found in `root`."""
+    """Every directory at or under a `_runs` directory found in `root`.
+
+    Hidden directories and vendored trees (`node_modules`, virtualenvs,
+    `__pycache__`) are not descended into.
+    """
+    if _walk_cache is not None and root in _walk_cache:
+        return list(_walk_cache[root])
+    found = _walk_skill_run_dirs(root)
+    if _walk_cache is not None:
+        _walk_cache[root] = found
+    return list(found)
+
+
+def _walk_skill_run_dirs(root: Path) -> list[Path]:
     if not root.is_dir():
         return []
+    inside = root.name == _RUNS_DIRNAME  # the whole tree is under `_runs`
     found: list[Path] = []
     for dirpath, dirnames, _files in os.walk(root):
-        dirnames.sort()
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in _PRUNED_DIRS and not d.startswith(".")
+        )
         here = Path(dirpath)
-        if root.name == "_runs" or "_runs" in here.relative_to(root).parts:
+        if inside or _RUNS_DIRNAME in here.relative_to(root).parts:
             found.append(here)
     return found
+
+
+def _with_skill_run_dirs(sources: Iterable[Path], skill_roots: Iterable[Path]) -> list[Path]:
+    """`sources` plus every `_runs` directory currently under `skill_roots`.
+
+    Long-lived readers (dashboard) call this on each scan so a `plugin.skill`
+    directory created after startup is picked up.
+    """
+    out = list(sources)
+    for root in skill_roots:
+        for d in _skill_run_dirs(root):
+            if d not in out:
+                out.append(d)
+    return out
 
 
 # Eval writes scored.jsonl as a sibling of trace files; never treat it
@@ -105,6 +167,12 @@ def _iter_trace_files(dirs: Iterable[Path]) -> Iterator[Path]:
 def _agent_label_for(file: Path) -> str:
     """Derive an agent label from the trace file's location."""
     parts = file.resolve().parts
+    # Skill runs: `<...>/_runs/<plugin>.<skill>/<day>.jsonl` -> `plugin:skill`
+    # (split on the first dot; the record's own plugin/skill names win in
+    # `_skill_run_from_record`, this only labels file-level lookups).
+    if len(parts) >= 3 and parts[-3] == _RUNS_DIRNAME and "." in parts[-2]:
+        plugin, _, skill = parts[-2].partition(".")
+        return f"{plugin}:{skill}"
     if "generated-agents" in parts:
         i = parts.index("generated-agents")
         if i + 1 < len(parts):
@@ -138,6 +206,7 @@ class Run:
     schema: str = "adk"  # "adk" | "casdk" | "skill_run"
     events: list[dict] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)  # skill_run only
+    tenant: str | None = None  # skill_run only; stamped by the nuvel-mcp server
 
     @property
     def key(self) -> str:
@@ -164,6 +233,12 @@ def _skill_run_from_record(path: Path, rec: dict) -> Run | None:
     """Normalise one `nuvel.skill_run/1` record; None when it is malformed."""
     try:
         run_id = str(rec["run_id"])
+        tenant = rec.get("tenant")
+        tenant = tenant if isinstance(tenant, str) else None
+        # Same identity the store dedupes on: (tenant, run_id). '@' is outside
+        # the run_id alphabet, so `<run_id>@<tenant>` cannot collide with a
+        # tenantless run_id; `session_id` stays the bare run_id.
+        trace_id = f"{run_id}@{tenant}" if tenant is not None else run_id
         agent = f"{rec['plugin']['name']}:{rec['skill']['name']}"
         duration_s = rec.get("duration_s")
         steps = [s for s in rec.get("steps") or [] if isinstance(s, dict)]
@@ -172,7 +247,8 @@ def _skill_run_from_record(path: Path, rec: dict) -> Run | None:
             agent=agent,
             file=path,
             session_id=run_id,
-            trace_id=run_id,
+            trace_id=trace_id,
+            tenant=tenant,
             started_at=rec.get("started_at"),
             duration_ms=int(duration_s * 1000) if duration_s is not None else None,
             tool_calls=calls,
@@ -198,7 +274,7 @@ def _parse_file_runs(path: Path, keep_events: bool = False) -> list[Run]:
             if sr is not None:
                 if keep_events:
                     sr.events.append(rec)
-                runs[f"skill_run:{sr.session_id}"] = sr
+                runs[f"skill_run:{sr.trace_id}"] = sr
             continue
 
         # CASDK flat schema: no `event` key, has top-level cost/duration/num_turns.
