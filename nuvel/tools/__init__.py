@@ -6,6 +6,7 @@ from .scaffold_tool import scaffold_agent_tool
 from .validate_tool import validate_agent_tool
 from .skills_tools import search_skills_tool, install_skill_tool, read_skill_context_tool
 from .composio_tools import list_composio_toolkits_tool
+from .shell_tool import run_cli_tool
 
 
 _ALL_TOOLS = {
@@ -18,6 +19,7 @@ _ALL_TOOLS = {
     "install_skill_tool": install_skill_tool,
     "read_skill_context_tool": read_skill_context_tool,
     "list_composio_toolkits_tool": list_composio_toolkits_tool,
+    "run_cli_tool": run_cli_tool,
 }
 
 

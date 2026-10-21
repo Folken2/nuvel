@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+dist/
+build/
+.next/
+out/
+target/
+
+# Secrets and environment
+.env
+.env.*
+*.pem
+*.key
+credentials/
+secrets/
+
+# Large data
+*.zip
+*.tar.gz
+*.csv
+*.parquet
+*.db
+*.sqlite
+data/
+logs/
+
+# IDE files (other than Cursor)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Generated code
+*.generated.*
+*-generated.*
+*.pb.go
+*.pb.cc
+
+# Nuvel local files
+.nuvel-cache/
+.grok/
+.codex/workspace/
+.claude/cache/
+
+# Docker
+.docker/
+docker-compose.override.yml

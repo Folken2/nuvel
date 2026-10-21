@@ -42,6 +42,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
@@ -472,46 +473,88 @@ class _DbWriter:
             logger.error("[TracePlugin] Failed to flush traces to DB: %s", e)
 
 
+def _tool_call_key(tool: BaseTool, tool_context: "ToolContext") -> str:
+    """Identifies one tool call, so parallel calls of a tool time separately."""
+    return getattr(tool_context, "function_call_id", None) or tool.name
+
+
 # ── Plugin ───────────────────────────────────────────────────────────
+
+# Runs whose after_run never fired (a crash mid-run) are dropped oldest-first
+# once this many are open, so a long-lived server can't accumulate them.
+_MAX_OPEN_RUNS = 1024
+
+
+@dataclass
+class _Run:
+    """Everything TracePlugin tracks for one invocation.
+
+    One plugin instance serves every session on a server, often several at
+    once, so nothing run-specific may live on the plugin itself.
+    """
+
+    run_id: str
+    session_id: str
+    conversation: ConversationTraceWriter
+    run_start: float = 0.0
+    llm_starts: dict[str, float] = field(default_factory=dict)
+    tool_starts: dict[str, float] = field(default_factory=dict)
+    llm_call_index: int = 0
+    tool_count: int = 0
+    llm_count: int = 0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    first_system_prompt: str = ""
+    first_tools_available: list[str] = field(default_factory=list)
+    total_cost: float = 0.0
+    peak_context_tokens: int = 0
+    peak_context: Optional[dict] = None
+    # Stack of currently active agents, deepest last. Drives parent_agent
+    # and agent_depth on every record so multi-agent runs are legible
+    # in the flat JSONL.
+    agent_stack: list[str] = field(default_factory=list)
 
 
 class TracePlugin(BasePlugin):
     """Records full agent traces for evals and prompt optimization.
 
     Writes to JSONL files (always) and PostgreSQL (when TRACE_DB=true).
+    Per-run state is keyed by invocation id.
     """
 
     def __init__(self) -> None:
         super().__init__(name="trace")
+        self._trace_dir = _TRACE_DIR
         self._file_writer = _FileWriter(_TRACE_DIR)
         self._db_writer = _DbWriter() if _TRACE_DB else None
-        self._conversation_writer = ConversationTraceWriter(trace_dir=_TRACE_DIR)
-        self._run_id: str = ""
-        self._session_id: str = ""
-        self._run_start: float = 0
-        self._llm_starts: dict[str, float] = {}
-        self._llm_call_index: int = 0
-        self._tool_count: int = 0
-        self._llm_count: int = 0
-        self._total_prompt_tokens: int = 0
-        self._total_completion_tokens: int = 0
-        self._first_system_prompt: str = ""
-        self._first_tools_available: list[str] = []
         self._pricing = _load_pricing()
-        self._total_cost: float = 0.0
         self._windows = _load_windows()
-        self._peak_context_tokens: int = 0
-        self._peak_context: Optional[dict] = None
-        # Stack of currently active agents, deepest last. Drives parent_agent
-        # and agent_depth on every record so multi-agent runs are legible
-        # in the flat JSONL.
-        self._agent_stack: list[str] = []
+        self._runs: dict[str, _Run] = {}
 
         if _TRACE_DB:
             logger.info("[TracePlugin] DB tracing enabled (TRACE_DB=true)")
         logger.info("[TracePlugin] File tracing to %s", _TRACE_DIR)
 
-    def _record(self, event_type: str, data: dict) -> None:
+    def _open_run(self, invocation_context: InvocationContext) -> _Run:
+        """The run for this invocation, created on first sight."""
+        invocation_id = invocation_context.invocation_id
+        run = self._runs.get(invocation_id)
+        if run is None:
+            session = invocation_context.session
+            run = _Run(
+                run_id=uuid.uuid4().hex[:16],
+                session_id=session.id if session else "unknown",
+                conversation=ConversationTraceWriter(trace_dir=self._trace_dir),
+            )
+            self._runs[invocation_id] = run
+            while len(self._runs) > _MAX_OPEN_RUNS:
+                self._runs.pop(next(iter(self._runs)))
+        return run
+
+    def _run_for(self, context: Any) -> Optional[_Run]:
+        return self._runs.get(getattr(context, "invocation_id", None))
+
+    def _record(self, run: Optional[_Run], event_type: str, data: dict) -> None:
         """Build and dispatch a trace record to all writers.
 
         Every record carries the current agent hierarchy: `agent_depth` and
@@ -521,11 +564,12 @@ class TracePlugin(BasePlugin):
         """
         if not _TRACE_ENABLED:
             return
-        depth = len(self._agent_stack)
-        parent = self._agent_stack[-2] if depth >= 2 else None
+        stack = run.agent_stack if run else []
+        depth = len(stack)
+        parent = stack[-2] if depth >= 2 else None
         record = {
-            "trace_id": self._run_id,
-            "session_id": self._session_id,
+            "trace_id": run.run_id if run else "",
+            "session_id": run.session_id if run else "unknown",
             "event": event_type,
             "timestamp": _now_iso(),
             "agent_depth": depth,
@@ -541,7 +585,9 @@ class TracePlugin(BasePlugin):
     async def on_user_message_callback(
         self, *, invocation_context: InvocationContext, user_message: types.Content
     ) -> Optional[types.Content]:
-        self._record("user_message", {
+        # Fires before before_run_callback, so this opens the run.
+        run = self._open_run(invocation_context)
+        self._record(run, "user_message", {
             "content": _extract_text(user_message),
         })
         return None
@@ -551,19 +597,10 @@ class TracePlugin(BasePlugin):
     async def before_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> Optional[types.Content]:
-        self._run_id = uuid.uuid4().hex[:16]
-        self._session_id = (
-            invocation_context.session.id if invocation_context.session else "unknown"
-        )
-        self._run_start = time.monotonic()
-        self._llm_call_index = 0
-        self._tool_count = 0
-        self._llm_count = 0
-        self._total_prompt_tokens = 0
-        self._total_completion_tokens = 0
-        self._agent_stack.clear()
+        run = self._open_run(invocation_context)
+        run.run_start = time.monotonic()
 
-        self._record("run_start", {
+        self._record(run, "run_start", {
             "invocation_id": invocation_context.invocation_id,
             "agent": invocation_context.agent.name,
             "user_input": _extract_text(invocation_context.user_content),
@@ -577,9 +614,9 @@ class TracePlugin(BasePlugin):
                     skills_loaded = [s.name for s in tool.skills]
                     break
 
-        self._conversation_writer.start_run(
-            conversation_id=self._run_id,
-            session_id=self._session_id,
+        run.conversation.start_run(
+            conversation_id=run.run_id,
+            session_id=run.session_id,
             agent=invocation_context.agent.name,
             model="",  # captured on first LLM call
             system_prompt="",  # captured on first LLM call
@@ -591,48 +628,56 @@ class TracePlugin(BasePlugin):
         # before_run, so we'd lose the turn if we added it there)
         user_input = _extract_text(invocation_context.user_content)
         if user_input:
-            self._conversation_writer.add_user_turn(user_input)
+            run.conversation.add_user_turn(user_input)
 
         return None
 
     async def after_run_callback(
         self, *, invocation_context: InvocationContext
     ) -> None:
-        elapsed_ms = round((time.monotonic() - self._run_start) * 1000)
-        self._record("run_end", {
+        run = self._runs.pop(invocation_context.invocation_id, None)
+        if run is None:
+            return
+        elapsed_ms = round((time.monotonic() - run.run_start) * 1000)
+        self._record(run, "run_end", {
             "duration_ms": elapsed_ms,
-            "llm_calls": self._llm_count,
-            "tool_calls": self._tool_count,
-            "total_prompt_tokens": self._total_prompt_tokens,
-            "total_completion_tokens": self._total_completion_tokens,
-            "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
-            "total_cost_usd": round(self._total_cost, 8) if self._total_cost > 0 else None,
-            "peak_context_tokens": self._peak_context_tokens or None,
-            "peak_context": self._peak_context,
+            "llm_calls": run.llm_count,
+            "tool_calls": run.tool_count,
+            "total_prompt_tokens": run.total_prompt_tokens,
+            "total_completion_tokens": run.total_completion_tokens,
+            "total_tokens": run.total_prompt_tokens + run.total_completion_tokens,
+            "total_cost_usd": round(run.total_cost, 8) if run.total_cost > 0 else None,
+            "peak_context_tokens": run.peak_context_tokens or None,
+            "peak_context": run.peak_context,
         })
         if _TRACE_ENABLED:
-            self._conversation_writer.finish_run()
+            run.conversation.finish_run()
 
     # ── Agent lifecycle ──────────────────────────────────────────────
 
     async def before_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
+        run = self._run_for(callback_context)
         # Push BEFORE recording so the record reflects this agent as active.
-        self._agent_stack.append(agent.name)
-        self._record("agent_start", {"agent": agent.name})
+        if run:
+            run.agent_stack.append(agent.name)
+        self._record(run, "agent_start", {"agent": agent.name})
         return None
 
     async def after_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> Optional[types.Content]:
-        self._record("agent_end", {"agent": agent.name})
+        run = self._run_for(callback_context)
+        self._record(run, "agent_end", {"agent": agent.name})
+        if run is None:
+            return None
         # Pop AFTER recording; tolerate mismatched stack on error paths.
-        if self._agent_stack and self._agent_stack[-1] == agent.name:
-            self._agent_stack.pop()
-        elif agent.name in self._agent_stack:
+        if run.agent_stack and run.agent_stack[-1] == agent.name:
+            run.agent_stack.pop()
+        elif agent.name in run.agent_stack:
             # Mid-stack pop (shouldn't happen, but don't leak depth on bugs).
-            self._agent_stack.remove(agent.name)
+            run.agent_stack.remove(agent.name)
         return None
 
     # ── LLM lifecycle ────────────────────────────────────────────────
@@ -640,26 +685,29 @@ class TracePlugin(BasePlugin):
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> Optional[LlmResponse]:
-        self._llm_count += 1
-        self._llm_call_index += 1
+        run = self._run_for(callback_context)
+        if run is None:
+            return None
+        run.llm_count += 1
+        run.llm_call_index += 1
         agent_name = (
             callback_context.agent_name
             if hasattr(callback_context, "agent_name")
             else "unknown"
         )
-        self._llm_starts[agent_name] = time.monotonic()
+        run.llm_starts[agent_name] = time.monotonic()
 
         tools_available = list(llm_request.tools_dict.keys()) if llm_request.tools_dict else []
         system_instruction = _extract_system_instruction(llm_request)
         messages = _extract_messages(llm_request.contents)
 
         # Capture system prompt on first LLM call for the conversation writer
-        if self._llm_call_index == 1 and system_instruction:
-            self._first_system_prompt = system_instruction
-            self._first_tools_available = tools_available
+        if run.llm_call_index == 1 and system_instruction:
+            run.first_system_prompt = system_instruction
+            run.first_tools_available = tools_available
 
-        self._record("llm_request", {
-            "call_index": self._llm_call_index,
+        self._record(run, "llm_request", {
+            "call_index": run.llm_call_index,
             "model": llm_request.model,
             "message_count": len(messages),
             "messages": messages,
@@ -672,18 +720,21 @@ class TracePlugin(BasePlugin):
     async def after_model_callback(
         self, *, callback_context: CallbackContext, llm_response: LlmResponse
     ) -> Optional[LlmResponse]:
+        run = self._run_for(callback_context)
+        if run is None:
+            return None
         agent_name = (
             callback_context.agent_name
             if hasattr(callback_context, "agent_name")
             else "unknown"
         )
-        start = self._llm_starts.pop(agent_name, None)
+        start = run.llm_starts.pop(agent_name, None)
         latency_ms = round((time.monotonic() - start) * 1000) if start else None
 
         usage = _extract_usage(llm_response)
         if usage:
-            self._total_prompt_tokens += usage.get("prompt_tokens") or 0
-            self._total_completion_tokens += usage.get("completion_tokens") or 0
+            run.total_prompt_tokens += usage.get("prompt_tokens") or 0
+            run.total_completion_tokens += usage.get("completion_tokens") or 0
 
         # Calculate cost
         model_id = llm_response.model_version or ""
@@ -696,7 +747,7 @@ class TracePlugin(BasePlugin):
                 self._pricing,
             )
             if cost_usd is not None:
-                self._total_cost += cost_usd
+                run.total_cost += cost_usd
 
         # Context-window occupancy for this call (peak tracked for the summary)
         context_window = None
@@ -708,16 +759,16 @@ class TracePlugin(BasePlugin):
             context_window = compute_context_usage(
                 model_id, used_tokens, self._windows
             )
-            if used_tokens > self._peak_context_tokens:
-                self._peak_context_tokens = used_tokens
-                self._peak_context = context_window
+            if used_tokens > run.peak_context_tokens:
+                run.peak_context_tokens = used_tokens
+                run.peak_context = context_window
 
         text = _extract_text(llm_response.content)
         thinking = _extract_thinking(llm_response.content)
         function_calls = _extract_function_calls(llm_response.content)
 
-        self._record("llm_response", {
-            "call_index": self._llm_call_index,
+        self._record(run, "llm_response", {
+            "call_index": run.llm_call_index,
             "model_version": model_id,
             "latency_ms": latency_ms,
             "turn_complete": llm_response.turn_complete,
@@ -731,14 +782,14 @@ class TracePlugin(BasePlugin):
         })
 
         # Update model/system_prompt on first LLM call
-        if self._llm_call_index == 1:
-            self._conversation_writer.update_run_metadata(
+        if run.llm_call_index == 1:
+            run.conversation.update_run_metadata(
                 model=llm_response.model_version or "",
-                system_prompt=self._first_system_prompt,
-                tools_available=self._first_tools_available,
+                system_prompt=run.first_system_prompt,
+                tools_available=run.first_tools_available,
             )
 
-        self._conversation_writer.add_llm_call(
+        run.conversation.add_llm_call(
             thinking=thinking,
             response=text,
             function_calls=function_calls,
@@ -756,8 +807,9 @@ class TracePlugin(BasePlugin):
         llm_request: LlmRequest,
         error: Exception,
     ) -> Optional[LlmResponse]:
-        self._record("llm_error", {
-            "call_index": self._llm_call_index,
+        run = self._run_for(callback_context)
+        self._record(run, "llm_error", {
+            "call_index": run.llm_call_index if run else None,
             "model": llm_request.model,
             "error_type": type(error).__name__,
             "error_message": str(error)[:_MAX_ERROR_CHARS],
@@ -773,8 +825,10 @@ class TracePlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
     ) -> Optional[dict]:
-        tool_context.state[f"_trace_start_{tool.name}"] = time.monotonic()
-        self._record("tool_start", {
+        run = self._run_for(tool_context)
+        if run:
+            run.tool_starts[_tool_call_key(tool, tool_context)] = time.monotonic()
+        self._record(run, "tool_start", {
             "tool": tool.name,
             "args": _safe_serialize(tool_args, max_len=_MAX_ARGS_CHARS),
         })
@@ -788,25 +842,29 @@ class TracePlugin(BasePlugin):
         tool_context: ToolContext,
         result: dict,
     ) -> Optional[dict]:
-        self._tool_count += 1
-        start = tool_context.state.get(f"_trace_start_{tool.name}")
+        run = self._run_for(tool_context)
+        start = None
+        if run:
+            run.tool_count += 1
+            start = run.tool_starts.pop(_tool_call_key(tool, tool_context), None)
         duration_ms = round((time.monotonic() - start) * 1000) if start else None
 
         is_error = isinstance(result, dict) and result.get("status") == "error"
 
-        self._record("tool_end", {
+        self._record(run, "tool_end", {
             "tool": tool.name,
             "status": "error" if is_error else "success",
             "duration_ms": duration_ms,
             "result": _safe_serialize(result, max_len=_MAX_RESULT_CHARS),
         })
-        self._conversation_writer.add_tool_call(
-            tool=tool.name,
-            args=tool_args,
-            result=result,
-            status="error" if is_error else "success",
-            duration_ms=duration_ms,
-        )
+        if run:
+            run.conversation.add_tool_call(
+                tool=tool.name,
+                args=tool_args,
+                result=result,
+                status="error" if is_error else "success",
+                duration_ms=duration_ms,
+            )
         return None
 
     async def on_tool_error_callback(
@@ -817,7 +875,10 @@ class TracePlugin(BasePlugin):
         tool_context: ToolContext,
         error: Exception,
     ) -> Optional[dict]:
-        self._record("tool_exception", {
+        run = self._run_for(tool_context)
+        if run:
+            run.tool_starts.pop(_tool_call_key(tool, tool_context), None)
+        self._record(run, "tool_exception", {
             "tool": tool.name,
             "error_type": type(error).__name__,
             "error_message": str(error)[:_MAX_ERROR_CHARS],
@@ -830,6 +891,7 @@ class TracePlugin(BasePlugin):
     async def on_event_callback(
         self, *, invocation_context: InvocationContext, event: Event
     ) -> Optional[Event]:
+        run = self._runs.get(invocation_context.invocation_id)
         actions_summary = _summarize_actions(event.actions)
 
         # Always emit a record when there's content OR meaningful actions.
@@ -848,29 +910,29 @@ class TracePlugin(BasePlugin):
                 base["has_function_response"] = any(p.function_response for p in event.content.parts)
             if actions_summary:
                 base["actions"] = actions_summary
-            self._record("event", base)
+            self._record(run, "event", base)
 
         # Emit dedicated records for control-flow signals so they're
         # trivially queryable without re-parsing the `actions` blob.
         if event.actions:
             if event.actions.transfer_to_agent:
-                self._record("agent_transfer", {
+                self._record(run, "agent_transfer", {
                     "from_agent": event.author,
                     "to_agent": event.actions.transfer_to_agent,
                     "event_id": event.id,
                 })
             if event.actions.escalate:
-                self._record("agent_escalate", {
+                self._record(run, "agent_escalate", {
                     "agent": event.author,
                     "event_id": event.id,
                 })
             if event.actions.end_of_agent:
-                self._record("agent_end_of_turn", {
+                self._record(run, "agent_end_of_turn", {
                     "agent": event.author,
                     "event_id": event.id,
                 })
             if event.actions.requested_auth_configs:
-                self._record("auth_requested", {
+                self._record(run, "auth_requested", {
                     "agent": event.author,
                     "event_id": event.id,
                     "function_call_ids": list(event.actions.requested_auth_configs.keys()),
@@ -882,7 +944,7 @@ class TracePlugin(BasePlugin):
             # up under llm_response.cost_usd anyway.
             cost_guard = (event.actions.state_delta or {}).get("cost_guard")
             if isinstance(cost_guard, dict) and cost_guard.get("blocked"):
-                self._record("cost_guard_intervention", {
+                self._record(run, "cost_guard_intervention", {
                     "agent": event.author,
                     "event_id": event.id,
                     "model": cost_guard.get("model"),

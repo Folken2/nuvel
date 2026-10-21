@@ -117,6 +117,21 @@ bots:
         task: "Review yesterday's logs"
 ```
 
+## Agent Plugins
+
+Agent Plugins ([agent-plugins.org](https://agent-plugins.org) v1.0.0) for integrating Nuvel OrgMemory into major AI coding and chat harnesses. Six plugins live under `plugins/`:
+
+| Plugin | Harness | MCP Support | Skills |
+|--------|---------|-------------|--------|
+| [codex-plugin](./plugins/codex-plugin/) | OpenAI Codex CLI | ✅ streamable-http | setup, agent, review |
+| [claude-code-plugin](./plugins/claude-code-plugin/) | Anthropic Claude Code CLI | ✅ stdio | setup, agent, review |
+| [chatgpt-plugin](./plugins/chatgpt-plugin/) | OpenAI ChatGPT (web/app) | ❌ | setup, workflows |
+| [claude-plugin](./plugins/claude-plugin/) | Anthropic Claude (web/app) | ❌ | setup, workflows |
+| [grokbot-plugin](./plugins/grokbot-plugin/) | xAI GrokBot (web/app/API) | ❌ | setup, workflows |
+| [cursor-plugin](./plugins/cursor-plugin/) | Cursor IDE | ✅ stdio | setup, agent, review |
+
+Drop a plugin into your agent's plugin directory, or reference the skills from your agent's skill loader — each is self-contained, independently versioned, and follows the agent-plugins.org packaging standard. See `plugins/README.md` for full docs.
+
 ## Quick Install
 
 **Use the skills with Claude Code:**
@@ -325,14 +340,14 @@ Every generated agent ships with a full plugin chain — cross-cutting concerns 
 | **ContextFilterPlugin** | Performance | Keeps last N invocations in context window (default: 10) |
 | **ConsoleLoggerPlugin** | Observability | Color-coded terminal output for all lifecycle events |
 | **ToolEventsPlugin** | Observability | Structured tool execution events for SSE streaming |
-| **ResiliencePlugin** | Resilience | Circuit breaker and rate limiting for tool calls |
+| **ResiliencePlugin** | Resilience | Circuit breaker and per-session rate limiting for tool calls |
 | **GuardrailsPlugin** | Resilience | Halts runaway model/tool loops — no-progress and repeated-failure guards behind a shared halt latch |
 | **CronIsolationPlugin** | Resilience | Headless tool-approval policy during scheduled cron runs; inert outside cron runs |
 | **CachePlugin** | Performance | Session-scoped caching for specific tools with TTL |
 | **ReflectAndRetryToolPlugin** | Resilience | Self-healing tool retry with LLM reflection (max 3) |
 | **SaveFilesAsArtifactsPlugin** | Features | Saves user-uploaded files as session artifacts |
-| **RecordingsPlugin** | Testing | Records LLM/tool interactions for ADK conformance testing; inert unless recording mode is active |
-| **ReplayPlugin** | Testing | Replays recorded interactions instead of executing live calls; inert unless replay mode is active |
+| **RecordingsPlugin** | Testing | Records LLM/tool interactions for ADK conformance testing; off unless `NUVEL_RECORD_REPLAY=1` (its config is client-writable session state, so never enable it on a server) |
+| **ReplayPlugin** | Testing | Replays recorded interactions instead of executing live calls; off unless `NUVEL_RECORD_REPLAY=1` |
 | **SkillCuratorPlugin** | Features | Proposes `SKILL.md` files from observed tool usage; opt-in, default off (`NUVEL_SKILL_CURATOR`) |
 | **SiblingRunner** | Features | Drains fire-and-forget memory-review sibling runs at shutdown; no-op until `NUVEL_MEMORY_REVIEW_FORK=1` |
 
@@ -461,8 +476,10 @@ The consolidated JSON includes: full system prompt, user input, LLM thinking/rea
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TOOL_RATE_LIMIT` | `5.0` | Tool calls per second (token bucket) |
-| `TOOL_RATE_BURST` | `20` | Burst capacity for tool rate limiting |
+| `TOOL_RATE_LIMIT` | `5.0` | Tool calls per second, per session (token bucket) |
+| `TOOL_RATE_BURST` | `20` | Burst capacity for tool rate limiting, per session |
+| `TOOL_RATE_LIMIT_TOTAL` | `50.0` | Tool calls per second across all sessions (caps callers who open many sessions) |
+| `TOOL_RATE_BURST_TOTAL` | `200` | Burst capacity across all sessions |
 | `PROTECTED_TOOLS` | (none) | Comma-separated tools with circuit breaker |
 | `CONTEXT_FILTER_KEEP` | `10` | Prior invocations to keep in context window |
 

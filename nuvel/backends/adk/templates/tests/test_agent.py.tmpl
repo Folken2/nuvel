@@ -11,7 +11,8 @@ Usage:
 How it works:
     - RecordingsPlugin captures LLM requests/responses and tool calls to YAML
     - ReplayPlugin replays those recordings deterministically
-    - Both are activated via session state keys (dormant otherwise)
+    - Both are activated via session state keys, and only while
+      NUVEL_RECORD_REPLAY=1 (this module sets it; servers leave it off)
 
 Adding new test cases:
     1. Add a new test method with a unique recording directory
@@ -35,13 +36,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from google.adk.agents import LlmAgent
+from google.adk.apps import App
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 IS_RECORD_MODE = os.getenv("RECORD", "").lower() in ("true", "1", "yes")
+
+# The chain's record/replay plugins ignore their session-state config unless
+# this is set, because on a server that state is client input. A test run is
+# a trusted caller, so switch them on here.
+os.environ.setdefault("NUVEL_RECORD_REPLAY", "1")
 
 # Import the agent
 from {{agent_package}}.agent import root_agent
@@ -72,8 +78,6 @@ def _run_agent(
         else:
             plugins.append(replay)
 
-        from google.adk.app import App
-
         app = App(
             name="{{agent_package}}",
             root_agent=root_agent,
@@ -85,14 +89,6 @@ def _run_agent(
             session_service=session_service,
         )
 
-        session = loop.run_until_complete(
-            session_service.create_session(
-                app_name="{{agent_package}}",
-                user_id="test_user",
-            )
-        )
-
-        # Set record or replay config in session state
         Path(recording_dir).mkdir(parents=True, exist_ok=True)
 
         if IS_RECORD_MODE:
@@ -100,10 +96,23 @@ def _run_agent(
         else:
             state_key = "_adk_replay_config"
 
-        session.state[state_key] = {
-            "dir": recording_dir,
-            "user_message_index": 0,
-        }
+        # The config must go in through create_session: it returns a copy,
+        # so writing to the returned session.state never reaches the session
+        # the Runner loads. ADK's plugins also need an explicit streaming
+        # mode ("none" or "sse"); the default run is non-streaming.
+        session = loop.run_until_complete(
+            session_service.create_session(
+                app_name="{{agent_package}}",
+                user_id="test_user",
+                state={
+                    state_key: {
+                        "dir": recording_dir,
+                        "user_message_index": 0,
+                        "streaming_mode": "none",
+                    }
+                },
+            )
+        )
 
         content = types.Content(
             role="user",

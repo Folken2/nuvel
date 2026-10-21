@@ -26,6 +26,11 @@ _PROTECTED_TOOLS: set[str] = set(
 )
 
 
+def _session_key(tool_context: ToolContext) -> str:
+    session = getattr(tool_context, "session", None)
+    return getattr(session, "id", None) or "unknown"
+
+
 class ResiliencePlugin(BasePlugin):
     """Applies circuit breaker and rate limiting to tool calls."""
 
@@ -39,8 +44,9 @@ class ResiliencePlugin(BasePlugin):
         tool_args: dict[str, Any],
         tool_context: ToolContext,
     ) -> Optional[dict]:
-        # Rate limit all tool calls
-        if not tool_rate_limiter.allow():
+        # Rate limit tool calls per session, so one runaway session can't
+        # exhaust the budget for every other user of the server.
+        if not tool_rate_limiter.allow(_session_key(tool_context)):
             logger.warning("Rate limit exceeded for tool: %s", tool.name)
             return {
                 "status": "error",

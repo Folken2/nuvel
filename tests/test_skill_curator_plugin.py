@@ -53,7 +53,7 @@ def _tool(name="some_tool"):
 
 
 def _tool_ctx():
-    return SimpleNamespace(state={})
+    return SimpleNamespace(state={}, invocation_id="inv1")
 
 
 def _run(coro):
@@ -94,8 +94,8 @@ class TestEnvGate(unittest.TestCase):
         llm_fn = mock.Mock()
         plugin = scp.SkillCuratorPlugin(llm_fn=llm_fn)
         # Simulate enough activity to trigger were the gate open
-        plugin._tool_calls = 10
-        plugin._event_count = 20
+        plugin._run_for("inv1").tool_calls = 10
+        plugin._run_for("inv1").event_count = 20
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("NUVEL_SKILL_CURATOR", None)
             asyncio.run(plugin.after_run_callback(invocation_context=_ic()))
@@ -104,9 +104,9 @@ class TestEnvGate(unittest.TestCase):
     def test_enabled_when_set(self):
         llm_fn = mock.Mock(return_value=json.dumps({"action": "noop", "rationale": "ok"}))
         plugin = scp.SkillCuratorPlugin(llm_fn=llm_fn)
-        plugin._tool_calls = 10
-        plugin._event_count = 20
-        plugin._triggering_agents.add("root_agent")
+        plugin._run_for("inv1").tool_calls = 10
+        plugin._run_for("inv1").event_count = 20
+        plugin._run_for("inv1").triggering_agents.add("root_agent")
         with mock.patch.dict(os.environ, {"NUVEL_SKILL_CURATOR": "1"}):
             asyncio.run(plugin.after_run_callback(invocation_context=_ic()))
         llm_fn.assert_called_once()
@@ -127,7 +127,7 @@ class TestAggregation(unittest.TestCase):
                     result={"status": "ok"},
                 )
         asyncio.run(go())
-        self.assertEqual(plugin._tool_calls, 4)
+        self.assertEqual(plugin._run_for("inv1").tool_calls, 4)
 
     def test_on_event_aggregates_event_count_and_agents(self):
         plugin = scp.SkillCuratorPlugin()
@@ -139,8 +139,8 @@ class TestAggregation(unittest.TestCase):
                 invocation_context=_ic(), event=_event(function_call="x", author="agent_b"),
             )
         asyncio.run(go())
-        self.assertEqual(plugin._event_count, 2)
-        self.assertSetEqual(plugin._triggering_agents, {"agent_a", "agent_b"})
+        self.assertEqual(plugin._run_for("inv1").event_count, 2)
+        self.assertSetEqual(plugin._run_for("inv1").triggering_agents, {"agent_a", "agent_b"})
 
     def test_tool_error_accumulates(self):
         plugin = scp.SkillCuratorPlugin()
@@ -153,7 +153,7 @@ class TestAggregation(unittest.TestCase):
                     error=RuntimeError("boom"),
                 )
         asyncio.run(go())
-        self.assertEqual(plugin._tool_errors["flaky"], 3)
+        self.assertEqual(plugin._run_for("inv1").tool_errors["flaky"], 3)
 
 
 # ── Proposal write paths ─────────────────────────────────────────────
@@ -172,10 +172,10 @@ class TestProposalWriting(unittest.TestCase):
 
     def _run_with(self, llm_fn, *, tool_calls=8, event_count=0, agents=("root_agent",), errors=None):
         plugin = scp.SkillCuratorPlugin(llm_fn=llm_fn)
-        plugin._tool_calls = tool_calls
-        plugin._event_count = event_count
-        plugin._triggering_agents = set(agents)
-        plugin._tool_errors = dict(errors or {})
+        plugin._run_for("inv1").tool_calls = tool_calls
+        plugin._run_for("inv1").event_count = event_count
+        plugin._run_for("inv1").triggering_agents = set(agents)
+        plugin._run_for("inv1").tool_errors = dict(errors or {})
         with mock.patch.dict(os.environ, self.env):
             asyncio.run(plugin.after_run_callback(invocation_context=_ic(agents[0])))
 
@@ -289,8 +289,8 @@ class TestBelowThresholdShortCircuit(unittest.TestCase):
     def test_no_llm_call_when_simple(self):
         llm_fn = mock.Mock()
         plugin = scp.SkillCuratorPlugin(llm_fn=llm_fn)
-        plugin._tool_calls = 1
-        plugin._event_count = 1
+        plugin._run_for("inv1").tool_calls = 1
+        plugin._run_for("inv1").event_count = 1
         with mock.patch.dict(os.environ, {"NUVEL_SKILL_CURATOR": "1"}):
             asyncio.run(plugin.after_run_callback(invocation_context=_ic()))
         llm_fn.assert_not_called()
@@ -302,15 +302,15 @@ class TestBelowThresholdShortCircuit(unittest.TestCase):
 class TestRunReset(unittest.TestCase):
     def test_before_run_resets_state(self):
         plugin = scp.SkillCuratorPlugin()
-        plugin._tool_calls = 10
-        plugin._event_count = 20
-        plugin._tool_errors = {"x": 5}
-        plugin._triggering_agents.add("a")
+        plugin._run_for("inv1").tool_calls = 10
+        plugin._run_for("inv1").event_count = 20
+        plugin._run_for("inv1").tool_errors = {"x": 5}
+        plugin._run_for("inv1").triggering_agents.add("a")
         asyncio.run(plugin.before_run_callback(invocation_context=_ic()))
-        self.assertEqual(plugin._tool_calls, 0)
-        self.assertEqual(plugin._event_count, 0)
-        self.assertEqual(plugin._tool_errors, {})
-        self.assertEqual(plugin._triggering_agents, set())
+        self.assertEqual(plugin._run_for("inv1").tool_calls, 0)
+        self.assertEqual(plugin._run_for("inv1").event_count, 0)
+        self.assertEqual(plugin._run_for("inv1").tool_errors, {})
+        self.assertEqual(plugin._run_for("inv1").triggering_agents, set())
 
 
 if __name__ == "__main__":

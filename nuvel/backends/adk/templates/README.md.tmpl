@@ -111,7 +111,7 @@ This agent ships with 10 plugins — cross-cutting behaviors that apply to all i
 | **ToolEventsPlugin** | Structured tool events for SSE streaming |
 | **ContextFilterPlugin** | Keeps last N invocations in context window |
 | **CachePlugin** | Session-scoped tool response caching with TTL |
-| **ResiliencePlugin** | Circuit breaker + rate limiting for tools |
+| **ResiliencePlugin** | Circuit breaker + per-session rate limiting for tools |
 | **ReflectAndRetryToolPlugin** | Self-healing tool retry with LLM reflection |
 | **SaveFilesAsArtifactsPlugin** | Saves user-uploaded files as session artifacts |
 | **MemoryPlugin** | Markdown file-based long-term memory |
@@ -218,3 +218,4 @@ Railway polls `/health` (configured in `railway.json`) to verify the container i
 
 {{gateway_readme_section}}
 {{acp_readme_section}}
+{{litellm_readme_section}}
