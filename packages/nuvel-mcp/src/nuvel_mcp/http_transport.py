@@ -1,6 +1,6 @@
 """HTTP transports for the Nuvel Skills MCP server. Stdlib only.
 
-Serves the same :class:`~nuvel.mcp.server.SkillsMCPServer` dispatcher that the
+Serves the same :class:`~nuvel_mcp.server.SkillsMCPServer` dispatcher that the
 stdio loop uses, over two wire formats:
 
 Streamable HTTP (MCP 2025-03-26), single endpoint ``/mcp``:
@@ -17,7 +17,7 @@ Legacy HTTP+SSE (MCP 2024-11-05):
 Plus ``GET /healthz`` (unauthenticated liveness + counts only).
 
 Every MCP method on both transports requires an OAuth 2.1 bearer access token
-(see :mod:`nuvel.mcp.oauth`); this server is also the authorization server:
+(see :mod:`nuvel_mcp.oauth`); this server is also the authorization server:
 
     GET  /.well-known/oauth-protected-resource     RFC 9728 metadata
     GET  /.well-known/oauth-authorization-server   RFC 8414 metadata
@@ -55,8 +55,8 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from nuvel.mcp import oauth
-from nuvel.mcp.oauth import (
+from nuvel_mcp import oauth
+from nuvel_mcp.oauth import (
     FORBIDDEN,
     UNAUTHORIZED,
     AuthorizeError,
@@ -65,7 +65,7 @@ from nuvel.mcp.oauth import (
     OAuthStoreError,
     TokenInfo,
 )
-from nuvel.mcp.server import (
+from nuvel_mcp.server import (
     INTERNAL_ERROR,
     INVALID_REQUEST,
     PARSE_ERROR,
@@ -73,7 +73,7 @@ from nuvel.mcp.server import (
     error_response,
     log,
 )
-from nuvel.mcp.skills_loader import SkillsError
+from nuvel_mcp.skills_loader import SkillsError
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
@@ -669,7 +669,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # Unauthenticated: status and counts only, never the catalog itself.
         mcp = self.server.mcp
         try:
-            entries = list(mcp._scoped_entries())
+            entries = list(mcp._scoped_entries()) if mcp.loader is not None else []
         except SkillsError as exc:
             log(f"healthz: {exc}")
             self._send_json(HTTPStatus.SERVICE_UNAVAILABLE,
@@ -928,7 +928,8 @@ def serve_http(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFAU
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    log(f"nuvel-skills MCP server starting (skills_dir={mcp.loader.skills_dir})")
+    where = mcp.loader.skills_dir if mcp.loader is not None else "none (feedback-only)"
+    log(f"nuvel-skills MCP server starting (skills_dir={where})")
     log(f"Listening on {httpd.url}  (streamable: /mcp, legacy SSE: /sse, health: /healthz)")
     if httpd.oauth is not None:
         log(f"OAuth 2.1: every MCP method needs a bearer token "

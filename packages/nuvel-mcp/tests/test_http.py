@@ -1,4 +1,4 @@
-"""Streamable HTTP transport: auth, body limits, tenant stamping, CLI wiring."""
+"""Streamable HTTP transport: auth, body limits, tenant stamping (not reachable from the CLI; removed in Task 12)."""
 
 import asyncio
 import json
@@ -13,7 +13,6 @@ import httpx  # noqa: E402  (ships with the mcp SDK)
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
-from nuvel_mcp import cli  # noqa: E402
 from nuvel_mcp.auth import BearerAuthenticator, current_principal  # noqa: E402
 from nuvel_mcp.http import build_app  # noqa: E402
 from nuvel_mcp.server import HTTP_DEFAULT_TOOLS, SkillsMCPServer  # noqa: E402
@@ -446,68 +445,6 @@ async def test_http_health_requires_plugin_and_never_echoes(app, args):
     assert "SECRETVALUE" not in result.model_dump_json()
 
 
-# --- CLI wiring ---------------------------------------------------------------
-
-@pytest.fixture
-def captured(monkeypatch):
-    from nuvel_mcp import http as http_mod
-
-    calls = []
-    monkeypatch.setattr(http_mod, "serve_http", lambda *a, **k: calls.append((a, k)))
-    return calls
-
-
-def test_cli_http_defaults_to_http_tools(captured, tmp_path):
-    assert cli.main(["serve", "--transport", "http", "--feedback-dir", str(tmp_path)]) == 0
-    (server, host, port, authenticator), _ = captured[0]
-    assert (host, port, authenticator) == ("127.0.0.1", 8765, None)
-    assert {t["name"] for t in server.handle_tools_list({})["tools"]} == HTTP_DEFAULT_TOOLS
-
-
-def test_cli_http_respects_explicit_tools(captured, tmp_path):
-    assert cli.main(["serve", "--transport", "http", "--feedback-dir", str(tmp_path),
-                     "--tools", "record_feedback"]) == 0
-    server = captured[0][0][0]
-    assert {t["name"] for t in server.handle_tools_list({})["tools"]} == {"record_feedback"}
-
-
-def test_cli_non_loopback_without_auth_exits_1(captured, capsys):
-    assert cli.main(["serve", "--transport", "http", "--host", "0.0.0.0"]) == 1
-    assert not captured
-    assert "--auth" in capsys.readouterr().err
-
-
-def test_cli_non_loopback_with_bearer_auth_serves(captured, monkeypatch, tmp_path):
-    monkeypatch.setenv("NUVEL_MCP_TOKENS", "acme:s3cret")
-    assert cli.main(["serve", "--transport", "http", "--host", "0.0.0.0", "--port", "9000",
-                     "--auth", "bearer", "--feedback-dir", str(tmp_path)]) == 0
-    (_, host, port, authenticator), _ = captured[0]
-    assert (host, port) == ("0.0.0.0", 9000)
-    assert authenticator.authenticate({"Authorization": "Bearer s3cret"}) == "acme"
-
-
-def test_cli_passes_allowed_hosts(captured, monkeypatch, tmp_path):
-    monkeypatch.setenv("NUVEL_MCP_TOKENS", "acme:s3cret")
-    assert cli.main(["serve", "--transport", "http", "--feedback-dir", str(tmp_path),
-                     "--auth", "bearer", "--allowed-host", "mcp.example.com",
-                     "--allowed-host", "Other.Example.org"]) == 0
-    assert captured[0][1]["allowed_hosts"] == ["mcp.example.com", "other.example.org"]
-
-
-@pytest.mark.parametrize("value", ["", " ", "evil.example/x", "user@evil.example",
-                                   "a b.example", "mcp.example.com:443", "http://x.example"])
-def test_cli_bad_allowed_host_exits_1(captured, capsys, value):
-    assert cli.main(["serve", "--transport", "http", "--allowed-host", value]) == 1
-    assert not captured
-    assert "--allowed-host" in capsys.readouterr().err
-
-
-def test_cli_allowed_host_without_auth_exits_1(captured, capsys):
-    assert cli.main(["serve", "--transport", "http", "--allowed-host", "mcp.example.com"]) == 1
-    assert not captured
-    assert "--auth" in capsys.readouterr().err
-
-
 def test_build_app_refuses_allowed_hosts_without_authenticator(server):
     with pytest.raises(ValueError, match="authenticator"):
         build_app(server, None, allowed_hosts=("mcp.example.com",))
@@ -539,25 +476,3 @@ def test_serve_http_refuses_non_loopback_bind_without_authenticator(server, monk
         serve_http(server, "0.0.0.0", 8765, None)
     assert not ran
 
-
-def test_cli_non_loopback_with_factory_returning_none_exits_1(captured, capsys, tmp_path,
-                                                                monkeypatch):
-    (tmp_path / "none_auth_mod.py").write_text("def make():\n    return None\n")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    assert cli.main(["serve", "--transport", "http", "--host", "0.0.0.0",
-                     "--auth", "none_auth_mod:make", "--feedback-dir", str(tmp_path)]) == 1
-    assert not captured
-    assert "--auth" in capsys.readouterr().err
-
-
-def test_cli_allowed_host_needs_http(capsys):
-    assert cli.main(["serve", "--allowed-host", "mcp.example.com"]) == 1
-    assert "--transport http" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("spec", ["bearer", "not-a-spec", "no_such_module_xyz:make"])
-def test_cli_bad_auth_exits_1(captured, monkeypatch, capsys, spec):
-    monkeypatch.delenv("NUVEL_MCP_TOKENS", raising=False)
-    assert cli.main(["serve", "--transport", "http", "--auth", spec]) == 1
-    assert not captured
-    assert "Error" in capsys.readouterr().err

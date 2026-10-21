@@ -1,15 +1,19 @@
-"""``nuvel mcp serve`` — start the Nuvel Skills MCP stdio server.
+"""``nuvel mcp serve`` — start the Nuvel Skills MCP server.
 
 Serves a skills hub (a directory with ``index.json`` and
-``<theme>/<name>/SKILL.md`` files) to MCP clients over stdio. Stdlib only, so
-it runs without the framework's heavier agent dependencies.
+``<theme>/<name>/SKILL.md`` files) to MCP clients over stdio (default) or HTTP
+(``--transport http``: Streamable HTTP on ``/mcp`` plus legacy SSE on ``/sse``,
+gated by OAuth 2.1). ``nuvel mcp client`` and ``nuvel mcp token`` manage the
+OAuth store. Every flag and command comes from :mod:`nuvel_mcp.cli`, so
+``nuvel mcp …`` and ``nuvel-mcp …`` stay identical. Stdlib only, so it runs
+without the framework's heavier agent dependencies.
 """
 
 from __future__ import annotations
 
 import argparse
 
-from nuvel_mcp.cli import add_serve_arguments, run_serve
+from nuvel_mcp.cli import add_oauth_commands, add_serve_arguments, run_serve
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -22,10 +26,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_serve = sub.add_parser(
         "serve",
-        help="Start the Nuvel Skills MCP server (stdio, or HTTP with --transport http).",
+        help="Start the Nuvel Skills MCP server (stdio or HTTP).",
         description=(
             "Start an MCP server (stdio by default, Streamable HTTP with "
-            "--transport http) that exposes a skills hub as MCP "
+            "--transport http, gated by OAuth 2.1) that exposes a skills hub as MCP "
             "resources (skill://{theme}/{name}) and tools (search_skills, "
             "list_skills, list_themes, get_skill, install_skill, fence_value, "
             "propose_improvement, record_feedback, check_skill_health, "
@@ -39,6 +43,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     add_serve_arguments(p_serve)
     p_serve.set_defaults(func=_cmd_mcp_serve)
+    add_oauth_commands(sub)
 
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:

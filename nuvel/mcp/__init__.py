@@ -8,10 +8,10 @@ import sys
 import warnings
 
 import nuvel_mcp
-from nuvel_mcp import feedback, installer, server, skills_loader
+from nuvel_mcp import feedback, http_transport, installer, oauth, server, skills_loader
 from nuvel_mcp import SkillsError, SkillsLoader, SkillsMCPServer, resolve_skills_dir
 
-for _mod in (server, feedback, skills_loader, installer):
+for _mod in (server, feedback, skills_loader, installer, http_transport, oauth):
     sys.modules[f"nuvel.mcp.{_mod.__name__.rsplit('.', 1)[1]}"] = _mod
 
 warnings.warn(

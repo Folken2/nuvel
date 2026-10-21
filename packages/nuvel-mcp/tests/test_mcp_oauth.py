@@ -1,4 +1,4 @@
-"""OAuth 2.1 gating of the Skills MCP server (nuvel.mcp.oauth + the HTTP transport).
+"""OAuth 2.1 gating of the Skills MCP server (nuvel_mcp.oauth + the HTTP transport).
 
 Real servers on 127.0.0.1:0 in a thread, driven with http.client; the login
 step uses the dev-login stub (or a local fake GitHub). Time-based cases move
@@ -25,12 +25,12 @@ from pathlib import Path
 
 import pytest
 
-from nuvel.cli import main as cli_main
-from nuvel.mcp.http_transport import make_server
-from nuvel.mcp.oauth import OAuthConfig, OAuthProvider, stdio_gate
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsLoader
-from tests._mcp_http_helpers import (
+from nuvel_mcp.cli import main as cli_main
+from nuvel_mcp.http_transport import make_server
+from nuvel_mcp.oauth import OAuthConfig, OAuthProvider, stdio_gate
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import SkillsLoader
+from _mcp_http_helpers import (
     INIT,
     TIMEOUT,
     TOOLS,
@@ -708,22 +708,22 @@ def test_revoked_token_is_401_via_cli(httpd, store_path, monkeypatch, capsys):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
     token = service_token(httpd)
     assert tools_list(httpd, token)[0] == 200
-    assert cli_main(["mcp", "token", "revoke", token]) == 0
+    assert cli_main(["token", "revoke", token]) == 0
     assert "Revoked 1 access token(s)" in capsys.readouterr().out
     assert tools_list(httpd, token)[0] == 401
-    assert cli_main(["mcp", "token", "revoke", "nvat_unknown"]) == 1
+    assert cli_main(["token", "revoke", "nvat_unknown"]) == 1
 
 
 def test_revoke_by_client_id_and_delete_client(anon, httpd, store_path, monkeypatch):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
     client_id, tokens = user_token(anon)
-    assert cli_main(["mcp", "token", "revoke", client_id]) == 0
+    assert cli_main(["token", "revoke", client_id]) == 0
     assert tools_list(httpd, tokens["access_token"])[0] == 401
     assert refresh(anon, client_id, tokens["refresh_token"])[1]["error"] == "invalid_grant"
 
     record, secret = httpd.oauth.create_client("fleet")
     status, body = client_credentials(anon, record["client_id"], secret)
-    assert cli_main(["mcp", "client", "delete", record["client_id"]]) == 0
+    assert cli_main(["client", "delete", record["client_id"]]) == 0
     assert tools_list(httpd, body["access_token"])[0] == 401  # client binding
     assert client_credentials(anon, record["client_id"], secret)[0] == 401
 
@@ -804,7 +804,7 @@ def test_no_auth_refused_on_non_loopback(hub, capsys):
     mcp = SkillsMCPServer(SkillsLoader.from_base(hub))
     with pytest.raises(ValueError):
         make_server(mcp, "0.0.0.0", 0, no_auth=True)
-    rc = cli_main(["mcp", "serve", "--transport", "http", "--host", "0.0.0.0",
+    rc = cli_main(["serve", "--transport", "http", "--host", "0.0.0.0",
                    "--allow-remote", "--no-auth", "--port", "0", "--skills-dir", str(hub)])
     assert rc == 2
     assert "--no-auth is refused on non-loopback" in capsys.readouterr().err
@@ -821,7 +821,7 @@ def _serve_cli(args, env_extra, timeout=15):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("NUVEL_MCP_", "NUVEL_OAUTH_"))}
     env.update(env_extra)
-    proc = subprocess.Popen([sys.executable, "-m", "nuvel.cli", "mcp", "serve", *args],
+    proc = subprocess.Popen([sys.executable, "-m", "nuvel_mcp", "serve", *args],
                             cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True)
     lines = []
@@ -848,7 +848,7 @@ def test_cli_no_auth_prints_loud_warning(hub, tmp_path):
 
 
 def test_cli_refuses_gated_http_without_login_provider(hub, capsys):
-    rc = cli_main(["mcp", "serve", "--transport", "http", "--port", "0",
+    rc = cli_main(["serve", "--transport", "http", "--port", "0",
                    "--skills-dir", str(hub)])
     assert rc == 2
     err = capsys.readouterr().err
@@ -857,7 +857,7 @@ def test_cli_refuses_gated_http_without_login_provider(hub, capsys):
 
 def test_cli_refuses_dev_login_and_missing_public_url_off_loopback(hub, capsys, monkeypatch):
     monkeypatch.setenv("NUVEL_OAUTH_DEV_LOGIN", "1")
-    args = ["mcp", "serve", "--transport", "http", "--host", "0.0.0.0", "--allow-remote",
+    args = ["serve", "--transport", "http", "--host", "0.0.0.0", "--allow-remote",
             "--port", "0", "--skills-dir", str(hub)]
     assert cli_main(args) == 2
     assert "DEV_LOGIN" in capsys.readouterr().err
@@ -896,7 +896,7 @@ def _run_stdio(hub, extra_args=(), env_extra=None):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("NUVEL_MCP_", "NUVEL_OAUTH_"))}
     env.update(env_extra or {})
-    proc = subprocess.run([sys.executable, "-m", "nuvel.cli", "mcp", "serve",
+    proc = subprocess.run([sys.executable, "-m", "nuvel_mcp", "serve",
                            "--skills-dir", str(hub), *extra_args],
                           cwd=REPO_ROOT, env=env, input=STDIO_INPUT, capture_output=True,
                           text=True, timeout=30)
@@ -953,8 +953,8 @@ def test_stdio_gate_scope_expiry_and_revocation(hub, store_path):
 
 
 def test_stdio_rejects_no_auth_flag(hub, capsys):
-    assert cli_main(["mcp", "serve", "--skills-dir", str(hub), "--no-auth"]) == 2
-    assert cli_main(["mcp", "serve", "--skills-dir", str(hub), "--require-auth",
+    assert cli_main(["serve", "--skills-dir", str(hub), "--no-auth"]) == 2
+    assert cli_main(["serve", "--skills-dir", str(hub), "--require-auth",
                      "--no-auth"]) == 2
 
 
@@ -963,7 +963,7 @@ def test_stdio_rejects_no_auth_flag(hub, capsys):
 
 def test_cli_client_create_and_list(store_path, monkeypatch, capsys):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
-    assert cli_main(["mcp", "client", "create", "--name", "fleet-bot"]) == 0
+    assert cli_main(["client", "create", "--name", "fleet-bot"]) == 0
     captured = capsys.readouterr()
     created = json.loads(captured.out)
     assert created["client_secret"].startswith("nvcs_")
@@ -971,18 +971,18 @@ def test_cli_client_create_and_list(store_path, monkeypatch, capsys):
     assert "only its hash is kept" in captured.err
     assert created["client_secret"] not in store_path.read_text()
 
-    assert cli_main(["mcp", "client", "create", "--name", "web",
+    assert cli_main(["client", "create", "--name", "web",
                      "--redirect-uri", "https://app.example.com/cb"]) == 0
     web = json.loads(capsys.readouterr().out)
     assert "authorization_code" in web["grant_types"]
-    assert cli_main(["mcp", "client", "create", "--name", "bad",
+    assert cli_main(["client", "create", "--name", "bad",
                      "--redirect-uri", "http://evil.example/cb"]) == 2
 
-    assert cli_main(["mcp", "client", "list"]) == 0
+    assert cli_main(["client", "list"]) == 0
     table = capsys.readouterr().out
     assert created["client_id"] in table and "fleet-bot" in table and "confidential" in table
     assert "nvcs_" not in table
-    assert cli_main(["mcp", "client", "list", "--json"]) == 0
+    assert cli_main(["client", "list", "--json"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert {c["client_id"] for c in listed} == {created["client_id"], web["client_id"]}
     assert all("client_secret_hash" not in c for c in listed)
@@ -991,7 +991,7 @@ def test_cli_client_create_and_list(store_path, monkeypatch, capsys):
 def test_cli_created_client_is_usable_by_running_server(httpd, store_path, monkeypatch, capsys):
     # The CLI writes the store while the server runs; the server sees it.
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
-    assert cli_main(["mcp", "client", "create", "--name", "fleet"]) == 0
+    assert cli_main(["client", "create", "--name", "fleet"]) == 0
     created = json.loads(capsys.readouterr().out)
     status, body = client_credentials(Client(httpd), created["client_id"],
                                       created["client_secret"])
@@ -1003,5 +1003,5 @@ def test_cli_reports_corrupt_store(store_path, monkeypatch, capsys):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
     store_path.parent.mkdir(parents=True)
     store_path.write_text("[]")
-    assert cli_main(["mcp", "client", "list"]) == 1
+    assert cli_main(["client", "list"]) == 1
     assert "not a JSON object" in capsys.readouterr().err

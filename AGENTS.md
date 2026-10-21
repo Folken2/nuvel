@@ -81,7 +81,7 @@ Keep `.claude/skills/nuvel/SKILL.md` in sync with CLI flags, scaffold behavior, 
 `nuvel mcp serve` starts a stdlib-only MCP (Model Context Protocol) server that exposes a skills hub — the [Nuvel Skills](https://github.com/Folken2/skills) repo, or any directory laid out the same way — to MCP clients such as Claude Code, Cursor, and Codex. It speaks stdio by default, or HTTP so clients can point at a URL with nothing installed locally.
 
 ```bash
-nuvel mcp serve [--skills-dir <dir>] [--theme <t>] [--require <cap>]... [--with-org-memory <dsn|path>] [--feedback-dir <dir>]
+nuvel mcp serve [--skills-dir <dir>] [--theme <t>] [--require <cap>]... [--with-org-memory <dsn|path>] [--feedback-dir <dir>] [--tools A,B] [--trace-store local|MODULE:FACTORY]
                 [--transport stdio|http] [--host 127.0.0.1] [--port 8080] [--allow-remote]
                 [--no-auth] [--require-auth]
 nuvel mcp client create --name <n> [--redirect-uri <u>]...
@@ -90,7 +90,7 @@ nuvel mcp client delete <client-id>
 nuvel mcp token revoke <token-or-client-id>
 ```
 
-- `--skills-dir` (default: current directory) points at a skills hub. It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
+- `--skills-dir` points at a skills hub; omit it to serve the feedback tools only (feedback-only mode). It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
 - `--transport stdio` (default) speaks JSON-RPC 2.0 over stdio: protocol messages on stdout (one JSON object per line), diagnostics on stderr.
 - `--transport http` serves the same dispatcher over HTTP (diagnostics still on stderr; request bodies are never logged). `--host` defaults to `127.0.0.1`; binding a non-loopback address (e.g. `0.0.0.0`) exits with an error unless `--allow-remote` is passed. `--port 0` picks a free port. Every MCP method over HTTP requires an OAuth 2.1 access token (see **Authentication** below).
 

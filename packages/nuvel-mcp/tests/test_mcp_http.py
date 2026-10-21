@@ -1,4 +1,4 @@
-"""Tests for the Skills MCP HTTP transports (nuvel.mcp.http_transport).
+"""Tests for the Skills MCP HTTP transports (nuvel_mcp.http_transport).
 
 Each test binds a real server on 127.0.0.1:0 in a background thread and drives
 it with ``http.client`` — no mocks of the HTTP layer. The server is gated by
@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from nuvel.cli import main as cli_main
-from nuvel.mcp.http_transport import HttpConfig, prefers_sse
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsLoader
-from tests._mcp_http_helpers import (
+from nuvel_mcp.cli import main as cli_main
+from nuvel_mcp.http_transport import HttpConfig, prefers_sse
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import SkillsLoader
+from _mcp_http_helpers import (
     INIT,
     TIMEOUT,
     TOOLS,
@@ -36,7 +36,7 @@ from tests._mcp_http_helpers import (
     service_token,
     start,
 )
-from tests._mcp_http_helpers import call as _call
+from _mcp_http_helpers import call as _call
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -421,7 +421,9 @@ def test_every_tool_works_with_a_token(client, tmp_path):
             "record_feedback": {"skill_name": "rollback", "skill_version": "1.0.0",
                                 "outcome": "partial", "severity": "minor",
                                 "what_didnt": "step 2 was unclear"},
-            "check_skill_health": {"skill_name": "rollback"}}
+            "check_skill_health": {"skill_name": "rollback"},
+            "record_run_trace": {"trace": json.loads(
+                (Path(__file__).parent / "fixtures" / "skill_run_example.json").read_text())}}
     assert set(args) == set(TOOLS)
     for tool, arguments in args.items():
         status, _, data = client.post(_call(tool, arguments), session)
@@ -459,7 +461,7 @@ def test_bodies_session_ids_and_tokens_not_logged(client, capfd):
 
 
 def test_cli_refuses_non_loopback_without_allow_remote(hub, capsys):
-    rc = cli_main(["mcp", "serve", "--transport", "http", "--host", "0.0.0.0",
+    rc = cli_main(["serve", "--transport", "http", "--host", "0.0.0.0",
                    "--port", "0", "--skills-dir", str(hub)])
     assert rc != 0
     assert "--allow-remote" in capsys.readouterr().err
@@ -469,7 +471,7 @@ def test_cli_serves_http_and_shuts_down_on_sigterm(hub, tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("NUVEL_MCP_", "NUVEL_OAUTH_"))}
     env.update(NUVEL_OAUTH_DEV_LOGIN="1", NUVEL_MCP_OAUTH_STORE=str(tmp_path / "o.json"))
     proc = subprocess.Popen(
-        [sys.executable, "-m", "nuvel.cli", "mcp", "serve", "--transport", "http",
+        [sys.executable, "-m", "nuvel_mcp", "serve", "--transport", "http",
          "--port", "0", "--skills-dir", str(hub)],
         cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )

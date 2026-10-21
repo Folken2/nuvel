@@ -5,6 +5,13 @@ def test_shim_aliases_real_modules():
     import nuvel_mcp.feedback, nuvel_mcp.skills_loader
     assert feedback is nuvel_mcp.feedback and skills_loader is nuvel_mcp.skills_loader
 
+
+def test_shim_aliases_http_transport_and_oauth():
+    import nuvel.mcp.http_transport, nuvel.mcp.oauth
+    import nuvel_mcp.http_transport, nuvel_mcp.oauth
+    assert nuvel.mcp.http_transport is nuvel_mcp.http_transport
+    assert nuvel.mcp.oauth is nuvel_mcp.oauth
+
 def test_shim_public_names_and_warning(recwarn):
     import importlib, sys
     sys.modules.pop("nuvel.mcp", None)

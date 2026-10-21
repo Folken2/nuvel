@@ -13,10 +13,10 @@ import threading
 import urllib.parse
 from pathlib import Path
 
-from nuvel.mcp.http_transport import HttpConfig, make_server
-from nuvel.mcp.oauth import OAuthConfig, OAuthProvider
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsLoader
+from nuvel_mcp.http_transport import HttpConfig, make_server
+from nuvel_mcp.oauth import OAuthConfig, OAuthProvider
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import SkillsLoader
 
 TIMEOUT = 5
 
@@ -34,7 +34,8 @@ INIT = {
                "clientInfo": {"name": "pytest", "version": "0"}},
 }
 TOOLS = ("search_skills", "list_skills", "list_themes", "get_skill", "install_skill",
-         "fence_value", "propose_improvement", "record_feedback", "check_skill_health")
+         "fence_value", "propose_improvement", "record_feedback", "check_skill_health",
+         "record_run_trace")
 
 # Env that must not leak in from the developer's shell.
 ISOLATED_VARS = (
