@@ -172,7 +172,7 @@ tenant, which is what `client create` is for.
 | Missing, invalid or expired access token | `401` |
 | Valid token without the scope the method needs | `403` |
 | `Origin` not allowed | `403` |
-| Body over the cap (`NUVEL_MCP_MAX_BODY_BYTES`, default 65536) | `413` |
+| Body over the cap (`NUVEL_MCP_MAX_BODY_BYTES`, default 1 MiB) | `413` |
 | Body that is not valid JSON | `400` |
 
 Error responses do not echo the request body, and a failing trace store reports a
