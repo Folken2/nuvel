@@ -180,6 +180,7 @@ tenant, which is what `client create` is for.
 | Body over the cap (`NUVEL_MCP_MAX_BODY_BYTES`, default 1 MiB) | `413` |
 | Body sent with `Transfer-Encoding: chunked` | `411` |
 | Request not fully received within `NUVEL_MCP_REQUEST_DEADLINE` seconds | `408` if it stalled in the body; a slow request line or headers just closes the connection |
+| A second `GET /mcp` stream on a session that already has one open | `409`; the open stream keeps working |
 | More than `NUVEL_MCP_MAX_CONNECTIONS` connections open | `503` with `Retry-After: 1`, sent without starting a handler thread |
 | Body that is not valid JSON | `400` |
 

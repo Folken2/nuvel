@@ -55,8 +55,9 @@ def hub(tmp_path):
 def server_factory(hub, tmp_path):
     started = []
 
-    def factory(tools=None, **config):
-        httpd, thread = start(hub, make_provider(tmp_path / "oauth.json"), tools=tools, **config)
+    def factory(tools=None, trace_store=None, **config):
+        httpd, thread = start(hub, make_provider(tmp_path / "oauth.json"), tools=tools,
+                              trace_store=trace_store, **config)
         started.append((httpd, thread))
         return Client(httpd, service_token(httpd))
 
@@ -204,6 +205,91 @@ def test_get_mcp_requires_sse_accept_and_session(client):
     status, _, _ = client.request("GET", "/mcp", headers={
         "Accept": "text/event-stream", "Mcp-Session-Id": "nope"})
     assert status == 404
+
+
+def test_one_get_stream_per_session(client):
+    session = client.initialize()
+    first, resp = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+    try:
+        assert resp.status == 200
+        assert read_frame(resp)["comments"] == ["stream open"]
+        # A second concurrent GET on the same session is refused, without echo.
+        second, resp2 = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+        try:
+            assert resp2.status == 409
+            body = resp2.read()
+            assert session.encode() not in body
+        finally:
+            second.close()
+        # POSTs on the session keep working while the stream is held.
+        assert client.post(_call("list_themes", {}), session)[0] == 200
+        # The first stream is unaffected: pushes still land on it.
+        note = {"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}
+        client.httpd.sessions.get(session, "streamable", client.principal).send(note)
+        assert json.loads(read_event(resp)) == note
+    finally:
+        first.close()
+    # Once the first stream is gone, a new GET is accepted.
+    deadline = time.monotonic() + TIMEOUT
+    status = None
+    while time.monotonic() < deadline:
+        stream, resp3 = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+        status = resp3.status
+        if status == 200:
+            assert read_frame(resp3)["comments"] == ["stream open"]
+            stream.close()
+            break
+        stream.close()
+        time.sleep(0.1)
+    assert status == 200
+    assert client.post(_call("list_themes", {}), session)[0] == 200
+
+
+def test_rejected_second_stream_releases_its_connection_slot(server_factory):
+    client = server_factory(max_connections=2)
+    session = client.initialize()
+    first, resp = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+    try:
+        read_frame(resp)  # stream open — holds one of the two slots
+        for _ in range(5):  # each refusal must free its slot, or the cap fills
+            second, resp2 = client.open_stream("/mcp", {"Mcp-Session-Id": session})
+            assert resp2.status == 409
+            second.close()
+        assert client.post(_call("list_themes", {}), session)[0] == 200
+    finally:
+        first.close()
+
+
+class _UnreadableTraceStore:
+    def query(self, plugin, skill, since, tenant):
+        raise PermissionError("[Errno 13] Permission denied: '/secret/path/traces.jsonl'")
+
+    def append(self, record):
+        raise PermissionError("[Errno 13] Permission denied: '/secret/path/traces.jsonl'")
+
+
+def test_unexpected_tool_error_is_masked_over_http(server_factory, capfd):
+    client = server_factory(trace_store=_UnreadableTraceStore())
+    session = client.initialize()
+    status, _, data = client.post(_call(
+        "check_skill_health", {"skill_name": "rollback", "plugin": "chief-of-staff"}), session)
+    assert status == 200
+    reply = json.loads(data)
+    assert reply["error"] == {"code": -32603, "message": "Internal error"}
+    assert b"/secret/path" not in data and b"PermissionError" not in data
+    assert b"Permission denied" not in data
+    # The detail is logged server-side for the operator.
+    err = capfd.readouterr().err
+    assert "PermissionError" in err and "/secret/path" in err
+
+
+def test_unexpected_tool_error_detail_unchanged_on_stdio(tmp_path):
+    mcp = SkillsMCPServer(None, feedback_dir=tmp_path, trace_store=_UnreadableTraceStore())
+    reply = mcp.dispatch(_call(
+        "check_skill_health", {"skill_name": "rollback", "plugin": "chief-of-staff"}))
+    assert reply["error"]["code"] == -32603
+    assert reply["error"]["message"].startswith("Internal error: ")
+    assert "/secret/path" in reply["error"]["message"]
 
 
 def test_delete_terminates_session_and_closes_stream(client):

@@ -246,6 +246,9 @@ class Session:
         self.last_seen = time.monotonic()
         self.outbox: queue.Queue = queue.Queue()
         self.closed = threading.Event()
+        # Held by the one GET /mcp stream allowed per streamable session, so a
+        # single session cannot pin every connection slot with parallel streams.
+        self.stream_lock = threading.Lock()
 
     def touch(self) -> None:
         self.last_seen = time.monotonic()
@@ -900,7 +903,13 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                           "GET /mcp requires Accept: text/event-stream",
                           headers={"Allow": "POST, DELETE, OPTIONS"})
         session = self._session_or_404(self.headers.get(SESSION_HEADER), "streamable", info)
-        self._stream(session, still_valid=self._still_valid(info))
+        if not session.stream_lock.acquire(blocking=False):
+            self.close_connection = True  # free this connection's slot right away
+            raise _Reject(HTTPStatus.CONFLICT, "A stream is already open for this session")
+        try:
+            self._stream(session, still_valid=self._still_valid(info))
+        finally:
+            session.stream_lock.release()
 
     def _delete_mcp(self) -> None:
         info = self._authenticate()

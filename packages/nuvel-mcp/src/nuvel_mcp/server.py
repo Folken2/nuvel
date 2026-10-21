@@ -1494,7 +1494,11 @@ class SkillsMCPServer:
             log(f"SkillsError in {method}: {exc}")
             return error_response(msg_id, INTERNAL_ERROR, f"Skills error: {exc}")
         except Exception as exc:  # noqa: BLE001 - report as JSON-RPC internal error
-            log(f"Internal error in {method}: {exc}")
+            log(f"Internal error in {method}: {type(exc).__name__}: {exc}")
+            if self.health_runs_only:
+                # Remote callers get no server paths or exception text; the
+                # detail stays in the operator's stderr log.
+                return error_response(msg_id, INTERNAL_ERROR, "Internal error")
             return error_response(msg_id, INTERNAL_ERROR, f"Internal error: {exc}")
 
         if is_notification:
