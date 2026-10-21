@@ -57,8 +57,8 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `NUVEL_MCP_OAUTH_STORE` | The token and client store (default `~/.nuvel/oauth.json`, mode 0600). Tokens and secrets are kept only as hashes. Put it on a persistent volume. |
 | `NUVEL_MCP_ALLOWED_ORIGINS`, `NUVEL_MCP_MAX_BODY_BYTES`, `NUVEL_MCP_MAX_SESSIONS`, `NUVEL_MCP_SESSION_TTL` | Optional tuning of the origin allow-list and the request and session caps. |
 | `NUVEL_MCP_REQUEST_DEADLINE` | Wall-clock seconds a client gets to send one whole request (request line, headers, body), however slowly it trickles. Default 30. |
-| `NUVEL_MCP_READ_TIMEOUT` | Seconds a single socket read or write may stall, and how long an idle keep-alive connection is kept. Default 30. |
-| `NUVEL_MCP_MAX_CONNECTIONS` | Connections (handler threads, open SSE streams included) served at once. Default 128. |
+| `NUVEL_MCP_READ_TIMEOUT` | Seconds a single socket read or write may stall, and how long an idle keep-alive connection is kept. Default 30. The idle keep-alive limit is the smaller of this and `NUVEL_MCP_REQUEST_DEADLINE`. |
+| `NUVEL_MCP_MAX_CONNECTIONS` | Connections (handler threads, open SSE streams included) served at once. Default 128. Slots are taken before authentication, and long-lived GET streams hold them, so a public deployment should sit behind a buffering reverse proxy with per-client connection limits. |
 
 The two timeouts must be greater than 0 and `NUVEL_MCP_MAX_CONNECTIONS` at least 1 (0 does not disable them); any other value stops the server at startup with exit code 2.
 

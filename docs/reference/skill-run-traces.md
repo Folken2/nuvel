@@ -126,16 +126,20 @@ HTTP status only, never the URL) and not retried; the local copy stands.
 }
 ```
 
-Without `plugin` the output is unchanged. When a principal is authenticated, the block
-counts only that principal's tenant; with no principal it covers the whole store. That
-is the case over stdio, and also over HTTP without `--auth` (allowed on a loopback
-bind only): every local caller then sees every tenant's runs, and the traces it records
-carry no `tenant`, exactly as over stdio.
+Without `plugin` the output is unchanged. The tenant is the OAuth `client_id` of the
+caller's access token (never the `subject`, which is a person's login). When a tenant is
+authenticated, the block counts only that tenant's runs; with no principal it covers
+the whole store. That is the case over stdio, and also over HTTP with `--no-auth`
+(allowed on a loopback bind only): every local caller then sees **all tenants'** runs,
+and the traces it records carry no `tenant`, exactly as over stdio.
 
 Over HTTP (`--transport http`) `plugin` is required, and the result carries only the
 identifiers and the tenant-scoped `runs` block (`{"skill", "plugin", "runs"}`).
 Nothing from the local feedback store is returned to remote callers, because it holds
-free text (queued proposals) and other tenants' outcomes.
+free text (queued proposals) and other tenants' outcomes. The default HTTP tool set is
+`search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value`,
+`record_run_trace` and `check_skill_health`; `record_feedback`, `propose_improvement`
+and `install_skill` are exposed only when named in `--tools`.
 
 ## Known limitations
 

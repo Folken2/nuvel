@@ -31,7 +31,7 @@ CLI surface (full table in README): `nuvel agent create`, `nuvel skills list|sea
 
 ### Monorepo: two PyPI packages
 
-The repo publishes two distributions at the same version, from one tag: `nuvel-cli` (root `pyproject.toml`, import `nuvel`) and `nuvel-mcp` (`packages/nuvel-mcp/`, import `nuvel_mcp`, no runtime dependencies; the `http` extra adds `mcp`). The Skills MCP server lives in `nuvel_mcp`; `nuvel.mcp` is a deprecated shim and `nuvel mcp serve` delegates to `nuvel_mcp.cli`. Its tests are in `packages/nuvel-mcp/tests/`. `release.yml` checks the tag against both versions and builds both into `dist/`.
+The repo publishes two distributions at the same version, from one tag: `nuvel-cli` (root `pyproject.toml`, import `nuvel`) and `nuvel-mcp` (`packages/nuvel-mcp/`, import `nuvel_mcp`, no runtime dependencies and no extras; its HTTP transport and OAuth are stdlib-only). The Skills MCP server lives in `nuvel_mcp`; `nuvel.mcp` is a deprecated shim and `nuvel mcp serve` delegates to `nuvel_mcp.cli`. Its tests are in `packages/nuvel-mcp/tests/`. `release.yml` checks the tag against both versions and builds both into `dist/`.
 
 ### Three parallel backends
 

@@ -280,20 +280,27 @@ Standalone Skills MCP server, shipped as its own dependency-free package (`nuvel
 
 ```bash
 uvx nuvel-mcp serve --skills-dir ./skills-hub
-nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--auth bearer|MODULE:FACTORY] [--allowed-host HOST]
+nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--allow-remote] [--no-auth] [--require-auth]
+nuvel-mcp client create --name NAME [--redirect-uri URI ...]
+nuvel-mcp client list [--json]
+nuvel-mcp client delete CLIENT_ID
+nuvel-mcp token revoke TOKEN_OR_CLIENT_ID
 ```
 
 | Flag | Description |
 |---|---|
 | `--skills-dir DIR` | Skills hub to serve. Optional: without it the server starts in feedback-only mode and exposes just the feedback tools (`record_feedback`, `check_skill_health`, `propose_improvement`, `record_run_trace`). `nuvel mcp serve` used to serve the current directory when it was omitted; pass `--skills-dir .` to keep that. |
-| `--tools A,B` | Comma-separated allow-list of tool names to expose. |
+| `--tools A,B` | Comma-separated allow-list of tool names to expose. Default: every tool on stdio; over HTTP `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value`, `record_run_trace` and `check_skill_health`. `record_feedback`, `propose_improvement` and `install_skill` are exposed over HTTP only when named here. |
 | `--trace-store` | Where `record_run_trace` keeps traces: `local` (JSONL under `<feedback-dir>/_runs/`, the default) or `module:factory`, a zero-argument callable returning a `TraceStore`. See [Skill run traces](skill-run-traces.md). |
-| `--transport stdio\|http` | `stdio` (default, no dependencies) or `http` (Streamable HTTP at `/mcp`; needs `pip install "nuvel-mcp[http]"`). Over HTTP only `record_run_trace` and `check_skill_health` are exposed unless `--tools` names others. |
-| `--host H`, `--port P` | HTTP bind address. Default `127.0.0.1:8765`. A host other than `127.0.0.1` / `localhost` / `::1` requires `--auth`. |
-| `--auth` | HTTP authenticator: `bearer` (tokens from `$NUVEL_MCP_TOKENS` as `name:token,name:token`; the name becomes the trace `tenant`) or `module:factory`, a zero-argument callable returning an `Authenticator` (anything else, including `None`, exits 1). Default: none (loopback only). See [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md). |
-| `--allowed-host HOST` | HTTP on a loopback bind: also accept `Host: HOST` (any port, case-insensitive) and `Origin: http(s)://HOST`. Use it for the public name a reverse proxy forwards; otherwise loopback binds answer non-loopback `Host` with `421` and non-loopback `Origin` with `403`. A bare host name; repeatable. Requires `--auth` (a proxied name is public reach, like a non-loopback `--host`). |
+| `--transport stdio\|http` | `stdio` (default) or `http`: Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` + `/messages`, and `GET /healthz`. Both need only the standard library. |
+| `--host H`, `--port P` | HTTP bind address. Default `127.0.0.1:8080` (`--port 0` picks a free port). |
+| `--allow-remote` | Allow a non-loopback `--host`. Requires `NUVEL_MCP_PUBLIC_URL` and GitHub OAuth credentials. |
+| `--no-auth` | HTTP only: disable OAuth for local development. Refused unless `--host` is loopback. There is then no principal, so traces carry no `tenant` and `check_skill_health` aggregates all tenants, as over stdio. |
+| `--require-auth` | stdio only: gate every request on the access token in `$NUVEL_MCP_ACCESS_TOKEN`. HTTP is always gated unless `--no-auth`. |
 
-The stdio transport needs no dependencies; install `nuvel-mcp[http]` for HTTP. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
+HTTP requires an OAuth 2.1 access token by default. The tenant of each run trace is the token's OAuth `client_id`. Operators create clients with `client create` (the secret is printed once) and revoke access with `client delete` or `token revoke`. Tuning and deployment settings (`NUVEL_MCP_PUBLIC_URL`, `NUVEL_OAUTH_*`, `NUVEL_MCP_REQUEST_DEADLINE`, `NUVEL_MCP_READ_TIMEOUT`, `NUVEL_MCP_MAX_CONNECTIONS`, ...) are listed in [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md).
+
+`nuvel-mcp` has no runtime dependencies and no extras. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
 
 ## Programmatic API
 
