@@ -353,3 +353,64 @@ config, a `## Trace` section mirrored in each run document for transparency).
 | Agents emit identifiers that encode content | Identifier regex + step catalogs + dashboard flagging; the tool description forbids non-catalog ids. |
 | Official MCP SDK API churn | It's isolated in `http.py` behind the `[http]` extra; the stdio path doesn't depend on it. |
 | Directory review rejects a plugin that sends traces | Opt-in by connecting the connector; the plugin README and a privacy policy declare exactly the schema above; each run document mirrors what was sent. |
+
+---
+
+## Amendment 2026-10-21 — adopt PR #94's HTTP transport and OAuth
+
+**Status:** approved by the user on 2026-10-21 ("adopta el #94 y porta nuestras protecciones").
+
+### Why
+
+While this branch was in progress, `main` merged #94 (`f2126d1`): a stdlib
+Streamable HTTP + legacy SSE transport for the Skills MCP server
+(`nuvel/mcp/http_transport.py`) with full OAuth 2.1 (`nuvel/mcp/oauth.py`:
+PKCE, dynamic client registration, refresh rotation, GitHub as IdP, hashed
+token store), `nuvel mcp client create|list|delete`, `nuvel mcp token revoke`,
+loopback-by-default binds, Origin validation and size/session caps. It
+supersedes this spec's §3 (SDK-based HTTP, bearer env tokens). Two HTTP
+transports for one server is not acceptable, so this branch adopts #94's and
+ports the protections only this branch has.
+
+### What changes
+
+1. **Relocate #94 into the package.** `http_transport.py` and `oauth.py` move to
+   `packages/nuvel-mcp/src/nuvel_mcp/` (they are stdlib-only, so `nuvel-mcp`
+   keeps zero runtime dependencies). The `nuvel.mcp` shim aliases them too.
+   #94's tests move to `packages/nuvel-mcp/tests/`. All of #94's CLI surface
+   (`--transport`, `--host`, `--port` default 8080, `--allow-remote`,
+   `--no-auth`, `--require-auth`, and the `client` / `token` subcommands) lives
+   in `nuvel_mcp.cli`, shared by `nuvel mcp …` and `nuvel-mcp …`.
+2. **Remove this branch's HTTP layer:** `nuvel_mcp/http.py`, the bearer
+   authenticator (`BearerAuthenticator`, `load_authenticator`, `--auth`,
+   `NUVEL_MCP_TOKENS`), `--allowed-host`, the HTTP-only `--port 8765` default,
+   and the `http` extra (`mcp>=1.30,<2`). `nuvel-mcp` has no extras.
+   `nuvel_mcp.auth.current_principal` stays as the one place tool handlers read
+   the caller's tenant.
+3. **Port the protections onto #94's transport** (supersedes the §3 defaults):
+   - **Remote mode on for every HTTP request** (`health_runs_only`): no tool
+     returns feedback-store-derived data; `check_skill_health` over HTTP
+     returns only the tenant-scoped `runs` block and requires `plugin`.
+   - **HTTP default tool set** (when `--tools` is not given): the hub read tools
+     (`search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value`)
+     plus `record_run_trace` and `check_skill_health`. Off unless named in
+     `--tools`: `record_feedback`, `propose_improvement` (free-text input) and
+     `install_skill` (writes to the server's filesystem). stdio keeps the full
+     set. *Controller call:* #94 exists to serve the hub remotely, so the read
+     tools stay on; only free-text and filesystem-writing tools are gated.
+   - **Tenant = OAuth `client_id`.** For each authenticated HTTP request,
+     `current_principal` is set to the token's `client_id` (never the `subject`,
+     which is a person's login) for the duration of the dispatch, and reset
+     after; traces are stamped and `check_skill_health` is scoped with it. With
+     `--no-auth`, the principal is `None` (stdio-like; documented).
+   - **DNS rebinding:** #94's Origin validation and default-on auth are kept; a
+     test must show that a cross-origin browser-style request (non-loopback
+     `Origin`) to a loopback bind is refused, with and without `--no-auth`. Add
+     a Host check only if that test exposes a gap.
+4. **Behaviour kept from this branch:** `--skills-dir` stays optional
+   (omitted → feedback-only mode), overriding #94's `"."` default — already
+   announced in the CHANGELOG.
+
+### Non-goals of the amendment
+
+Changing #94's OAuth design, endpoints, token store or session model.

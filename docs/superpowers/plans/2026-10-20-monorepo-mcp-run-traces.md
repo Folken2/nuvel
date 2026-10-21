@@ -333,3 +333,37 @@ def test_relay_posts_after_local_append(tmp_path, example, monkeypatch): ...
 
 - [ ] **Step 1: Failing tests** — with `TestClient(build_app(TraceLoader([fixture])))`, `/` lists `chief-of-staff:radar`, marks the failed skill run as an error, and contains `radar.2.email`; with no skill runs the "Skill steps" heading is absent.
 - [ ] **Step 2–4:** FAIL → implement → pass. **Step 5:** commit — `feat(dashboard): show skill runs and per-step error rates`
+
+---
+
+## Phase 5 — Adopt #94 (spec amendment 2026-10-21)
+
+Global constraints for Phase 5 (in addition to the above, which they override where they conflict):
+- `nuvel-mcp` runtime dependencies: none, and **no extras** (the `http` extra is removed).
+- HTTP defaults: #94's (`--host 127.0.0.1`, `--port 8080`, auth required unless `--no-auth`, `--allow-remote` for non-loopback).
+- HTTP default tools: `search_skills, list_skills, list_themes, get_skill, fence_value, record_run_trace, check_skill_health`; `record_feedback`, `propose_improvement`, `install_skill` only via `--tools`.
+- Tenant = OAuth `client_id`, never `subject`.
+- Every task must keep the full suite green: `uv run pytest tests packages/nuvel-mcp/tests -q`.
+
+### Task 11: Merge main and relocate #94 into `nuvel_mcp`
+
+**Files:** merge `origin/main`; move `nuvel/mcp/http_transport.py`, `nuvel/mcp/oauth.py` → `packages/nuvel-mcp/src/nuvel_mcp/`; move `tests/test_mcp_http.py`, `tests/test_mcp_oauth.py`, `tests/_mcp_http_helpers.py` → `packages/nuvel-mcp/tests/`; resolve `AGENTS.md`, `CHANGELOG.md`, `nuvel/commands/mcp_serve.py`; extend the `nuvel.mcp` shim; move #94's flags and `client`/`token` subcommands into `nuvel_mcp.cli`.
+**Interfaces:** Produces `nuvel_mcp.http_transport.serve_http(mcp, host, port, config, provider, no_auth=…)` and `nuvel_mcp.oauth.*` unchanged in behaviour; `nuvel mcp client|token …` and `nuvel-mcp client|token …` both work.
+- [ ] Steps: merge with conflicts resolved per the amendment (keep this branch's delegation in `mcp_serve.py`; keep `--skills-dir` optional; CHANGELOG keeps both sides' entries); move files with `git mv`, rewrite imports to `nuvel_mcp`; both test suites green with this branch's HTTP layer still present (it is removed in Task 12); commit `merge: main (#94 HTTP transport + OAuth) into the nuvel-mcp branch` and `refactor(mcp): move #94's HTTP transport and OAuth into nuvel_mcp`.
+
+### Task 12: Remove this branch's HTTP layer
+
+**Files:** delete `packages/nuvel-mcp/src/nuvel_mcp/http.py` and its tests; strip `BearerAuthenticator`/`load_authenticator` from `auth.py` (keep `current_principal`); remove `--auth`, `--allowed-host`, the SDK-based `--transport http` wiring and the `http` extra (pyproject, uv.lock, CI install line, packaging test, dev dependency group); rewrite `docs/how-to/deploy-skills-mcp.md` around #94 (OAuth, clients, `--allow-remote`, reverse proxy with #94's public URL setting).
+- [ ] Test first: packaging test asserts the `nuvel-mcp` wheel has **no** `Requires-Dist` lines at all; CLI test asserts `--auth` / `--allowed-host` are gone and `--transport http` uses #94's server. Commit `refactor(mcp): drop the SDK HTTP transport in favour of #94's`.
+
+### Task 13: Port the protections onto #94's transport
+
+**Files:** `nuvel_mcp/http_transport.py`, `nuvel_mcp/server.py`, `nuvel_mcp/cli.py`, tests in `packages/nuvel-mcp/tests/test_mcp_http.py` (or a new `test_http_protections.py`).
+**Interfaces:** Consumes `TokenInfo.client_id`, `SkillsMCPServer.health_runs_only`, `current_principal`, `HTTP_DEFAULT_TOOLS` (redefined to the Phase 5 set).
+- [ ] Failing tests first, over #94's real HTTP server: (1) `tools/list` without `--tools` returns exactly the Phase 5 default set; `record_feedback` call → refused; (2) a queued proposal's free text never appears in any HTTP tool result (`get_skill`, `check_skill_health`); `check_skill_health` without `plugin` → invalid-params, no echo; (3) two OAuth clients record traces concurrently → each stored trace's `tenant` equals its own `client_id`, never a `subject`; each sees only its own runs in `check_skill_health`; `--no-auth` → tenant absent; (4) loopback bind, request with `Origin: http://evil.example` → refused with and without `--no-auth`.
+- [ ] Implement, green, commit `feat(mcp): remote mode, gated tool set and client_id tenancy on the HTTP transport`.
+
+### Task 14: Docs and release notes reconciliation
+
+**Files:** `CHANGELOG.md` (one coherent Unreleased section covering #94 + this branch), `docs/reference/skill-run-traces.md` (tenancy = OAuth client_id; HTTP tool set), `docs/reference/cli.md`, `.claude/skills/nuvel/SKILL.md`, `CLAUDE.md` monorepo section (no extras), `packages/nuvel-mcp/README.md`, `CONTRIBUTING.md` (pre-merge PyPI gate unchanged).
+- [ ] `mkdocs build --strict` passes; grep shows no remaining references to `--auth bearer`, `NUVEL_MCP_TOKENS`, `--allowed-host`, `nuvel-mcp[http]` or `mcp>=1.30`. Commit `docs: reconcile MCP docs with #94's transport and OAuth`.
