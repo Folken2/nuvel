@@ -138,7 +138,7 @@ def test_gated_tools_are_refused_by_default(launch, hub, tmp_path, tool, argumen
         arguments = {**arguments, "target_dir": str(tmp_path / "installed")}
     body = rpc(authed(launch(hub)), call(tool, arguments))
     assert "result" not in body
-    assert body["error"] == {"code": -32602, "message": f"Unknown tool: {tool}"}
+    assert body["error"] == {"code": -32602, "message": "Unknown tool"}
     assert not (tmp_path / "installed").exists()
 
 

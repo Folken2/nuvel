@@ -1000,7 +1000,8 @@ class SkillsMCPServer:
         args = params.get("arguments") or {}
         handler = self._tools.get(tool_name)
         if handler is None or not self._tool_enabled(tool_name):
-            raise McpError(INVALID_PARAMS, f"Unknown tool: {tool_name}")
+            # Fixed text: never echo the caller-supplied name.
+            raise McpError(INVALID_PARAMS, "Unknown tool")
         try:
             result = handler(args)
         except ToolInputError as exc:
@@ -1262,9 +1263,16 @@ class SkillsMCPServer:
         for run in runs:
             if run.get("outcome") in outcomes:
                 outcomes[run["outcome"]] += 1
-            for err in run.get("errors", []):
-                by_class = errors_by_step.setdefault(err["step"], {})
-                by_class[err["class"]] = by_class.get(err["class"], 0) + 1
+            # Custom stores may hand back records without the schema's
+            # error fields; skip what cannot be counted rather than fail.
+            errors = run.get("errors")
+            for err in errors if isinstance(errors, list) else ():
+                step = err.get("step") if isinstance(err, dict) else None
+                cls = err.get("class") if isinstance(err, dict) else None
+                if not isinstance(step, str) or not isinstance(cls, str):
+                    continue
+                by_class = errors_by_step.setdefault(step, {})
+                by_class[cls] = by_class.get(cls, 0) + 1
         return {
             "last_30_days": outcomes,
             "errors_by_step": errors_by_step,
@@ -1391,14 +1399,18 @@ class SkillsMCPServer:
             with urllib.request.urlopen(request) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
+            # The response body and exception text stay in the server log; the
+            # caller gets the class and status only.
             detail = exc.read().decode("utf-8", "replace") if exc.fp else str(exc)
             log(f"GitHub API error {exc.code}: {detail}")
             raise McpError(
-                INTERNAL_ERROR, f"GitHub API returned {exc.code}: {detail}"
-            )
+                INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
+            ) from None
         except urllib.error.URLError as exc:
             log(f"GitHub API request failed: {exc}")
-            raise McpError(INTERNAL_ERROR, f"GitHub API request failed: {exc}")
+            raise McpError(
+                INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
+            ) from None
 
         return {
             "status": "filed",
@@ -1420,8 +1432,10 @@ class SkillsMCPServer:
             try:
                 data = _relay_feedback(relay_url, record)
             except (OSError, ValueError) as exc:  # URLError/HTTPError are OSErrors
-                relay_error = str(exc)
-                log(f"Feedback relay failed, queueing locally: {_describe_failure(exc)}")
+                # Class (+ status) only, in the result and the queue file alike:
+                # the exception text can echo the relay URL and its credentials.
+                relay_error = _describe_failure(exc)
+                log(f"Feedback relay failed, queueing locally: {relay_error}")
             else:
                 return {
                     "status": "relayed",
@@ -1438,11 +1452,13 @@ class SkillsMCPServer:
         if relay_error:
             record["relay_error"] = relay_error
         try:
-            queue_path = feedback.queue_proposal(self.feedback_dir, record)
+            feedback.queue_proposal(self.feedback_dir, record)
         except OSError as exc:
+            log(f"Could not queue the proposal: {exc}")  # paths stay server-side
             raise McpError(
-                INTERNAL_ERROR, f"Could not deliver or queue the proposal: {exc}"
-            )
+                INTERNAL_ERROR,
+                f"Could not deliver or queue the proposal: {type(exc).__name__}",
+            ) from None
         result = {
             "status": "queued",
             "delivery": "queue",
@@ -1453,8 +1469,6 @@ class SkillsMCPServer:
             ),
             "feedback_id": feedback_id,
             "current_version": proposal["current_version"],
-            "queue_path": str(queue_path),
-            "feedback_dir": str(queue_path.parent),
             "title": title,
         }
         if relay_error:

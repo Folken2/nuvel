@@ -58,6 +58,40 @@ def test_runs_block_counts_traces(tmp_path, example):
     }
 
 
+class _CustomStore:
+    """A third-party TraceStore whose records may lack error fields."""
+
+    def __init__(self, runs):
+        self.runs = runs
+
+    def append(self, record):
+        return True
+
+    def query(self, plugin, skill, since, tenant):
+        return self.runs
+
+
+def test_runs_summary_skips_errors_missing_step_or_class(tmp_path):
+    runs = [
+        {"outcome": "failure", "errors": [
+            {"step": "radar.1.fetch", "class": "timeout"},
+            {"class": "auth"},             # no step
+            {"step": "radar.2.email"},     # no class
+            {},
+            "not-a-dict",
+            {"step": ["x"], "class": "auth"},  # unhashable step
+        ]},
+        {"outcome": "success"},             # no errors key
+        {"outcome": "failure", "errors": None},
+    ]
+    s = SkillsMCPServer(None, feedback_dir=tmp_path, trace_store=_CustomStore(runs))
+    res, body = health(s, skill_name="radar", plugin="chief-of-staff")
+    assert "isError" not in res or res["isError"] is False
+    assert body["runs"]["errors_by_step"] == {"radar.1.fetch": {"timeout": 1}}
+    assert body["runs"]["last_30_days"]["failure"] == 2
+    assert body["runs"]["total"] == 3
+
+
 def test_runs_block_empty(tmp_path):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     _, body = health(s, skill_name="radar", plugin="chief-of-staff")

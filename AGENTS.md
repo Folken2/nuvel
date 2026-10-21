@@ -162,8 +162,8 @@ It exposes:
 `propose_improvement` delivers via the first available path:
 
 1. `GITHUB_TOKEN` set — files an issue against `github.com/Folken2/skills` (`status: "filed"`, `delivery: "github"`, `issue_url`).
-2. `NUVEL_FEEDBACK_URL` set — POSTs the proposal as JSON to that relay (`status: "relayed"`, `delivery: "relay"`, plus the relay's `issue_url`/`id` if returned). If the relay fails, it falls through to the queue with a `relay_error`.
-3. Otherwise — appends one JSON line to the feedback store's inbound queue, `<feedback dir>/feedback-queue.jsonl`, and returns `status: "queued"`, `delivery: "queue"`, the `queue_path` and the `feedback_dir`. If even that write fails the call returns an error, never a success.
+2. `NUVEL_FEEDBACK_URL` set — POSTs the proposal as JSON to that relay (`status: "relayed"`, `delivery: "relay"`, plus the relay's `issue_url`/`id` if returned). If the relay fails, it falls through to the queue with a `relay_error` (the exception class, plus the HTTP status for an HTTP error — never its message).
+3. Otherwise — appends one JSON line to the feedback store's inbound queue, `<feedback dir>/feedback-queue.jsonl`, and returns `status: "queued"`, `delivery: "queue"` (no server paths: the store location is the operator's `--feedback-dir` / `$NUVEL_FEEDBACK_DIR`). If even that write fails the call returns an error, never a success; error messages carry the exception class (and HTTP status), with the detail in the server log.
 
 **The feedback store.** All local skill feedback lands in one directory: `--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback` (kept out of the skills hub so a read-only clone works). It holds `<skill>/<id>.json` per `record_feedback` report plus `feedback-queue.jsonl` for queued proposals. `check_skill_health` and `get_skill`'s `health` read both, so a queued proposal is visible immediately (repeat submissions of the same proposal share a `feedback_id` and count once). `theme/name` and `name` address the same skill. The former `NUVEL_FEEDBACK_QUEUE` variable is no longer read; the server logs a warning if it is set.
 

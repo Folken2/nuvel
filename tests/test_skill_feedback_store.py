@@ -98,9 +98,9 @@ def test_queued_proposal_is_visible_to_check_skill_health(server, tmp_path):
     assert proposed["delivery"] == "queue"
     assert re.fullmatch(r"[0-9a-f]{16}", proposed["feedback_id"])
     store = tmp_path / "store"
-    assert proposed["queue_path"] == str(store / "feedback-queue.jsonl")
-    assert proposed["feedback_dir"] == str(store)
-    assert Path(proposed["queue_path"]).parent == server.feedback_dir
+    assert "queue_path" not in proposed and "feedback_dir" not in proposed
+    assert (store / "feedback-queue.jsonl").is_file()
+    assert server.feedback_dir == store
 
     health = call(server, "check_skill_health", skill_name=SKILL)
     assert health["queued_proposals"] == 1
@@ -226,8 +226,8 @@ def test_dedup_key_stable_across_case_whitespace_and_theme(server):
 def test_explicit_feedback_dir_beats_env(hub, tmp_path):
     explicit = tmp_path / "explicit"
     server = SkillsMCPServer(SkillsLoader(hub), feedback_dir=str(explicit))
-    proposed = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
-    assert proposed["queue_path"] == str(explicit / "feedback-queue.jsonl")
+    call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert (explicit / "feedback-queue.jsonl").is_file()
     call(server, "record_feedback", **outcome())
     assert (explicit / SKILL).is_dir()
     assert not (tmp_path / "store").exists()
@@ -250,8 +250,8 @@ def test_store_is_not_created_until_a_write(hub, tmp_path):
 def test_legacy_queue_env_is_ignored(server, tmp_path, monkeypatch):
     legacy = tmp_path / "legacy.jsonl"
     monkeypatch.setenv("NUVEL_FEEDBACK_QUEUE", str(legacy))
-    proposed = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
-    assert proposed["queue_path"] == str(tmp_path / "store" / "feedback-queue.jsonl")
+    call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert (tmp_path / "store" / "feedback-queue.jsonl").is_file()
     assert not legacy.exists()
 
 
