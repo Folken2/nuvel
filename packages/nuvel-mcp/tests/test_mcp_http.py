@@ -811,6 +811,50 @@ def test_oversized_declared_body_is_413_before_auth_and_closes(server_factory):
     assert elapsed < TIMEOUT
 
 
+@pytest.mark.parametrize("extra, status, max_body", [
+    (b"Content-Length: %d\r\n" % len(_HIDDEN), b"413", 16),  # oversized
+    (b"Transfer-Encoding: chunked\r\n", b"411", None),
+    (b"Content-Length: %d\r\n" % len(_HIDDEN), b"401", None),  # no token
+], ids=["oversized", "transfer-encoding", "unauthenticated"])
+def test_expect_100_continue_is_not_sent_before_a_refusal(server_factory, extra, status,
+                                                         max_body):
+    """No interim 100 before the framing gate and auth: the client is never
+    invited to send a body the server is about to refuse."""
+    client = server_factory(**({"max_body_bytes": max_body} if max_body else {}))
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n".encode()
+            + b"Expect: 100-continue\r\nContent-Type: application/json\r\n"
+            + extra + b"\r\n")
+    data, elapsed = _raw(client, head, _HIDDEN)
+    assert data.startswith(b"HTTP/1.1 " + status), data
+    assert b"100 Continue" not in data
+    assert data.count(b"HTTP/1.1 ") == 1 and b"Connection: close" in data
+    assert elapsed < TIMEOUT
+
+
+def test_expect_100_continue_valid_request_gets_continue_then_reply(server_factory):
+    import socket
+    client = server_factory()
+    body = json.dumps(INIT).encode()
+    head = (f"POST /mcp HTTP/1.1\r\nHost: {client.host}:{client.port}\r\n"
+            f"Authorization: Bearer {client.token}\r\nContent-Type: application/json\r\n"
+            f"Accept: application/json\r\nExpect: 100-continue\r\nConnection: close\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n").encode()
+    with socket.create_connection((client.host, client.port), timeout=TIMEOUT) as sock:
+        sock.sendall(head)
+        interim = b""
+        while b"\r\n\r\n" not in interim:
+            chunk = sock.recv(4096)
+            assert chunk, interim
+            interim += chunk
+        assert interim.startswith(b"HTTP/1.1 100 Continue\r\n"), interim
+        sock.sendall(body)
+        rest = interim.split(b"\r\n\r\n", 1)[1]
+        while chunk := sock.recv(4096):
+            rest += chunk
+    assert rest.startswith(b"HTTP/1.1 200"), rest
+    assert json.loads(rest.split(b"\r\n\r\n", 1)[1])["id"] == INIT["id"]
+
+
 def test_valid_posts_keep_the_connection_alive(server_factory):
     client = server_factory()
     conn = client.conn()

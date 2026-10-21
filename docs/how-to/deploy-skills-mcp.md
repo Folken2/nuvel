@@ -186,3 +186,8 @@ tenant, which is what `client create` is for.
 
 Error responses do not echo the request body, and a failing trace store reports a
 generic error to the caller; the detail goes to the server log only.
+
+A request with `Expect: 100-continue` gets the interim `100 Continue` only once
+it has passed the framing checks, `Origin` and authentication and its body is
+about to be read; a request refused by any of those gets its one final status
+and no `100`.

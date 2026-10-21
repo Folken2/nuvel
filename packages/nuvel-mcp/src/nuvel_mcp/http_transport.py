@@ -534,6 +534,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         super().handle_one_request()
 
     def parse_request(self) -> bool:
+        self._expects_continue = False
         tap = _HeaderTap(self.rfile)
         self._raw_header_lines = tap.lines
         self.rfile = tap
@@ -541,6 +542,14 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             return super().parse_request()
         finally:
             self.rfile = tap._fp
+
+    def handle_expect_100(self) -> bool:
+        # The stdlib would send "100 Continue" here, inside parse_request, before
+        # the framing gate, Origin and auth have run. Defer it to _read_body: the
+        # interim response goes out only once the request is accepted and its
+        # body is about to be read; a refused request gets its one final status.
+        self._expects_continue = True
+        return True
 
     server: McpHTTPServer
     protocol_version = "HTTP/1.1"
@@ -665,6 +674,10 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _read_body(self) -> bytes:
         # Framing was decided by _check_framing; this only reads what it allowed.
         length = self._body_length
+        if length and self._expects_continue:
+            self._expects_continue = False
+            self.send_response_only(HTTPStatus.CONTINUE)
+            self.end_headers()
         try:
             body = self.rfile.read(length) if length else b""
         except (TimeoutError, OSError):  # client stalled (socket.timeout) or vanished
