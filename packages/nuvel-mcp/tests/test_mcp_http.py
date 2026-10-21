@@ -767,6 +767,24 @@ _HIDDEN = b"GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n"
     (b"Content-Length: +%d\r\n" % len(_HIDDEN), b"400"),
     (b"Content-Length: abc\r\n", b"400"),
     ("Content-Length: \u0661\u0662\r\n".encode("utf-8"), b"400"),
+    # obs-fold even when the first line's value is empty: the parser would join
+    # it into a clean "37", so it must be caught from the raw header lines.
+    (b"Content-Length: \r\n %d\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length:\r\n\t%d\r\n" % len(_HIDDEN), b"400"),
+    # Only SP/HTAB is optional whitespace (RFC 9110 5.6.3); str.strip() takes more.
+    (b"Content-Length: \x0b%d\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: %d\x0c\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: \xa0%d\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: \x1c%d\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: %d\x1f\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: \x85%d\r\n" % len(_HIDDEN), b"400"),
+    # NUL in any header value.
+    (b"X-Pad: a\x00b\r\nContent-Length: %d\r\n" % len(_HIDDEN), b"400"),
+    (b"Content-Length: %d\x00\r\n" % len(_HIDDEN), b"400"),
+    # More digits than int() accepts (> 4300) must be 413, not a 500.
+    pytest.param(b"Content-Length: " + b"9" * 5000 + b"\r\n", b"413", id="cl-5000-digits"),
+    pytest.param(b"Content-Length: " + b"0" * 30 + b"%d\r\n" % len(_HIDDEN), b"413",
+                 id="cl-zero-padded"),
 ])
 @pytest.mark.parametrize("auth", ["none", "valid"])
 def test_bad_framing_is_refused_once_and_closes(server_factory, framing, status, auth):

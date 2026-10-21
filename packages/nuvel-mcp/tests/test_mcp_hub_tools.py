@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -645,6 +646,67 @@ def test_propose_github_unreachable_reports_class_only(server, monkeypatch, caps
     assert "URLError" in err["message"]
     assert "unreachable" not in err["message"] and "proxy.internal" not in err["message"]
     assert "proxy.internal" in capsys.readouterr().err
+
+
+class _BadBody:
+    """A response whose read() fails mid-body, or returns a non-JSON body."""
+
+    def __init__(self, exc: Exception | None = None, body: bytes = b""):
+        self.exc, self.body = exc, body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self, *args):
+        if self.exc:
+            raise self.exc
+        return self.body
+
+
+def _incomplete_read():
+    return http.client.IncompleteRead(b"partial /srv/private", 99)
+
+
+@pytest.mark.parametrize("response, cls", [
+    (lambda: _BadBody(exc=_incomplete_read()), "IncompleteRead"),
+    (lambda: _BadBody(body=b"<html>secret-detail /srv/private</html>"), "JSONDecodeError"),
+    (lambda: _BadBody(body=b"\xff\xfe secret-detail"), "UnicodeDecodeError"),
+])
+def test_propose_github_bad_response_reports_class_only(server, monkeypatch, response, cls):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen",
+                        lambda request, timeout=None: response())
+    err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert err["code"] == server_mod.INTERNAL_ERROR
+    assert cls in err["message"]
+    assert "secret-detail" not in err["message"] and "/srv" not in err["message"]
+
+
+def test_propose_relay_incomplete_read_falls_back_to_queue(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("NUVEL_FEEDBACK_URL", "https://relay.example/feedback")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen",
+                        lambda request, timeout=None: _BadBody(exc=_incomplete_read()))
+    result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert result["status"] == "queued"
+    assert result["relay_error"] == "IncompleteRead"
+    assert "/srv" not in (tmp_path / "feedback" / "feedback-queue.jsonl").read_text()
+
+
+def test_propose_github_bad_response_over_stdio_has_no_exception_text(server, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen",
+                        lambda request, timeout=None: _BadBody(exc=_incomplete_read()))
+    request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "propose_improvement",
+                          "arguments": {"skill_name": SKILL, **PROPOSAL}}}
+    out = io.StringIO()
+    server.serve(io.StringIO(json.dumps(request) + "\n"), out)
+    raw = out.getvalue()
+    assert "IncompleteRead" in raw
+    assert "/srv" not in raw and "partial" not in raw and "99 more" not in raw
 
 
 def test_propose_over_stdio_returns_no_path_or_exception_text(server, tmp_path, monkeypatch):

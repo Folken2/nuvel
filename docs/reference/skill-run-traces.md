@@ -116,14 +116,17 @@ duplicate (and learns nothing about the other tenant); a trace without a tenant 
 resent with a `started_at` on another UTC day is stored again.
 
 The check does not rescan the file. Each store keeps an in-memory index per day file
-(the keys seen, the byte offset read up to, and the file's inode) and, on every append,
-reads only the complete lines past that offset before checking. Lines written by
-another process or store instance are therefore seen; a trailing line still being
-written is left for the next read. If the file shrank or its inode changed (truncated,
-rotated, replaced) the index is rebuilt from the start. At most 64 day files are
-indexed per store (least recently used dropped, rebuilt lazily from disk), and appends
-are serialised by a fixed pool of 64 striped locks, so neither grows with the number of
-files.
+(the keys seen, the byte offset read up to, and the file's device, inode, ctime and
+size) and, on every append, reads only the complete lines past that offset before
+checking. Lines written by another process or store instance are therefore seen; a
+trailing line still being written is left for the next read. The index is rebuilt from
+the start if the file shrank, its device or inode changed (truncated, rotated,
+replaced), or it was changed without growing or with a different line before the
+offset (rewritten in place). At most 64 day files are indexed per store (least
+recently used dropped, rebuilt lazily from disk), and appends are serialised by a fixed
+pool of 64 striped locks, so neither grows with the number of files. Index memory is
+therefore bounded by the keys in the 64 most recently used day files; the number of
+keys in one day file is not capped.
 
 ## Relay
 

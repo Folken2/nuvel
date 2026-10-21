@@ -503,6 +503,20 @@ _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 _TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 
 
+class _HeaderTap:
+    """Records the raw lines read while the header block is parsed: the parser
+    unfolds obs-fold, so a fold after an empty value would otherwise vanish."""
+
+    def __init__(self, fp) -> None:
+        self._fp = fp
+        self.lines: list[bytes] = []
+
+    def readline(self, *args) -> bytes:
+        line = self._fp.readline(*args)
+        self.lines.append(line)
+        return line
+
+
 class McpRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
@@ -518,6 +532,15 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # that outlives it gets 408 in _read_body.
         self.rfile.arm(self.server.config.request_deadline)
         super().handle_one_request()
+
+    def parse_request(self) -> bool:
+        tap = _HeaderTap(self.rfile)
+        self._raw_header_lines = tap.lines
+        self.rfile = tap
+        try:
+            return super().parse_request()
+        finally:
+            self.rfile = tap._fp
 
     server: McpHTTPServer
     protocol_version = "HTTP/1.1"
@@ -611,8 +634,12 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # whitespace before the colon) or a line starting with whitespace.
         if self.headers.defects:
             raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
+        # obs-fold (a line starting with SP/HTAB), seen on the raw lines because
+        # the parser joins a fold after an empty value into a clean one.
+        if any(line[:1] in (b" ", b"\t") for line in self._raw_header_lines):
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
         for name, value in self.headers.items():
-            if not _TOKEN.fullmatch(name) or "\r" in value or "\n" in value:  # obs-fold too
+            if not _TOKEN.fullmatch(name) or any(c in value for c in "\r\n\x00"):
                 raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
         # No transfer coding is supported, in any form or count.
         if "Transfer-Encoding" in self.headers:
@@ -623,13 +650,17 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # More than one Content-Length, equal or not, is refused (RFC 9112 6.3).
         # ASCII digits only: int() would also take "+1", "-0", "1_0" and
         # non-ASCII digits, none of which a valid Content-Length may be.
-        raw = lengths[0].strip()
+        # Only SP/HTAB is optional whitespace (RFC 9110 5.6.3); str.strip()
+        # would also take VT, FF, NBSP, \x1c-\x1f and \x85.
+        raw = lengths[0].strip(" \t")
         if len(lengths) > 1 or not (raw.isascii() and raw.isdigit()):
             raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
-        length = int(raw)
-        if length > self.server.config.max_body_bytes:
+        # More digits than the cap has is over it; checked before int(), which
+        # refuses strings past 4300 digits.
+        max_body = self.server.config.max_body_bytes
+        if len(raw) > len(str(max_body)) or int(raw) > max_body:
             raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large")
-        return length
+        return int(raw)
 
     def _read_body(self) -> bytes:
         # Framing was decided by _check_framing; this only reads what it allowed.

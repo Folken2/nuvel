@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import os
 import re
 import threading
 from collections import OrderedDict
@@ -260,14 +261,38 @@ class TraceStore(Protocol):
 
 
 class _DayIndex:
-    """Dedupe keys already in one day file, and how far into it they were read."""
+    """Dedupe keys already in one day file, and how far into it they were read.
 
-    __slots__ = ("inode", "offset", "keys")
+    ``dev``/``inode``/``ctime_ns``/``size`` identify the file as last seen, and
+    ``tail`` is the last complete line before ``offset`` (it carries a run id
+    that is unique in the file). When the file was touched since (new ctime),
+    the offset is trusted only if the file grew -- an append -- and that line
+    still ends at the offset; otherwise the index is rebuilt.
+    """
 
-    def __init__(self, inode: int):
-        self.inode = inode
+    __slots__ = ("dev", "inode", "ctime_ns", "size", "offset", "tail", "keys")
+
+    TAIL_BYTES = 64 * 1024  # a longer last line is compared by its last 64 KiB
+
+    def __init__(self, stat: os.stat_result | None = None):
+        self.dev = stat.st_dev if stat else -1
+        self.inode = stat.st_ino if stat else -1
+        self.ctime_ns = stat.st_ctime_ns if stat else -1
+        self.size = stat.st_size if stat else -1
         self.offset = 0
+        self.tail = b""
         self.keys: set[tuple[object, object]] = set()
+
+    def still_valid(self, path: Path, stat: os.stat_result) -> bool:
+        """True when *path* is the file this index read, unchanged up to ``offset``."""
+        if (self.dev, self.inode) != (stat.st_dev, stat.st_ino) or stat.st_size < self.offset:
+            return False  # replaced (rename, other device) or truncated
+        if stat.st_ctime_ns == self.ctime_ns:
+            return True  # untouched since the last read
+        # Touched: appended to (fine) or rewritten in place (not). An append
+        # grows the file and leaves the line the offset follows in place.
+        return (stat.st_size > self.size
+                and _bytes_before(path, self.offset, len(self.tail)) == self.tail)
 
 
 class LocalTraceStore:
@@ -282,11 +307,13 @@ class LocalTraceStore:
     pool, so the registry never grows with the number of files), and the check
     runs against an in-memory index of that file's keys.
 
-    The index stores the byte offset it has read up to and the file's inode. On
-    every append it reads only the complete lines past that offset, so lines
-    written by another process (or another store instance) are picked up before
-    the check; if the file shrank or was replaced (different inode) the index is
-    rebuilt from the start. At most ``MAX_INDEXED_FILES`` day files are indexed
+    The index stores the byte offset it has read up to and the file's identity
+    (device, inode, ctime). On every append it reads only the complete lines
+    past that offset, so lines written by another process (or another store
+    instance) are picked up before the check. The index is rebuilt from the
+    start if the file shrank, was replaced (different device or inode), or was
+    touched (new ctime) and the bytes just before the offset changed -- a
+    rewrite in place. At most ``MAX_INDEXED_FILES`` day files are indexed
     per store; the least recently used is dropped and rebuilt lazily from disk.
     """
 
@@ -314,13 +341,19 @@ class LocalTraceStore:
         try:
             stat = path.stat()
         except FileNotFoundError:
-            entry = _DayIndex(inode=-1)
+            entry = _DayIndex()
         else:
-            if entry is None or entry.inode != stat.st_ino or stat.st_size < entry.offset:
-                entry = _DayIndex(inode=stat.st_ino)
+            if entry is None or not entry.still_valid(path, stat):
+                entry = _DayIndex(stat)
+            # Taken before the read: a write racing it changes ctime again, so
+            # the next call re-checks rather than trusting a stale snapshot.
+            entry.ctime_ns, entry.size = stat.st_ctime_ns, stat.st_size
             if stat.st_size > entry.offset:
                 records, consumed = _read_complete_lines(path, entry.offset)
-                entry.offset += consumed
+                if consumed:
+                    entry.offset += consumed
+                    entry.tail = _last_line(_bytes_before(path, entry.offset,
+                                                          _DayIndex.TAIL_BYTES))
                 entry.keys.update(
                     _dedupe_key(r) for r in records
                     if isinstance(r.get("run_id"), str) and isinstance(r.get("tenant"), (str, type(None)))
@@ -393,6 +426,22 @@ def _name(trace: dict, key: str) -> object:
 
 def _dedupe_key(trace: dict) -> tuple[object, object]:
     return (trace.get("tenant"), trace.get("run_id"))
+
+
+def _bytes_before(path: Path, offset: int, count: int) -> bytes:
+    """Up to *count* bytes of *path* ending at byte *offset* (b"" if unreadable)."""
+    start = max(0, offset - count)
+    try:
+        with path.open("rb") as fh:
+            fh.seek(start)
+            return fh.read(offset - start)
+    except FileNotFoundError:
+        return b""
+
+
+def _last_line(data: bytes) -> bytes:
+    """The last newline-terminated line of *data* (all of it if only one)."""
+    return data[data.rfind(b"\n", 0, len(data) - 1) + 1:]
 
 
 def _read_complete_lines(path: Path, offset: int) -> tuple[list[dict], int]:

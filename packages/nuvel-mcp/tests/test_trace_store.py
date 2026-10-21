@@ -146,8 +146,11 @@ def test_index_waits_for_a_partial_trailing_line_to_complete(tmp_path, example):
     path = tmp_path / DAY
     with path.open("a", encoding="utf-8") as fh:  # another process, mid-write
         fh.write(foreign[:20])
-    # Our append lands after the partial bytes; the index must not skip past them.
-    with path.open("a", encoding="utf-8") as fh:
+    # The index is read while the line is still partial: it must stop before it.
+    keys = store._keys_for(path.resolve())
+    assert (None, example["run_id"]) not in keys
+    assert store._index[path.resolve()].offset < path.stat().st_size
+    with path.open("a", encoding="utf-8") as fh:  # ... and the write completes
         fh.write(foreign[20:] + "\n")
     assert store.append(normalize(example, None)) is False
 
@@ -185,6 +188,42 @@ def test_index_rebuilds_when_the_file_is_replaced(tmp_path, example):
     replacement.replace(path)  # rotated / compacted by another process
     assert store.append(dropped) is True
     assert store.append(kept) is False
+
+
+def _with_id(example, run_id):
+    return normalize({**example, "run_id": run_id}, None)
+
+
+def _line(trace):
+    return json.dumps(trace, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+
+def test_index_rebuilds_when_the_file_is_rewritten_in_place_larger(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    first, second, later = (_with_id(example, c * 36) for c in "abc")
+    store.append(first)
+    store.append(second)  # the index now trusts an offset past the first line
+    path = tmp_path / DAY
+    inode = path.stat().st_ino
+    # Same inode, larger size; the bytes before the old offset changed.
+    with path.open("r+", encoding="utf-8") as fh:
+        fh.write(_line(later) + _line(first) + _line(second))
+    assert path.stat().st_ino == inode
+    assert store.append(later) is False
+
+
+def test_index_rebuilds_when_the_file_is_rewritten_in_place_same_size(tmp_path, example):
+    store = LocalTraceStore(tmp_path)
+    first, second, other = (_with_id(example, c * 36) for c in "abc")
+    store.append(first)
+    store.append(second)
+    assert store.append(second) is False  # the index has read the whole file
+    path = tmp_path / DAY
+    size, inode = path.stat().st_size, path.stat().st_ino
+    path.write_text(_line(other) + _line(second), encoding="utf-8")
+    assert (path.stat().st_size, path.stat().st_ino) == (size, inode)
+    assert store.append(other) is False
+    assert store.append(first) is True
 
 
 def test_index_rebuilds_when_the_file_shrinks(tmp_path, example):

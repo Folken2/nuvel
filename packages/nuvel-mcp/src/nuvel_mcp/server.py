@@ -26,6 +26,7 @@ Tools:
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -1413,6 +1414,13 @@ class SkillsMCPServer:
             raise McpError(
                 INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
             ) from None
+        except (http.client.HTTPException, ValueError) as exc:
+            # A cut-off reply (IncompleteRead) or a success body that is not
+            # UTF-8 JSON: class name only, in the log and the error alike.
+            log(f"GitHub API request failed: {_describe_failure(exc)}")
+            raise McpError(
+                INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
+            ) from None
 
         return {
             "status": "filed",
@@ -1433,7 +1441,8 @@ class SkillsMCPServer:
         if relay_url:
             try:
                 data = _relay_feedback(relay_url, record)
-            except (OSError, ValueError) as exc:  # URLError/HTTPError are OSErrors
+            # URLError/HTTPError are OSErrors; HTTPException covers IncompleteRead.
+            except (OSError, ValueError, http.client.HTTPException) as exc:
                 # Class (+ status) only, in the result and the queue file alike:
                 # the exception text can echo the relay URL and its credentials.
                 relay_error = _describe_failure(exc)
