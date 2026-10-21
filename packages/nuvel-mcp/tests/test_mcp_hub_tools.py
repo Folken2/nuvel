@@ -765,3 +765,73 @@ def test_propose_missing_required_args(server):
     err = call_error(server, "propose_improvement", skill_name=SKILL)
     assert err["code"] == server_mod.INVALID_PARAMS
     assert "issue" in err["message"] and "suggested_fix" in err["message"]
+
+
+
+
+def _http_error_with_unreadable_body(exc):
+    """A GitHub HTTPError whose body read itself fails (cut-off error reply)."""
+    class _Body(io.BytesIO):
+        def read(self, *args):
+            raise exc
+    return server_mod.urllib.error.HTTPError(
+        server_mod.GITHUB_ISSUES_URL, 502, "Bad Gateway", {}, _Body(b""))
+
+
+@pytest.mark.parametrize("read_exc", [
+    _incomplete_read(), ConnectionResetError("reset by /srv/private"),
+])
+def test_propose_github_http_error_with_unreadable_body(server, monkeypatch, read_exc):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    exc = _http_error_with_unreadable_body(read_exc)
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(exc=exc))
+    err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert err == {"code": server_mod.INTERNAL_ERROR,
+                   "message": "GitHub API request failed: HTTPError 502"}
+
+
+@pytest.mark.parametrize("reply", [b"[1, 2]", b"null", b'"text"', b"7"])
+def test_propose_github_non_object_reply_is_filed_without_links(server, monkeypatch, reply):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(reply))
+    result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert result["status"] == "filed"
+    assert result["issue_url"] is None and result["issue_number"] is None
+
+
+def test_propose_github_request_has_a_timeout(server, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    seen = {}
+
+    def fake(request, timeout=None):
+        seen["timeout"] = timeout
+        return io.BytesIO(b'{"html_url": "https://github.com/x/1", "number": 1}')
+
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", fake)
+    call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert seen["timeout"] == server_mod.RELAY_TIMEOUT_SECONDS
+
+
+def _raise_skills_error(params):
+    raise server_mod.SkillsError("bad frontmatter in /srv/private/skills/x/SKILL.md")
+
+
+def test_skills_error_is_masked_in_remote_mode(server, capsys):
+    server.health_runs_only = True
+    server._methods["test/skills-error"] = _raise_skills_error
+    resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "test/skills-error"})
+    assert resp["error"] == {"code": server_mod.INTERNAL_ERROR, "message": "Skills error"}
+    assert "/srv/private" in capsys.readouterr().err  # detail stays in the server log
+
+
+def test_skills_error_keeps_detail_over_stdio(server):
+    server._methods["test/skills-error"] = _raise_skills_error
+    resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "test/skills-error"})
+    assert resp["error"]["message"].startswith("Skills error: bad frontmatter")
+
+
+def test_method_not_found_does_not_echo_the_method(server):
+    for method in ("/etc/passwd", "<script>x</script>", "tools/nope"):
+        resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": method})
+        assert resp["error"] == {"code": server_mod.METHOD_NOT_FOUND,
+                                 "message": "Method not found"}

@@ -1399,12 +1399,15 @@ class SkillsMCPServer:
             },
         )
         try:
-            with urllib.request.urlopen(request) as resp:
+            with urllib.request.urlopen(request, timeout=RELAY_TIMEOUT_SECONDS) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             # The response body and exception text stay in the server log; the
             # caller gets the class and status only.
-            detail = exc.read().decode("utf-8", "replace") if exc.fp else str(exc)
+            try:
+                detail = exc.read().decode("utf-8", "replace") if exc.fp else str(exc)
+            except (OSError, http.client.HTTPException):
+                detail = ""  # a cut-off error body: the status alone is enough
             log(f"GitHub API error {exc.code}: {detail}")
             raise McpError(
                 INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
@@ -1421,6 +1424,8 @@ class SkillsMCPServer:
             raise McpError(
                 INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
             ) from None
+        if not isinstance(data, dict):
+            data = {}  # a non-object reply: filed, but no issue link to report
 
         return {
             "status": "filed",
@@ -1507,7 +1512,8 @@ class SkillsMCPServer:
         if handler is None:
             if is_notification:
                 return None
-            return error_response(msg_id, METHOD_NOT_FOUND, f"Method not found: {method}")
+            # Fixed text, like "Unknown tool": the caller's value is not echoed.
+            return error_response(msg_id, METHOD_NOT_FOUND, "Method not found")
 
         params = message.get("params") or {}
         try:
@@ -1517,6 +1523,9 @@ class SkillsMCPServer:
             return error_response(msg_id, exc.code, exc.message)
         except SkillsError as exc:
             log(f"SkillsError in {method}: {exc}")
+            if self.health_runs_only:
+                # Skills errors can carry hub paths: remote callers get fixed text.
+                return error_response(msg_id, INTERNAL_ERROR, "Skills error")
             return error_response(msg_id, INTERNAL_ERROR, f"Skills error: {exc}")
         except Exception as exc:  # noqa: BLE001 - report as JSON-RPC internal error
             log(f"Internal error in {method}: {type(exc).__name__}: {exc}")
