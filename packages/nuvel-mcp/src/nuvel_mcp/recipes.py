@@ -39,19 +39,23 @@ def validate_recipe(doc: object) -> list[str]:
 
 
 
-_EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
-_DIGIT_RUN_RE = re.compile(r"\d(?:[\s.-]?\d){5,}")
-_CURRENCY_WORDS = r"(?:eur|euros?|usd|gbp|d[oó]lares?|libras?)\b"
-_PII_PATTERNS = (
-    _EMAIL_RE,
-    re.compile(r"(?:https?://|www\.)", re.IGNORECASE),             # URL
-    re.compile(r"(?<![\w.-])[a-z0-9][a-z0-9-]*\.[a-z]{2,24}\b", re.IGNORECASE),  # bare domain
-    re.compile(r"\+?\d[\d\s().-]{7,}\d"),                          # phone
-    re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9 ]{10,}"),                  # IBAN-like
-    _DIGIT_RUN_RE,                                                 # long digit run
-    re.compile(r"[€$£¥]\s?\d|\d[\d.,]*\s?(?:[€$£¥]|" + _CURRENCY_WORDS + ")"
-               r"|\b(?:eur|usd|gbp)\s?\d", re.IGNORECASE),      # currency
-)
+# Typed PII regexes, module-level so ``nuvel_mcp.masking`` reuses them.
+EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+URL_RE = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)                       # URL prefix
+DOMAIN_RE = re.compile(r"(?<![\w.-])[a-z0-9][a-z0-9-]*\.[a-z]{2,24}\b", re.IGNORECASE)  # bare domain
+PHONE_RE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9 ]{10,}")                            # IBAN-like
+DIGIT_RUN_RE = re.compile(r"\d(?:[\s.-]?\d){5,}")                                 # long digit run
+CURRENCY_WORDS = r"(?:eur|euros?|usd|gbp|d[oó]lares?|libras?)\b"
+CURRENCY_RE = re.compile(r"[€$£¥]\s?\d|\d[\d.,]*\s?(?:[€$£¥]|" + CURRENCY_WORDS + ")"
+                         r"|\b(?:eur|usd|gbp)\s?\d", re.IGNORECASE)
+PII_PATTERNS = (EMAIL_RE, URL_RE, DOMAIN_RE, PHONE_RE, IBAN_RE, DIGIT_RUN_RE, CURRENCY_RE)
+
+# Private aliases kept for existing callers.
+_EMAIL_RE = EMAIL_RE
+_DIGIT_RUN_RE = DIGIT_RUN_RE
+_CURRENCY_WORDS = CURRENCY_WORDS
+_PII_PATTERNS = PII_PATTERNS
 _BREAK_CHARS = ".,;:!?()[]{}\"'“”«»"
 
 

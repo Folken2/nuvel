@@ -1,0 +1,715 @@
+"""Allowlist masker for recipe free text (``nuvel.recipe/2``, spec §4).
+
+Stdlib only, deterministic, no I/O apart from reading the packaged lexicons.
+Every word that is not on the lexicon for the recipe's language becomes
+``{?}``; typed patterns (emails, URLs, phones, ids, amounts, numbers, dates)
+become ``{type}`` placeholders. The masker is fail-safe: on any internal error
+a field is dropped, never returned unmasked, and no exception carries input
+text. ``invariant_hits`` is the independent third layer (spec §4.5).
+"""
+
+from __future__ import annotations
+
+import copy
+import functools
+import importlib.resources
+import re
+import unicodedata
+from dataclasses import dataclass
+from typing import Iterator
+
+from .recipes import (
+    CURRENCY_WORDS,
+    DIGIT_RUN_RE,
+    DOMAIN_RE,
+    EMAIL_RE,
+    IBAN_RE,
+    PHONE_RE,
+    PII_PATTERNS,
+    URL_RE,
+)
+
+DROP_THRESHOLD = 0.40
+READABILITY_TARGET = 0.85
+READABILITY_FLOOR = 0.75
+
+MASK = "{?}"
+PLACEHOLDER_TYPES = (
+    "person", "company", "team", "product", "project", "document", "file",
+    "folder", "amount", "number", "date", "time", "period", "place", "email",
+    "phone", "url", "id", "topic", "other",
+)
+_KNOWN = frozenset(PLACEHOLDER_TYPES)
+
+# Longest text the masker will look at (free text is at most 2000 characters
+# by schema). Anything longer fails safe instead of risking slow regexes.
+_MAX_CHARS = 8000
+
+
+@dataclass(frozen=True)
+class Lexicon:
+    words: frozenset[str]
+    numbers: frozenset[str]
+    dates: frozenset[str]
+    currency: frozenset[str]
+    version: str
+
+
+@dataclass(frozen=True)
+class MaskResult:
+    text: str
+    masked: int
+    words: int
+
+
+_FAILSAFE = MaskResult(MASK, 1, 1)  # ratio 1.0: always dropped by mask_recipe
+
+
+def fold(s: str) -> str:
+    """Strip combining marks (accents), then casefold."""
+    decomposed = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+
+
+# --- Lexicon loading -----------------------------------------------------------
+
+_LANG_RE = re.compile(r"[a-z]{2,3}(?:-[a-z]{2,4})?")
+_VERSION_TAIL_RE = re.compile(r"\d{4}\.\d{2}\.\d+")
+_SECTION_RE = re.compile(r"#\s*\[(words|numbers|dates|currency)\]\s*")
+_OTHER_SECTION_RE = re.compile(r"#\s*\[[^\]]*\]\s*")
+_VERSION_RE = re.compile(r"#\s*version:\s*(\S+)\s*")
+
+
+def _lexicon_dir():
+    return importlib.resources.files("nuvel_mcp").joinpath("lexicon")
+
+
+def _load_lexicon_from(path, language: str | None = None) -> Lexicon | None:
+    """Parse one lexicon file (a ``Path`` or ``Traversable``); ``None`` if it is
+    missing, unreadable or has no valid ``# version: <lang>-<YYYY.MM.N>``."""
+    try:
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8")
+        version = None
+        section = None
+        sets: dict[str, set[str]] = {"words": set(), "numbers": set(), "dates": set(), "currency": set()}
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                if m := _SECTION_RE.fullmatch(line):
+                    section = m.group(1)
+                elif _OTHER_SECTION_RE.fullmatch(line):
+                    section = None
+                elif (m := _VERSION_RE.fullmatch(line)) and version is None:
+                    version = m.group(1)
+                continue
+            if section is not None:
+                sets[section].add(fold(line))
+        if version is None:
+            return None
+        lang, sep, tail = version.rpartition("-")
+        if not sep or not _LANG_RE.fullmatch(lang) or not _VERSION_TAIL_RE.fullmatch(tail):
+            return None
+        if language is not None and lang != language:
+            return None
+        return Lexicon(
+            words=frozenset(sets["words"]),
+            numbers=frozenset(sets["numbers"]),
+            dates=frozenset(sets["dates"]),
+            currency=frozenset(sets["currency"]),
+            version=version,
+        )
+    except Exception:
+        return None
+
+
+@functools.lru_cache(maxsize=32)
+def _load_lexicon_cached(language: str) -> Lexicon | None:
+    return _load_lexicon_from(_lexicon_dir().joinpath(f"{language}.txt"), language)
+
+
+def load_lexicon(language: str) -> Lexicon | None:
+    """The packaged lexicon ``lexicon/{language}.txt``, or ``None`` (structure only)."""
+    try:
+        if not isinstance(language, str) or not _LANG_RE.fullmatch(language):
+            return None
+        return _load_lexicon_cached(language)
+    except Exception:
+        return None
+
+
+def _load_abbreviations_from(path) -> frozenset[str]:
+    """One entry per line, ``#`` comments; folded. Missing or unreadable → empty."""
+    try:
+        if not path.is_file():
+            return frozenset()
+        lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+        return frozenset(fold(line) for line in lines if line and not line.startswith("#"))
+    except Exception:
+        return frozenset()
+
+
+def _load_abbreviations() -> frozenset[str]:
+    try:
+        return _load_abbreviations_from(_lexicon_dir().joinpath("abbreviations.txt"))
+    except Exception:
+        return frozenset()
+
+
+ABBREVIATIONS: frozenset[str] = _load_abbreviations()
+
+
+# --- Step 1: normalisation -----------------------------------------------------
+
+def _normalise(text: str) -> str:
+    """NFKC, then drop format (Cf), control, surrogate, private-use, unassigned
+    and combining-mark characters. ``\\n`` and ``\\t`` stay; ``\\r`` and the
+    line/paragraph separators become ``\\n``."""
+    out = []
+    for c in unicodedata.normalize("NFKC", text):
+        if c in "\n\t":
+            out.append(c)
+            continue
+        if c == "\r":
+            out.append("\n")
+            continue
+        cat = unicodedata.category(c)
+        if cat in ("Zl", "Zp"):
+            out.append("\n")
+        elif cat[0] == "C" or cat[0] == "M":
+            continue  # Cc, Cf, Cs, Co, Cn; Mn, Mc, Me (marks with no precomposed form)
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+# --- Step 2: typed patterns ----------------------------------------------------
+
+# Server placeholders are written as NUL + a private-use code point + NUL while
+# the text is processed. Step 1 removes NUL and private-use characters, so a
+# client cannot forge one; they match none of the typed regexes below.
+_SENTINEL_BASE = 0xE000
+
+
+def _sentinel(kind: str) -> str:
+    return "\x00" + chr(_SENTINEL_BASE + PLACEHOLDER_TYPES.index(kind)) + "\x00"
+
+
+_NUM = r"(?:\d{1,3}(?:[ .,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)"
+_AMOUNT_RE = re.compile(
+    r"[€$£¥]\s?" + _NUM
+    + r"|" + _NUM + r"\s?(?:[€$£¥]|" + CURRENCY_WORDS + r")"
+    + r"|\b(?:eur|usd|gbp)\s?" + _NUM,
+    re.IGNORECASE,
+)
+# Any remaining alphanumeric run containing a digit (``15th``, ``v2``, ``14:30``).
+_DIGITS_RE = re.compile(r"(?<![^\W_])[^\W_]*\d(?:[^\W_]|[.,:/\-](?=\d))*")
+
+_LEAD_TRIM = "([{\"'«“‘¿¡<"
+_TRAIL_TRIM = ".,;:!?)]}\"'»”’>"
+
+# (placeholder type, regex, trim punctuation at the edges). Spec order, except
+# that the IBAN regex runs before phones and amounts before phones and digit
+# runs, so ``ES91 2100 …`` is an ``{id}`` and ``125.000 €`` an ``{amount}``
+# rather than a phone or id. Every digit is replaced either way.
+_TYPED = (
+    # Anchored to a token start: same leftmost matches as EMAIL_RE, linear time.
+    ("email", re.compile(r"(?<![^\s@])" + EMAIL_RE.pattern), True),
+    ("url", re.compile(URL_RE.pattern + r"\S*", re.IGNORECASE), True),
+    ("url", re.compile(DOMAIN_RE.pattern + r"[\w.\-]*(?:[/:?#]\S*)?", re.IGNORECASE), True),
+    ("id", IBAN_RE, True),
+    ("amount", _AMOUNT_RE, False),
+    ("phone", PHONE_RE, False),
+    ("id", DIGIT_RUN_RE, False),
+    ("number", _DIGITS_RE, False),
+)
+
+
+def _replace(text: str, kind: str, regex: re.Pattern, trim: bool) -> tuple[str, int]:
+    pieces, pos, count = [], 0, 0
+    for m in regex.finditer(text):
+        start, end = m.span()
+        if trim:
+            while start < end and text[start] in _LEAD_TRIM:
+                start += 1
+            while end > start and (text[end - 1] in _TRAIL_TRIM or text[end - 1].isspace()):
+                end -= 1
+        if end <= start:
+            continue
+        pieces.append(text[pos:start])
+        pieces.append(_sentinel(kind))
+        pos = end
+        count += 1
+    if not count:
+        return text, 0
+    pieces.append(text[pos:])
+    return "".join(pieces), count
+
+
+def _replace_typed(text: str) -> str:
+    """Apply the typed regexes until nothing changes (a replacement can expose
+    a new match, e.g. a domain that a digit used to shield)."""
+    for _ in range(5):
+        changed = 0
+        for kind, regex, trim in _TYPED:
+            if kind == "email" and "@" not in text:
+                continue
+            text, n = _replace(text, kind, regex, trim)
+            changed += n
+        if not changed:
+            break
+    else:
+        raise ValueError("typed replacement did not settle")
+    if any(c.isdigit() for c in text):
+        raise ValueError("digit left after typed replacement")
+    return text
+
+
+# --- Step 3/4: tokens ------------------------------------------------------------
+
+_TOKEN_RE = re.compile(
+    r"\x00([-])\x00"                  # server placeholder
+    r"|\{([a-z_?]{1,20})\}"                       # client placeholder (known or not)
+    r"|([^\W\d_]+(?:['’\-][^\W\d_]+)*)"           # word
+)
+_PART_SPLIT = re.compile(r"['’\-]")
+_HSPACE = re.compile(r"[ \t]*")
+_BREAK_RE = re.compile(r"\n|[.!?:][\"'”’»)\]]*\s")
+
+# Joiners: inside a run of number words ("veinte y cinco", "vint-i-cinc",
+# "hundred and five"), and between a number and a month or currency word
+# ("15 de marzo", "mil de euros", "fifteenth of march", "15 d'abril").
+_NUM_JOIN = frozenset({"y", "i", "and"})
+_LINK_JOIN = frozenset({"de", "del", "d", "of", "the"})
+
+
+def _tokenise(text: str) -> list[tuple[str, str]]:
+    """``(kind, value)``: kinds ``gap``, ``srv`` (type), ``cli`` (type) and ``word``."""
+    tokens: list[tuple[str, str]] = []
+    pos = 0
+    for m in _TOKEN_RE.finditer(text):
+        if m.start() > pos:
+            tokens.append(("gap", text[pos:m.start()]))
+        if m.group(1) is not None:
+            tokens.append(("srv", PLACEHOLDER_TYPES[ord(m.group(1)) - _SENTINEL_BASE]))
+        elif m.group(2) is not None:
+            tokens.append(("cli", m.group(2)))
+        else:
+            tokens.append(("word", m.group(3)))
+        pos = m.end()
+    if pos < len(text):
+        tokens.append(("gap", text[pos:]))
+    return tokens
+
+
+def _parts(word: str) -> list[str]:
+    return [fold(p) for p in _PART_SPLIT.split(word)]
+
+
+def _number_count(tok: tuple[str, str], lx: Lexicon) -> int:
+    """How many number words a token stands for (0 = not a number)."""
+    kind, value = tok
+    if kind == "srv":
+        return 1 if value == "number" else 0
+    if kind != "word":
+        return 0
+    ps = _parts(value)
+    if ps[0] in lx.numbers and ps[-1] in lx.numbers and all(p in lx.numbers or p in _NUM_JOIN for p in ps):
+        return sum(p in lx.numbers for p in ps)
+    return 0
+
+
+def _ends_in(tok: tuple[str, str], vocab: frozenset[str]) -> bool:
+    """A word whose last part is in *vocab* and whose other parts are link joiners (``d'abril``)."""
+    if tok[0] != "word":
+        return False
+    ps = _parts(tok[1])
+    return ps[-1] in vocab and all(p in _LINK_JOIN for p in ps[:-1])
+
+
+def _is_word_in(tok: tuple[str, str], vocab: frozenset[str]) -> bool:
+    return tok[0] == "word" and fold(tok[1]) in vocab
+
+
+class _Elements:
+    """Non-gap tokens plus whether each is joined to the next by spaces only."""
+
+    def __init__(self, tokens: list[tuple[str, str]]):
+        self.tokens = tokens
+        self.idx = [i for i, t in enumerate(tokens) if t[0] != "gap"]
+        self.link = []
+        for a, b in zip(self.idx, self.idx[1:]):
+            between = "".join(t[1] for t in tokens[a + 1:b])
+            self.link.append(_HSPACE.fullmatch(between) is not None)
+
+    def __len__(self):
+        return len(self.idx)
+
+    def tok(self, k: int) -> tuple[str, str]:
+        return self.tokens[self.idx[k]]
+
+    def linked(self, k: int, j: int) -> bool:
+        """Elements k..j (k < j) are all joined by spaces only."""
+        return all(self.link[m] for m in range(k, j))
+
+    def collapse(self, spans: list[tuple[int, int, str]]) -> list[tuple[str, str]]:
+        """Replace each element span ``(lo, hi, type)`` (and the gaps inside it) by one placeholder."""
+        out: list[tuple[str, str]] = []
+        pos = 0
+        for lo, hi, kind in spans:
+            out.extend(self.tokens[pos:self.idx[lo]])
+            out.append(("srv", kind))
+            pos = self.idx[hi] + 1
+        out.extend(self.tokens[pos:])
+        return out
+
+
+def _merge(spans: list[tuple[int, int, str]], prefer: str) -> list[tuple[int, int, str]]:
+    merged: list[tuple[int, int, str]] = []
+    for lo, hi, kind in sorted(spans):
+        if merged and lo <= merged[-1][1]:
+            plo, phi, pkind = merged[-1]
+            merged[-1] = (plo, max(phi, hi), prefer if prefer in (pkind, kind) else pkind)
+        else:
+            merged.append((lo, hi, kind))
+    return merged
+
+
+def _number_words(tokens: list[tuple[str, str]], lx: Lexicon) -> list[tuple[str, str]]:
+    """Runs of number words next to a currency word → amount; two or more → number."""
+    els = _Elements(tokens)
+    n = len(els)
+
+    def currency(k: int) -> bool:
+        t = els.tok(k)
+        return (t[0] == "srv" and t[1] == "amount") or _ends_in(t, lx.currency)
+
+    spans = []
+    k = 0
+    while k < n:
+        count = _number_count(els.tok(k), lx)
+        if not count:
+            k += 1
+            continue
+        lo = hi = k
+        while True:
+            if hi + 1 < n and els.linked(hi, hi + 1) and (c := _number_count(els.tok(hi + 1), lx)):
+                hi, count = hi + 1, count + c
+            elif (hi + 2 < n and els.linked(hi, hi + 2) and _is_word_in(els.tok(hi + 1), _NUM_JOIN)
+                  and (c := _number_count(els.tok(hi + 2), lx))):
+                hi, count = hi + 2, count + c
+            else:
+                break
+        start, end, is_amount = lo, hi, False
+        if hi + 1 < n and els.linked(hi, hi + 1) and currency(hi + 1):
+            end, is_amount = hi + 1, True
+        elif (hi + 2 < n and els.linked(hi, hi + 2) and _is_word_in(els.tok(hi + 1), _LINK_JOIN)
+              and currency(hi + 2)):
+            end, is_amount = hi + 2, True
+        if lo > 0 and els.linked(lo - 1, lo) and currency(lo - 1):
+            start, is_amount = lo - 1, True
+        if is_amount:
+            spans.append((start, end, "amount"))
+        elif count >= 2:
+            spans.append((start, end, "number"))
+        k = hi + 1
+    return els.collapse(_merge(spans, "amount")) if spans else tokens
+
+
+def _dates(tokens: list[tuple[str, str]], lx: Lexicon) -> list[tuple[str, str]]:
+    """A month or weekday next to a number or number word → date."""
+    els = _Elements(tokens)
+    n = len(els)
+    spans = []
+    for k in range(n):
+        if not _ends_in(els.tok(k), lx.dates):
+            continue
+        lo = hi = k
+        if k >= 1 and els.linked(k - 1, k) and _number_count(els.tok(k - 1), lx):
+            lo = k - 1
+        elif (k >= 2 and els.linked(k - 2, k) and _is_word_in(els.tok(k - 1), _LINK_JOIN)
+              and _number_count(els.tok(k - 2), lx)):
+            lo = k - 2
+        if k + 1 < n and els.linked(k, k + 1) and _number_count(els.tok(k + 1), lx):
+            hi = k + 1
+        elif (k + 2 < n and els.linked(k, k + 2) and _is_word_in(els.tok(k + 1), _LINK_JOIN)
+              and _number_count(els.tok(k + 2), lx)):
+            hi = k + 2
+        if lo < k or hi > k:
+            spans.append((lo, hi, "date"))
+    return els.collapse(_merge(spans, "date")) if spans else tokens
+
+
+# --- Steps 5–7: the allowlist ----------------------------------------------------
+
+def _has_upper(s: str) -> bool:
+    return any(c.isupper() or c.istitle() for c in s)
+
+
+def _is_abbreviation(word: str, abbreviations: frozenset[str]) -> bool:
+    return word.isalpha() and word.isupper() and len(word) <= 4 and fold(word) in abbreviations
+
+
+def _case_ok(word: str, at_start: bool) -> bool:
+    """Rule 6, second half: no capital letter except a sentence-initial one or ``I``."""
+    for k, part in enumerate(_PART_SPLIT.split(word)):
+        if part == "I" or not _has_upper(part):
+            continue
+        if at_start and k == 0 and _has_upper(part[0]) and not _has_upper(part[1:]):
+            continue
+        return False
+    return True
+
+
+def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
+    if len(text) > _MAX_CHARS:
+        return _FAILSAFE
+    text = _normalise(text)
+    if len(text) > _MAX_CHARS:
+        return _FAILSAFE
+    text = _replace_typed(text)
+    tokens = _tokenise(text)
+    tokens = _number_words(tokens, lx)
+    tokens = _dates(tokens, lx)
+
+    out: list[str] = []
+    last_mask = False        # the last non-gap output is {?}
+    pending_gap = None       # index in out of the gap after that {?}, if spaces only
+    masked = words = 0
+    at_start = True
+
+    def emit_mask():
+        nonlocal last_mask, pending_gap
+        if last_mask:
+            if pending_gap is not None:
+                del out[pending_gap]
+                pending_gap = None
+            return
+        out.append(MASK)
+        last_mask = True
+
+    for kind, value in tokens:
+        if kind == "gap":
+            if _BREAK_RE.search(value):
+                at_start = True
+            if last_mask and _HSPACE.fullmatch(value):
+                pending_gap = len(out)  # spaces only: a following {?} collapses into this one
+            else:
+                last_mask, pending_gap = False, None
+            out.append(value)
+            continue
+        if kind == "srv":
+            words += 1
+            out.append("{" + value + "}")
+            last_mask, pending_gap = False, None
+        elif kind == "cli":
+            if value in _KNOWN:
+                out.append("{" + value + "}")
+                last_mask, pending_gap = False, None
+            else:  # a client "{?}" or an unknown type: masked as non-lexicon text
+                words += 1
+                masked += 1
+                emit_mask()
+        else:
+            words += 1
+            if _is_abbreviation(value, abbreviations) or (
+                all(p in lx.words for p in _parts(value)) and _case_ok(value, at_start)
+            ):
+                out.append(value)
+                last_mask, pending_gap = False, None
+            else:
+                masked += 1
+                emit_mask()
+        at_start = False
+    return MaskResult("".join(out), masked, words)
+
+
+def mask_text(text: str, lexicon: Lexicon, abbreviations: frozenset[str] | None = None) -> MaskResult:
+    """Mask one free-text field. Never raises; on any internal error the result
+    is ``{?}`` with ``masked == words == 1`` (so the field is dropped)."""
+    try:
+        if not isinstance(text, str) or not isinstance(lexicon, Lexicon):
+            return _FAILSAFE
+        abbrevs = ABBREVIATIONS if abbreviations is None else abbreviations
+        return _mask(text, lexicon, abbrevs)
+    except Exception:
+        return _FAILSAFE
+
+
+# --- Recipes -------------------------------------------------------------------
+
+def _mask_field(value: object, lexicon: Lexicon | None) -> MaskResult | None:
+    """The masked field, or ``None`` when it must be dropped."""
+    if lexicon is None or not isinstance(value, str):
+        return None
+    result = mask_text(value, lexicon)
+    if result.words > 0 and result.masked / result.words > DROP_THRESHOLD:
+        return None
+    return result
+
+
+def _mask_recipe(recipe: object, lexicon: Lexicon | None) -> tuple[dict, dict]:
+    info = {"lexicon": lexicon.version if lexicon is not None else None,
+            "masked": 0, "words": 0, "dropped": []}
+    if not isinstance(recipe, dict):
+        info["dropped"].append("")
+        return {}, info
+    out = copy.deepcopy(recipe)
+    dropped: list[str] = info["dropped"]
+
+    def keep(result: MaskResult) -> str:
+        info["masked"] += result.masked
+        info["words"] += result.words
+        return result.text
+
+    for key in ("title", "when_to_use"):
+        if key in out:
+            result = _mask_field(out[key], lexicon)
+            if result is None:
+                out[key] = ""  # required (title) or kept empty (when_to_use)
+                dropped.append(f"/{key}")
+            else:
+                out[key] = keep(result)
+
+    if "steps" in out:
+        steps = out["steps"]
+        if not isinstance(steps, list):
+            del out["steps"]
+            dropped.append("/steps")
+        else:
+            kept_steps = []
+            for i, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    dropped.append(f"/steps/{i}")
+                    continue
+                if "note" in step:
+                    result = _mask_field(step["note"], lexicon)
+                    if result is None:
+                        del step["note"]
+                        dropped.append(f"/steps/{i}/note")
+                    else:
+                        step["note"] = keep(result)
+                kept_steps.append(step)
+            out["steps"] = kept_steps
+
+    if "pitfalls" in out:
+        pitfalls = out["pitfalls"]
+        if not isinstance(pitfalls, list):
+            del out["pitfalls"]
+            dropped.append("/pitfalls")
+        else:
+            kept_pitfalls = []
+            for i, item in enumerate(pitfalls):
+                result = _mask_field(item, lexicon)
+                if result is None:
+                    dropped.append(f"/pitfalls/{i}")
+                else:
+                    kept_pitfalls.append(keep(result))
+            out["pitfalls"] = kept_pitfalls
+
+    if "narrative" in out:
+        result = _mask_field(out["narrative"], lexicon)
+        if result is None:
+            del out["narrative"]
+            dropped.append("/narrative")
+        else:
+            out["narrative"] = keep(result)
+    return out, info
+
+
+def mask_recipe(recipe: dict, lexicon: Lexicon | None) -> tuple[dict, dict]:
+    """A masked copy of *recipe* and ``{"lexicon", "masked", "words", "dropped"}``.
+
+    Free-text fields are ``title``, ``when_to_use``, ``steps[].note``,
+    ``pitfalls[]`` and ``narrative``. A field more than ``DROP_THRESHOLD``
+    masked, or any field when *lexicon* is ``None``, is dropped: ``title`` and
+    ``when_to_use`` become ``""``, the others are removed. ``dropped`` lists
+    JSON pointers into the input. ``masked``/``words`` count the kept fields.
+    Never raises; the input is not modified.
+    """
+    try:
+        return _mask_recipe(recipe, lexicon)
+    except Exception:
+        pass
+    try:  # fail safe: keep the structure, drop every free-text field
+        out, info = _mask_recipe(recipe, None)
+        info["lexicon"] = lexicon.version if isinstance(lexicon, Lexicon) else None
+        return out, info
+    except Exception:
+        return {}, {"lexicon": None, "masked": 0, "words": 0, "dropped": [""]}
+
+
+# --- Invariant (third layer) ---------------------------------------------------
+
+_INV_TOKEN_RE = re.compile(r"\{[a-z_?]{1,20}\}|[^\W\d_]+(?:['’\-][^\W\d_]+)*")
+
+
+def _free_text(recipe: dict) -> Iterator[tuple[str, object]]:
+    for key in ("title", "when_to_use"):
+        if key in recipe:
+            yield f"/{key}", recipe[key]
+    steps = recipe.get("steps")
+    if isinstance(steps, list):
+        for i, step in enumerate(steps):
+            if isinstance(step, dict) and "note" in step:
+                yield f"/steps/{i}/note", step["note"]
+    if "pitfalls" in recipe:
+        pitfalls = recipe["pitfalls"]
+        if isinstance(pitfalls, list):
+            for i, item in enumerate(pitfalls):
+                yield f"/pitfalls/{i}", item
+        else:
+            yield "/pitfalls", pitfalls
+    if "narrative" in recipe:
+        yield "/narrative", recipe["narrative"]
+
+
+def _capital_outside_start(text: str) -> bool:
+    """Re-check of rule 6's capitalisation half over masked output. Independent
+    of the masker's tokeniser state: placeholders and words only."""
+    previous_end = 0
+    first = True
+    for m in _INV_TOKEN_RE.finditer(text):
+        gap = text[previous_end:m.start()]
+        previous_end = m.end()
+        start = first or _BREAK_RE.search(gap) is not None
+        first = False
+        token = m.group(0)
+        if token.startswith("{"):
+            continue
+        if token.isalpha() and token.isupper() and len(token) <= 4 and fold(token) in ABBREVIATIONS:
+            continue
+        for k, part in enumerate(re.split(r"['’\-]", token)):
+            if part == "I":
+                continue
+            capitals = [c.isupper() or c.istitle() for c in part]
+            if not any(capitals):
+                continue
+            if start and k == 0 and capitals[0] and not any(capitals[1:]):
+                continue
+            return True
+    return False
+
+
+def _text_hits(text: object) -> bool:
+    if not isinstance(text, str) or len(text) > _MAX_CHARS:
+        return True
+    normal = unicodedata.normalize("NFKC", text)
+    if any(p.search(normal) for p in PII_PATTERNS):
+        return True
+    return _capital_outside_start(normal)
+
+
+def invariant_hits(recipe: dict) -> list[str]:
+    """JSON-pointer paths of masked free-text fields that still match a typed
+    PII regex or hold a capitalised word outside a sentence start (spec §4.5).
+    A hit means a masker bug. Never raises; fails closed (``[""]``)."""
+    try:
+        if not isinstance(recipe, dict):
+            return [""]
+        return [path for path, value in _free_text(recipe) if _text_hits(value)]
+    except Exception:
+        return [""]
