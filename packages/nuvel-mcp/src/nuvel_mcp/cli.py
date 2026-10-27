@@ -86,6 +86,14 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
              "callable returning a TraceStore. Default: local.",
     )
     parser.add_argument(
+        "--recipe-store",
+        default="local",
+        metavar="local|MODULE:FACTORY",
+        help="Where recipe signals and recipes are stored: 'local' (files under "
+             "<feedback-dir>/_recipes/) or 'module:factory', a zero-argument "
+             "callable returning a RecipeStore. Default: local.",
+    )
+    parser.add_argument(
         "--transport",
         choices=("stdio", "http"),
         default="stdio",
@@ -189,6 +197,7 @@ def run_serve(args: argparse.Namespace) -> int:
     from nuvel_mcp.feedback import resolve_feedback_dir
     from nuvel_mcp.server import SkillsMCPServer
     from nuvel_mcp.skills_loader import SkillsError, SkillsLoader
+    from nuvel_mcp.recipes import load_recipe_store
     from nuvel_mcp.traces import load_trace_store
 
     if not _check_tools(args.tools):
@@ -218,6 +227,16 @@ def run_serve(args: argparse.Namespace) -> int:
             print(f"Error: invalid --trace-store: {exc}", file=sys.stderr)
             return 1
 
+    recipe_store = None
+    if args.recipe_store != "local":
+        try:
+            recipe_store = load_recipe_store(
+                args.recipe_store, resolve_feedback_dir(args.feedback_dir)
+            )
+        except ValueError as exc:
+            print(f"Error: invalid --recipe-store: {exc}", file=sys.stderr)
+            return 1
+
     server = SkillsMCPServer(
         loader,
         theme=args.theme,
@@ -226,6 +245,7 @@ def run_serve(args: argparse.Namespace) -> int:
         feedback_dir=args.feedback_dir,
         tools=args.tools,
         trace_store=trace_store,
+        recipe_store=recipe_store,
     )
     if args.require_auth and args.no_auth:
         print("Error: --require-auth and --no-auth are mutually exclusive.", file=sys.stderr)

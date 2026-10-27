@@ -10,8 +10,16 @@ like they carry customer detail. False positives are acceptable.
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import json
+import os
 import re
+import tempfile
+import threading
 import unicodedata
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from . import traces
 
@@ -117,3 +125,142 @@ def screen_signal(signal: dict) -> list[str]:
         return []
     category = signal.get("category")
     return ["/category"] if isinstance(category, str) and _id_matches(category) else []
+
+
+# --- Storage -----------------------------------------------------------------
+
+RECIPES_DIRNAME = "_recipes"
+_PATH_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
+
+
+def tenant_key(tenant: str | None) -> str:
+    """Opaque directory name for a tenant: ``sha256(tenant or "_local")[:16]``."""
+    return hashlib.sha256((tenant or "_local").encode("utf-8")).hexdigest()[:16]
+
+
+@runtime_checkable
+class RecipeStore(Protocol):
+    """Where recipe signals and recipes go. ``nuvel-cloud`` plugs in its own."""
+
+    def append_signal(self, signal: dict) -> bool:
+        """Store a signal; ``False`` if ``(tenant, signal_id)`` is already stored."""
+        ...
+
+    def put_recipe(self, recipe: dict) -> bool:
+        """Store one recipe version; ``False`` if that version already exists."""
+        ...
+
+
+class LocalRecipeStore:
+    """Files under ``{feedback_dir}/_recipes/``.
+
+    Signals: ``signals/{YYYY-MM-DD}.jsonl`` (UTC day of ``at``), one line each,
+    deduped on ``(tenant, signal_id)``. Recipes:
+    ``recipes/{tenant_key}/{recipe_id}/v{version}.json``, written atomically
+    (temp file + ``os.replace``); an existing file means duplicate. The store
+    does not validate; callers validate and stamp ``tenant`` first.
+    """
+
+    LOCK_STRIPES = 64
+    _lock_pool: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(LOCK_STRIPES))
+
+    def __init__(self, feedback_dir: Path):
+        self.feedback_dir = Path(feedback_dir)
+        # day file -> (size when scanned, keys); trusted only while size matches.
+        self._seen: dict[Path, tuple[int, set[tuple[object, object]]]] = {}
+        self._seen_guard = threading.Lock()
+
+    @classmethod
+    def _lock_for(cls, path: Path) -> threading.Lock:
+        return cls._lock_pool[hash(str(path)) % len(cls._lock_pool)]
+
+    @staticmethod
+    def _key(record: dict) -> tuple[object, object]:
+        return (record.get("tenant"), record.get("signal_id"))
+
+    def _keys_for(self, path: Path) -> set[tuple[object, object]]:
+        """Dedupe keys in *path*, rescanned when its size changed. Caller holds the lock."""
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return set()
+        with self._seen_guard:
+            cached = self._seen.get(path)
+        if cached is not None and cached[0] == size:
+            return cached[1]
+        keys: set[tuple[object, object]] = set()
+        with path.open("rb") as fh:
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    continue  # partial line from a concurrent writer
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    keys.add(self._key(rec))
+        with self._seen_guard:
+            self._seen[path] = (size, keys)
+        return keys
+
+    def append_signal(self, signal: dict) -> bool:
+        day = traces._parse_started_at(signal["at"]).date().isoformat()
+        path = (self.feedback_dir / RECIPES_DIRNAME / "signals" / f"{day}.jsonl").resolve()
+        line = json.dumps(signal, ensure_ascii=False, separators=(",", ":")) + "\n"
+        key = self._key(signal)
+        with self._lock_for(path):
+            keys = self._keys_for(path)
+            if key in keys:
+                return False
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+            keys.add(key)
+            # Size now differs from the cached one; the next call rescans.
+        return True
+
+    def put_recipe(self, recipe: dict) -> bool:
+        recipe_id, version = recipe["recipe_id"], recipe["version"]
+        if not (isinstance(recipe_id, str) and _PATH_ID_RE.fullmatch(recipe_id)
+                and isinstance(version, int) and not isinstance(version, bool)):
+            raise ValueError("recipe_id and version are not storable")
+        directory = (self.feedback_dir / RECIPES_DIRNAME / "recipes"
+                     / tenant_key(recipe.get("tenant")) / recipe_id)
+        path = directory / f"v{version}.json"
+        data = json.dumps(recipe, ensure_ascii=False, indent=2) + "\n"
+        with self._lock_for(path):
+            if path.exists():
+                return False
+            directory.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except FileNotFoundError:
+                    pass
+                raise
+        return True
+
+
+def load_recipe_store(spec: str, feedback_dir: Path) -> RecipeStore:
+    """Build the recipe store named by *spec*: ``"local"`` or ``"module:factory"``.
+
+    The factory is called with no arguments. Raises ``ValueError`` otherwise.
+    """
+    if spec == "local":
+        return LocalRecipeStore(feedback_dir)
+    module_name, sep, attr = (spec or "").partition(":")
+    if not sep or not module_name or not attr:
+        raise ValueError("recipe store must be 'local' or 'module:factory'")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"cannot import recipe store module {module_name!r}: {exc}") from exc
+    factory = getattr(module, attr, None)
+    if not callable(factory):
+        raise ValueError(f"recipe store factory {spec!r} not found or not callable")
+    return factory()

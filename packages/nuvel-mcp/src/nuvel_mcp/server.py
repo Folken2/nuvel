@@ -39,12 +39,13 @@ from importlib import metadata
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
-from nuvel_mcp import feedback, traces
+from nuvel_mcp import feedback, recipes, traces
 from nuvel_mcp.auth import current_principal
 from nuvel_mcp.installer import install_skill
 from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
 
 if TYPE_CHECKING:  # pragma: no cover
+    from nuvel_mcp.recipes import RecipeStore
     from nuvel_mcp.traces import TraceStore
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -451,12 +452,14 @@ class SkillsMCPServer:
         tools: frozenset[str] | None = None,
         trace_store: "TraceStore | None" = None,
         health_runs_only: bool = False,
+        recipe_store: "RecipeStore | None" = None,
     ):
         # None means feedback-only mode: no hub tools or resources are served.
         self.loader = loader
         # Optional allow-list narrowing which tools are listed and callable.
         self._allowed_tools = tools
         self.trace_store = trace_store
+        self.recipe_store = recipe_store
         # Remote mode, set by the HTTP transport: no tool returns anything
         # read from the local feedback store (which holds free text and every
         # tenant's outcomes). check_skill_health then requires 'plugin' and
@@ -520,6 +523,12 @@ class SkillsMCPServer:
         if self.trace_store is not None:
             return self.trace_store
         return traces.LocalTraceStore(self.feedback_dir)
+
+    def _recipe_store(self) -> "RecipeStore":
+        """The configured recipe store, else a local one under ``feedback_dir``."""
+        if self.recipe_store is not None:
+            return self.recipe_store
+        return recipes.LocalRecipeStore(self.feedback_dir)
 
     # --- Scoping helpers -----------------------------------------------------
 
