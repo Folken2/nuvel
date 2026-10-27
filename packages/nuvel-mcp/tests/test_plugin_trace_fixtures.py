@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from nuvel_mcp import traces
+from nuvel_mcp import recipes, traces
 from nuvel_mcp.server import SkillsMCPServer
 
 FIXTURES = Path(__file__).parent / "fixtures" / "chief_of_staff"
+RECIPE_FIXTURES = {"recipe_signal", "recipe"}  # not skill runs
+TRACE_FIXTURES = sorted(p for p in FIXTURES.glob("*.json") if p.stem not in RECIPE_FIXTURES)
 
 
 @pytest.fixture(autouse=True)
@@ -32,11 +34,12 @@ def call(s, name, args):
 
 
 def test_one_fixture_per_skill():
-    assert {p.stem for p in FIXTURES.glob("*.json")} == {
-        "setup", "radar", "brief", "prep", "weekly-review", "recall"}
+    assert {p.stem for p in TRACE_FIXTURES} == {
+        "setup", "radar", "brief", "prep", "weekly-review", "recall", "learn"}
+    assert {p.stem for p in FIXTURES.glob("*.json")} - {p.stem for p in TRACE_FIXTURES} == RECIPE_FIXTURES
 
 
-@pytest.mark.parametrize("path", sorted(FIXTURES.glob("*.json")), ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", TRACE_FIXTURES, ids=lambda p: p.stem)
 def test_chief_of_staff_fixture_validates(path):
     trace = json.loads(path.read_text())
     assert traces.validate_skill_run(trace) == []
@@ -50,3 +53,15 @@ def test_unknown_step_names_still_valid_identifiers(server):
     trace = load("radar") | {"run_id": str(uuid.uuid4())}
     trace["steps"] = trace["steps"] + [{"id": "radar.future-step", "status": "ok"}]
     assert call(server, "record_run_trace", {"trace": trace})["status"] == "recorded"
+
+
+def test_learn_signal_and_recipe_fixtures(server):
+    signal = json.loads((FIXTURES / "recipe_signal.json").read_text())
+    recipe = json.loads((FIXTURES / "recipe.json").read_text())
+    assert recipes.validate_signal(signal) == [] and recipes.screen_signal(signal) == []
+    assert recipes.validate_recipe(recipe) == [] and recipes.screen_recipe(recipe) == []
+    assert "tenant" not in signal and "tenant" not in recipe
+    assert signal["recipe_id"] == recipe["recipe_id"]
+    assert call(server, "record_recipe_signal", {"signal": signal})["status"] == "recorded"
+    assert call(server, "record_recipe_signal", {"signal": signal})["status"] == "duplicate"
+    assert call(server, "share_recipe", {"recipe": recipe})["status"] == "recorded"

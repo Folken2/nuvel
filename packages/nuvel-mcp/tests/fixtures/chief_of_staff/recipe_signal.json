@@ -1,0 +1,16 @@
+{
+  "schema": "nuvel.recipe_signal/1",
+  "signal_id": "9e4d7a10-3b52-4c68-a1f7-6d0c2b8e5f34",
+  "recipe_id": "c2a8f5b1-7d36-4e90-8b24-1f6e9a3d7c05",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "category": "client-proposal",
+  "event": "succeeded",
+  "at": "2026-11-02T09:15:00Z",
+  "uses": 4,
+  "successes": 3,
+  "corrections": 1
+}

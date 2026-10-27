@@ -1,0 +1,45 @@
+{
+  "schema": "nuvel.recipe/1",
+  "recipe_id": "c2a8f5b1-7d36-4e90-8b24-1f6e9a3d7c05",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "version": 2,
+  "category": "client-proposal",
+  "language": "es",
+  "title": "Preparar una propuesta para un cliente",
+  "when_to_use": "Cuando un cliente pide una propuesta con alcance, plazos y condiciones.",
+  "steps": [
+    {
+      "action": "search_mail",
+      "tool_kind": "email",
+      "text": "Buscar en el correo la petición original del cliente y los acuerdos previos."
+    },
+    {
+      "action": "find_template",
+      "tool_kind": "docs",
+      "text": "Localizar una propuesta anterior parecida para reutilizar su estructura."
+    },
+    {
+      "action": "check_availability",
+      "tool_kind": "calendar",
+      "text": "Comprobar la disponibilidad del equipo antes de fijar fechas."
+    },
+    {
+      "action": "draft_proposal",
+      "tool_kind": "none",
+      "text": "Redactar alcance, plazos y condiciones en un borrador claro."
+    },
+    {
+      "action": "request_review",
+      "tool_kind": "none",
+      "text": "Entregar el borrador al socio para su revisión antes de enviarlo."
+    }
+  ],
+  "pitfalls": [
+    "No prometer fechas sin confirmar la disponibilidad del equipo.",
+    "No reutilizar condiciones de otro cliente sin revisarlas."
+  ]
+}

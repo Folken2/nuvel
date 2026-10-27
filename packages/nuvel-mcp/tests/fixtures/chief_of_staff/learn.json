@@ -1,0 +1,72 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "5c0f6d2e-8a41-4b7d-9e35-2d6a1f8b7c93",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "skill": {
+    "name": "learn",
+    "version": "0.3.0"
+  },
+  "host": "claude-chat",
+  "mode": "interactive",
+  "started_at": "2026-11-02T09:15:00Z",
+  "duration_s": 42,
+  "outcome": "success",
+  "steps": [
+    {
+      "id": "learn.load-state",
+      "status": "ok"
+    },
+    {
+      "id": "learn.lesson",
+      "status": "ok",
+      "counts": {
+        "lessons_added": 1,
+        "lessons_dropped": 0,
+        "lessons_total": 6
+      }
+    },
+    {
+      "id": "learn.recipe",
+      "status": "ok",
+      "counts": {
+        "recipes_created": 0,
+        "recipes_updated": 1,
+        "recipes_retired": 0
+      }
+    },
+    {
+      "id": "learn.signal",
+      "status": "ok",
+      "counts": {
+        "signals_sent": 2,
+        "signals_failed": 0
+      }
+    },
+    {
+      "id": "learn.share",
+      "status": "ok",
+      "counts": {
+        "shares_sent": 1,
+        "shares_blocked": 0,
+        "shares_failed": 0
+      }
+    },
+    {
+      "id": "learn.write",
+      "status": "ok"
+    }
+  ],
+  "routing": {
+    "correction": 1,
+    "recipe_use": 1
+  },
+  "safety": {
+    "injection_suspected": 0,
+    "forbidden_tool_requested": 0
+  },
+  "user_corrected": true
+}
