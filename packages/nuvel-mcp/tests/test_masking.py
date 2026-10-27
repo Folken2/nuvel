@@ -511,10 +511,10 @@ def test_mask_recipe_copies_only_allowlisted_keys():
     assert out["steps"][0] == {"action": "search", "tool_kind": "email", "slots": ["person"], "note": "a b"}
     assert out["steps"][1] == {"slots": []}
     assert info["dropped"] == [
-        "/plugin/owner", "/category", "/steps/0/slots/1", "/steps/0/slots/2", "/steps/0/text",
-        "/steps/1/action", "/steps/1/tool_kind", "/extra", "/tenant", "/masking", "/{?}",
+        "/plugin/{?}", "/category", "/steps/0/slots/1", "/steps/0/slots/2", "/steps/0/{?}",
+        "/steps/1/action", "/steps/1/tool_kind", "/{?}", "/{?}", "/{?}", "/{?}",
     ]
-    assert invariant_hits(out) == []
+    assert invariant_hits(out, dropped=info["dropped"]) == []
 
 
 @pytest.mark.parametrize("field, value", [
@@ -535,17 +535,17 @@ def test_mask_recipe_output_is_not_aliased_to_input():
 
 
 @pytest.mark.parametrize("rec, hits", [
-    ({"extra": "Pedro"}, ["/extra"]),
+    ({"extra": "Pedro"}, ["/{?}"]),
     ({"Pedro García": "x"}, ["/{?}"]),
     ({"steps": "Pedro García pedro@x.com"}, ["/steps"]),
     ({"steps": ["Pedro", {"note": "ok"}]}, ["/steps/0"]),
     ({"steps": [{"slots": "person"}]}, ["/steps/0/slots"]),
     ({"steps": [{"slots": ["person", "Pedro"]}]}, ["/steps/0/slots/1"]),
-    ({"steps": [{"text": "x", "action": "Pedro"}]}, ["/steps/0/text", "/steps/0/action"]),
+    ({"steps": [{"text": "x", "action": "Pedro"}]}, ["/steps/0/{?}", "/steps/0/action"]),
     ({"pitfalls": "Pedro"}, ["/pitfalls"]),
-    ({"plugin": {"name": "x", "owner": "Pedro"}}, ["/plugin/owner"]),
+    ({"plugin": {"name": "x", "owner": "Pedro"}}, ["/plugin/name", "/plugin/{?}"]),
     ({"recipe_id": "Pedro"}, ["/recipe_id"]),
-    ({"tenant": "acme"}, ["/tenant"]),
+    ({"tenant": "acme"}, ["/{?}"]),
 ])
 def test_invariant_scans_every_value(rec, hits):
     assert invariant_hits(rec) == hits
@@ -647,3 +647,126 @@ def test_name_list_folding_is_the_maskers_fold(tmp_path):
     pruned = Lexicon(lx.words - names, lx.numbers, lx.dates, lx.currency, lx.version)
     assert masked("con rösa", pruned) == "con {?}"
     assert masked("con rosa", lx) == "con rosa"
+
+
+# --- fix round 2 -------------------------------------------------------------
+
+from nuvel_mcp import recipes  # noqa: E402
+
+
+@pytest.mark.parametrize("path, mutate", [
+    ("/steps/0/action", lambda r: r["steps"][0].update(action="call_pedro_garcia")),
+    ("/steps/0/action", lambda r: r["steps"][0].update(action="summarize")),
+    ("/steps/0/tool_kind", lambda r: r["steps"][0].update(tool_kind="phone")),
+    ("/steps/0/slots/0", lambda r: r["steps"][0].update(slots=["pedro"])),
+    ("/category", lambda r: r.update(category="llamar_a_pedro_garcia")),
+    ("/category", lambda r: r.update(category="sales")),
+    ("/plugin/name", lambda r: r["plugin"].update(name="pedro.garcia:6:1:2:3:4:5:6:7:8")),
+    ("/plugin/version", lambda r: r["plugin"].update(version="6123.45.678")),
+    ("/plugin/version", lambda r: r["plugin"].update(version="0.4")),
+    ("/recipe_id", lambda r: r.update(recipe_id=RID.upper())),
+    ("/install_id", lambda r: r.update(install_id="{" + IID + "}")),
+    ("/version", lambda r: r.update(version=1001)),
+    ("/language", lambda r: r.update(language="ES")),
+    ("/schema", lambda r: r.update(schema="nuvel.recipe/1")),
+])
+def test_identifier_fields_are_closed_sets(path, mutate):
+    rec = _recipe()
+    mutate(rec)
+    out, info = mask_recipe(rec, lex({"a", "b"}))
+    assert info["dropped"] == [path]
+    assert "pedro" not in json.dumps(out) and "612" not in json.dumps(out)
+    assert invariant_hits(out, dropped=info["dropped"]) == []
+    assert invariant_hits(rec) == [path]  # the invariant flags the same value
+
+
+def test_every_closed_value_passes():
+    for action in recipes.ACTIONS:
+        for category in recipes.CATEGORIES:
+            rec = _recipe(category=category)
+            rec["steps"][0]["action"] = action
+            out, info = mask_recipe(rec, lex({"a", "b"}))
+            assert info["dropped"] == [] and out["category"] == category
+
+
+def test_closed_lists_match_global_constraints():
+    assert recipes.ACTIONS == (
+        "search", "read", "summarise", "extract", "compare", "check", "calculate", "list",
+        "draft", "edit", "translate", "create", "update", "file", "propose_slot", "schedule",
+        "send", "reply", "forward", "share", "remind", "follow_up", "ask", "decide", "wait", "other")
+    assert masking.PLACEHOLDER_TYPES == (
+        "person", "company", "team", "product", "project", "document", "file", "folder", "amount",
+        "number", "date", "time", "period", "place", "email", "phone", "url", "id", "topic", "other")
+    assert recipes.PLUGIN_NAMES == ("chief-of-staff",)
+    assert len(recipes.CATEGORIES) == len(set(recipes.CATEGORIES)) and recipes.CATEGORIES[-1] == "other"
+    import masking_corpus  # noqa: F401  (the corpus category list is the same closed list)
+    from test_masking_corpus_format import CATEGORIES as CORPUS_CATEGORIES
+    assert set(recipes.CATEGORIES) == CORPUS_CATEGORIES
+
+
+def test_dropped_pointers_name_only_schema_keys():
+    rec = {"pedro_garcia_612345678": 1, "steps": [{"llamar_rosa": 1, "action": "search"}],
+           "plugin": {"rosa": 1}, "Pedro García": "x"}
+    out, info = mask_recipe(rec, lex({"a"}))
+    assert info["dropped"] == ["/{?}", "/steps/0/{?}", "/plugin/{?}", "/{?}"]
+    blob = json.dumps([out, info, invariant_hits(rec)])
+    assert "pedro" not in blob and "rosa" not in blob and "612" not in blob
+    assert invariant_hits({"pedro_garcia": 1}) == ["/{?}"]
+
+
+@pytest.mark.parametrize("dropped, hits", [
+    (["", "/title", "/steps/3/note", "/{?}", "/plugin/{?}", "/pitfalls/0"], []),
+    (["/pedro_garcia"], ["/masking/dropped/0"]),
+    (["/title", "/steps/0/llamar"], ["/masking/dropped/1"]),
+    (["title"], ["/masking/dropped/0"]),
+    ([3], ["/masking/dropped/0"]),
+    ("/title", ["/masking/dropped"]),
+])
+def test_invariant_checks_dropped(dropped, hits):
+    assert invariant_hits({"title": "ok"}, dropped=dropped) == hits
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("con t'i'm", "con {?}"),
+    ("con s'i'd", "con {?}"),
+    ("con d'l's", "con {?}"),
+    ("con t’i’m", "con {?}"),
+    ("con s’i’d", "con {?}"),
+    ("con d’l’s", "con {?}"),
+    ("con d's", "con {?}"),            # no part of two letters
+    ("con informe'l", "con {?}"),      # a prefix elision on the last part
+    ("con l'informe's", "con l'informe's"),
+    ("con l'informe", "con l'informe"),
+    ("I'm here, I'd go, don't", "I'm here, I'd go, don't"),
+])
+def test_chained_elisions(text, expected):
+    lx = lex({"con", "t", "i", "m", "s", "d", "l", "informe", "here", "go", "don"})
+    assert masked(text, lx) == expected
+    assert invariant_hits({"narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("con .--. . -.. .-. ---", "con {?}"),
+    ("con |||| ||", "con {?}"),
+    ("con | rosa", "con {?} rosa"),
+    ("con -.-. rosa", "con {?} rosa"),
+    ("con rosa... y rosa", "con rosa... y rosa"),
+    ("con rosa… y rosa", "con rosa... y rosa"),
+    ("con rosa — y rosa", "con rosa — y rosa"),
+    ("con rosa -- y rosa", "con rosa -- y rosa"),
+    ("con rosa, (y) rosa.", "con rosa, (y) rosa."),
+    ("con rosa.\n\n- rosa", "con rosa.\n\n- rosa"),
+    ("con rosa .... y", "con rosa {?} y"),
+    ("con rosa . . . . y", "con rosa {?} y"),
+])
+def test_punctuation_runs(text, expected):
+    lx = lex({"con", "rosa", "y"})
+    assert masked(text, lx) == expected
+    assert invariant_hits({"narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("text", [
+    "con .--. . -.. .-. ---", "con |||| ||", "con | rosa", "con rosa .... y", "con rosa . . . . y",
+])
+def test_invariant_flags_punctuation_runs(text):
+    assert invariant_hits({"narrative": text}) == ["/narrative"]

@@ -39,6 +39,24 @@ def validate_recipe(doc: object) -> list[str]:
 
 
 
+# Closed lists. CATEGORIES mirrors plugins/chief-of-staff/references/recipe-categories.md
+# (nuvel-plugins); PLUGIN_NAMES and ACTIONS grow with server releases.
+CATEGORIES = (
+    "client-proposal", "client-onboarding", "client-followup", "meeting-prep",
+    "meeting-followup", "sales-pipeline", "partner-relations", "investor-update",
+    "board-meeting", "monthly-close", "invoicing", "budget-planning", "hiring",
+    "team-management", "reporting", "contract-review", "travel-planning",
+    "event-planning", "inbox-triage", "document-drafting", "research",
+    "weekly-planning", "other",
+)
+PLUGIN_NAMES = ("chief-of-staff",)
+ACTIONS = (
+    "search", "read", "summarise", "extract", "compare", "check", "calculate",
+    "list", "draft", "edit", "translate", "create", "update", "file", "propose_slot",
+    "schedule", "send", "reply", "forward", "share", "remind", "follow_up", "ask",
+    "decide", "wait", "other",
+)
+
 # Typed PII regexes, module-level so ``nuvel_mcp.masking`` reuses them.
 EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 URL_RE = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)                       # URL prefix
@@ -122,12 +140,20 @@ def screen_recipe(recipe: dict) -> list[str]:
 
 
 def screen_signal(signal: dict) -> list[str]:
-    """JSON-pointer paths of signal fields (``/category``) that look like an email
-    or a long digit run. Paths only; matched text is never returned."""
+    """JSON-pointer paths of signal fields that could carry client text:
+    ``/plugin/name`` when not in ``PLUGIN_NAMES``; ``/category`` when not in
+    ``CATEGORIES`` or when it looks like an email or a long digit run. Paths
+    only; matched text is never returned."""
     if not isinstance(signal, dict):
         return []
+    hits = []
+    plugin = signal.get("plugin")
+    if isinstance(plugin, dict) and "name" in plugin and plugin["name"] not in PLUGIN_NAMES:
+        hits.append("/plugin/name")
     category = signal.get("category")
-    return ["/category"] if isinstance(category, str) and _id_matches(category) else []
+    if isinstance(category, str) and (category not in CATEGORIES or _id_matches(category)):
+        hits.append("/category")
+    return hits
 
 
 # --- Storage -----------------------------------------------------------------

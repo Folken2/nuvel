@@ -159,3 +159,14 @@ def test_screen_signal():
     assert recipes.screen_signal(SIGNAL) == []
     assert recipes.screen_signal(SIGNAL | {"category": "ventas-600123456"}) == ["/category"]
     assert recipes.screen_signal(SIGNAL | {"category": "x@acme.com"}) == ["/category"]
+
+
+def test_screen_signal_closed_lists():
+    assert recipes.screen_signal(SIGNAL | {"category": "llamar-a-pedro"}) == ["/category"]
+    assert recipes.screen_signal(SIGNAL | {"category": "sales"}) == ["/category"]
+    plugin = {"name": "pedro.garcia", "version": "0.3.0"}
+    assert recipes.screen_signal(SIGNAL | {"plugin": plugin}) == ["/plugin/name"]
+    both = SIGNAL | {"plugin": plugin, "category": "x"}
+    assert recipes.screen_signal(both) == ["/plugin/name", "/category"]
+    for category in recipes.CATEGORIES:
+        assert recipes.screen_signal(SIGNAL | {"category": category}) == []

@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from .recipes import (
+    ACTIONS,
+    CATEGORIES,
     CURRENCY_WORDS,
     DIGIT_RUN_RE,
     DOMAIN_RE,
@@ -27,6 +29,7 @@ from .recipes import (
     IBAN_RE,
     PHONE_RE,
     PII_PATTERNS,
+    PLUGIN_NAMES,
     URL_RE,
 )
 
@@ -321,17 +324,42 @@ _LINK_JOIN = frozenset({"de", "del", "d", "of", "the"})
 
 # Characters allowed between tokens. Everything else (symbols, emoji, flags,
 # enclosed or braille letters…) is deny-by-default: a counted ``{?}``.
-GAP_ALLOWED = frozenset(string.punctuation + "¿¡«»“”‘’–—…•·")
+GAP_ALLOWED = frozenset(string.punctuation.replace("|", "") + "¿¡«»“”‘’–—…•·")
 _GAP_RUN_RE = re.compile(r"[\s" + re.escape("".join(sorted(GAP_ALLOWED))) + r"]+")
 
 
+_ELLIPSIS_RE = re.compile(r"(?<!\.)\.\.\.(?!\.)|…")
+_EDGE_SPACE_RE = re.compile(r"\A(\s*)(.*?)(\s*)\Z", re.S)
+PUNCT_RUN_LIMIT = 4
+
+
+def _punctuation_run(run: str) -> bool:
+    """Four or more punctuation characters between two tokens, whitespace
+    ignored and an ellipsis counted as one (Morse, ASCII art…)."""
+    marks = "".join(_ELLIPSIS_RE.sub("…", run).split())
+    return len(marks) >= PUNCT_RUN_LIMIT
+
+
+def _allowed_run(run: str) -> Iterator[tuple[str, str]]:
+    if not _punctuation_run(run):
+        yield "gap", run
+        return
+    lead, middle, trail = _EDGE_SPACE_RE.fullmatch(run).groups()
+    if lead:
+        yield "gap", lead
+    yield "bad", middle
+    if trail:
+        yield "gap", trail
+
+
 def _split_gap(gap: str) -> Iterator[tuple[str, str]]:
-    """Allowed runs stay ``gap``; each run of other characters is ``bad``."""
+    """Allowed runs stay ``gap`` (unless a long punctuation run); each run of
+    other characters is ``bad``."""
     pos = 0
     for m in _GAP_RUN_RE.finditer(gap):
         if m.start() > pos:
             yield "bad", gap[pos:m.start()]
-        yield "gap", m.group(0)
+        yield from _allowed_run(m.group(0))
         pos = m.end()
     if pos < len(gap):
         yield "bad", gap[pos:]
@@ -505,29 +533,32 @@ def _is_abbreviation(word: str, abbreviations: frozenset[str]) -> bool:
     return word.isalpha() and word.isupper() and len(word) <= 4 and fold(word) in abbreviations
 
 
-# Single-letter parts are allowed only as apostrophe elisions: a prefix
-# (``l'``, ``d'``, ``s'``, ``n'``, ``m'``, ``t'`` and the pronoun ``I'``) or an
-# English contraction suffix (``'s``, ``'t``, ``'m``, ``'d``).
-_ELISION_PREFIX = frozenset("ldsnmti")
+# Single-letter parts are allowed only as apostrophe elisions: a prefix on the
+# first part (``l'``, ``d'``, ``s'``, ``n'``, ``m'``, ``t'``) or an English
+# contraction suffix on the last part (``'s``, ``'t``, ``'m``, ``'d``), in a
+# word that has a part of two or more letters. ``I'm`` and ``I'd`` are the
+# only words exempt from that last condition.
+_ELISION_PREFIX = frozenset("ldsnmt")
 _ELISION_SUFFIX = frozenset("stmd")
+_PRONOUN_CONTRACTIONS = frozenset({"I'm", "I’m", "I'd", "I’d"})
 _SEP_SPLIT = re.compile(r"(['’\-])")
 
 
 def _shape_ok(word: str) -> bool:
-    """Rejects spelled-out names: in a joined word every part has >= 2 letters,
-    except an apostrophe elision."""
+    """Rejects spelled-out names (``s-o-l``, ``t'i'm``)."""
     pieces = _SEP_SPLIT.split(word)
-    if len(pieces) == 1:
+    if len(pieces) == 1 or word in _PRONOUN_CONTRACTIONS:
         return True
-    for i in range(0, len(pieces), 2):
-        part = pieces[i]
+    parts, seps = pieces[0::2], pieces[1::2]
+    if not any(len(p) >= 2 for p in parts):
+        return False
+    last = len(parts) - 1
+    for i, part in enumerate(parts):
         if len(part) >= 2:
             continue
-        before = pieces[i - 1] if i > 0 else None
-        after = pieces[i + 1] if i + 1 < len(pieces) else None
-        if after in ("'", "’") and before in (None, "'", "’") and fold(part) in _ELISION_PREFIX:
+        if i == 0 and seps[0] in ("'", "’") and fold(part) in _ELISION_PREFIX:
             continue
-        if before in ("'", "’") and after is None and fold(part) in _ELISION_SUFFIX:
+        if i == last and seps[-1] in ("'", "’") and fold(part) in _ELISION_SUFFIX:
             continue
         return False
     return True
@@ -655,23 +686,21 @@ def mask_text(text: str, lexicon: Lexicon, abbreviations: frozenset[str] | None 
 # --- Recipes -------------------------------------------------------------------
 
 # Structured (non-free-text) fields are copied only from this allowlist, and
-# only when their value has the expected shape. Everything else is dropped.
-_ID_RE = re.compile(r"[a-z0-9][a-z0-9_.:-]{0,79}")
-_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-_SEMVER_RE = re.compile(r"\d{1,6}\.\d{1,6}\.\d{1,6}")
-_SCHEMA_RE = re.compile(r"nuvel\.recipe/\d{1,3}")
+# only when their value is in a closed set or has a fixed, digit-bounded shape.
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_SEMVER_RE = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}")
 _LANGUAGE_RE = re.compile(r"[a-z]{2}")
-_ACTION_RE = re.compile(r"[a-z][a-z_]{0,39}")
+SCHEMA_ID = "nuvel.recipe/2"
 _TOOL_KINDS = frozenset({"email", "calendar", "chat", "docs", "storage", "tasks", "web", "none"})
-_POINTER_KEY_RE = re.compile(r"[a-z_][a-z0-9_]{0,39}")
+
+
+def _in(values) -> object:
+    closed = frozenset(values)
+    return lambda v: isinstance(v, str) and v in closed
 
 
 def _match(regex: re.Pattern):
     return lambda v: isinstance(v, str) and regex.fullmatch(v) is not None
-
-
-def _identifier(v: object) -> bool:
-    return isinstance(v, str) and _ID_RE.fullmatch(v) is not None and not DIGIT_RUN_RE.search(v)
 
 
 def _recipe_version(v: object) -> bool:
@@ -679,25 +708,28 @@ def _recipe_version(v: object) -> bool:
 
 
 _TOP_FIELDS = {
-    "schema": _match(_SCHEMA_RE),
+    "schema": _in((SCHEMA_ID,)),
     "recipe_id": _match(_UUID_RE),
     "install_id": _match(_UUID_RE),
     "version": _recipe_version,
-    "category": _identifier,
+    "category": _in(CATEGORIES),
     "language": _match(_LANGUAGE_RE),
 }
-_PLUGIN_FIELDS = {"name": _identifier, "version": _match(_SEMVER_RE)}
-_STEP_FIELDS = {"action": _match(_ACTION_RE), "tool_kind": lambda v: v in _TOOL_KINDS if isinstance(v, str) else False}
+_PLUGIN_FIELDS = {"name": _in(PLUGIN_NAMES), "version": _match(_SEMVER_RE)}
+_STEP_FIELDS = {"action": _in(ACTIONS), "tool_kind": _in(_TOOL_KINDS)}
+_slot = _in(PLACEHOLDER_TYPES)
 
-
-def _slot(v: object) -> bool:
-    return isinstance(v, str) and v in _KNOWN
+# The only key names a JSON pointer may contain (``dropped`` and invariant
+# paths are stored and returned). Any other key is client text: ``{?}``.
+POINTER_KEYS = frozenset({
+    "schema", "recipe_id", "install_id", "plugin", "name", "version", "category",
+    "language", "title", "when_to_use", "steps", "action", "tool_kind", "slots",
+    "note", "pitfalls", "narrative",
+})
 
 
 def _key(key: object) -> str:
-    """A JSON-pointer segment for *key*. Keys are client text, so anything that
-    is not a plain identifier is reported as ``{?}``."""
-    return key if isinstance(key, str) and _POINTER_KEY_RE.fullmatch(key) else MASK
+    return key if isinstance(key, str) and key in POINTER_KEYS else MASK
 
 
 def _mask_field(value: object, lexicon: Lexicon | None, abbreviations) -> MaskResult | None:
@@ -841,13 +873,32 @@ def mask_recipe(recipe: dict, lexicon: Lexicon | None,
 # Deliberately written apart from the masker: its own tokens, its own
 # sentence-start logic and its own character allowlist.
 
-_INV_ALLOWED = frozenset(string.punctuation) | frozenset("¿¡«»“”‘’–—…•·")
+_INV_ALLOWED = frozenset(string.punctuation) - {"|"} | frozenset("¿¡«»“”‘’–—…•·")
 _INV_CLOSERS = "\"'”’»)]"
 _INV_TOKEN_RE = re.compile(
     r"\{(?:" + "|".join(PLACEHOLDER_TYPES) + r"|\?)\}"
     r"|[^\W\d_]+(?:['’\-][^\W\d_]+)*"
 )
 _INV_DOMAIN_RE = re.compile(r"[^\W\d_]\.[^\W\d_]{2}")
+
+
+def _inv_too_much_punctuation(gap: str) -> bool:
+    count, i, n = 0, 0, len(gap)
+    while i < n:
+        c = gap[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == ".":
+            j = i
+            while j < n and gap[j] == ".":
+                j += 1
+            count += 1 if j - i == 3 else j - i
+            i = j
+            continue
+        count += 1
+        i += 1
+    return count >= 4
 
 
 def _inv_sentence_break(gap: str) -> bool:
@@ -890,7 +941,7 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str]) -> bool:
     first = True
     for m in _INV_TOKEN_RE.finditer(text):
         gap = text[previous_end:m.start()]
-        if any(not (c.isspace() or c in _INV_ALLOWED) for c in gap):
+        if any(not (c.isspace() or c in _INV_ALLOWED) for c in gap) or _inv_too_much_punctuation(gap):
             return True
         start = first or _inv_sentence_break(gap)
         first = False
@@ -899,7 +950,7 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str]) -> bool:
         if not token.startswith("{") and _inv_capitalised(token, start, abbreviations):
             return True
     tail = text[previous_end:]
-    return any(not (c.isspace() or c in _INV_ALLOWED) for c in tail)
+    return any(not (c.isspace() or c in _INV_ALLOWED) for c in tail) or _inv_too_much_punctuation(tail)
 
 
 def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
@@ -954,18 +1005,47 @@ def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
             yield path
 
 
-def invariant_hits(recipe: dict, abbreviations: frozenset[str] | None = None) -> list[str]:
+_POINTER_SEGMENT_RE = re.compile(r"\d{1,4}|\{\?\}")
+
+
+def _pointer_ok(pointer: object) -> bool:
+    """``""`` or ``/seg/seg…`` where each segment is a fixed schema key, an
+    array index or ``{?}``."""
+    if pointer == "":
+        return True
+    if not isinstance(pointer, str) or not pointer.startswith("/") or len(pointer) > 200:
+        return False
+    return all(seg in POINTER_KEYS or _POINTER_SEGMENT_RE.fullmatch(seg) for seg in pointer[1:].split("/"))
+
+
+def _dropped_hits(dropped: object) -> Iterator[str]:
+    if not isinstance(dropped, list):
+        yield "/masking/dropped"
+        return
+    for i, pointer in enumerate(dropped):
+        if not _pointer_ok(pointer):
+            yield f"/masking/dropped/{i}"
+
+
+def invariant_hits(recipe: dict, abbreviations: frozenset[str] | None = None,
+                   dropped: list | None = None) -> list[str]:
     """JSON-pointer paths of a masked recipe that break the masking guarantees
     (spec §4.5). Every value at every depth is checked: free text must hold no
     digit, no character outside letters, whitespace, the punctuation allowlist
-    and ``{type}``/``{?}`` placeholders, no typed-PII match and no capitalised
-    word outside a sentence start; structured fields must have their schema
-    shape; unknown keys and wrongly shaped containers are hits. Pass the same
-    *abbreviations* the masker used. Never raises; fails closed (``[""]``)."""
+    and ``{type}``/``{?}`` placeholders, no run of four or more punctuation
+    marks, no typed-PII match and no capitalised word outside a sentence
+    start; structured fields must be in their closed set or fixed shape;
+    unknown keys and wrongly shaped containers are hits. Pass the same
+    *abbreviations* the masker used, and ``info["dropped"]`` as *dropped* to
+    check that every pointer names only fixed schema keys (hits are reported
+    as ``/masking/dropped/<i>``). Never raises; fails closed (``[""]``)."""
     try:
         if not isinstance(recipe, dict):
             return [""]
         abbrevs = ABBREVIATIONS if abbreviations is None else abbreviations
-        return list(dict.fromkeys(_inv_hits(recipe, abbrevs)))
+        hits = list(_inv_hits(recipe, abbrevs))
+        if dropped is not None:
+            hits.extend(_dropped_hits(dropped))
+        return list(dict.fromkeys(hits))
     except Exception:
         return [""]
