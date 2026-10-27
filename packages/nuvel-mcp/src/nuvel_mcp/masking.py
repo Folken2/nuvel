@@ -565,6 +565,15 @@ _ELISIONS = {
     "en": _Elisions(suffix=frozenset("stmd"), exempt=frozenset({"I'm", "I’m", "I'd", "I’d"})),
 }
 _NO_ELISIONS = _Elisions()
+
+# One-letter words that may stand alone, per language. Elision letters (en
+# ``s t m d``, ca ``l d s n m t``) pass only inside an apostrophised word, so a
+# lone ``m`` (a name initial) is masked. Unknown languages: none.
+_STANDALONE = {
+    "es": frozenset("ayoeu"),
+    "en": frozenset("ai"),
+    "ca": frozenset("aioe"),
+}
 _SEP_SPLIT = re.compile(r"(['’\-])")
 
 
@@ -665,6 +674,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
     tokens = _single_letter_runs(tokens)
     tokens = _initials(tokens)
     elisions = _ELISIONS.get(_language(lx), _NO_ELISIONS)
+    standalone = _STANDALONE.get(_language(lx), frozenset())
 
     out: list[str] = []
     last_mask = False        # the last non-gap output is {?}
@@ -719,7 +729,8 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
         else:
             words += 1
             if _is_abbreviation(value, abbreviations) or (
-                _shape_ok(value, elisions) and all(p in lx.words for p in _parts(value))
+                (len(value) > 1 or fold(value) in standalone)
+                and _shape_ok(value, elisions) and all(p in lx.words for p in _parts(value))
                 and _case_ok(value, at_start)
             ):
                 out.append(value)
@@ -940,6 +951,9 @@ _INV_TOKEN_RE = re.compile(
     r"|[^\W\d_]+(?:['’\-][^\W\d_]+)*"
 )
 _INV_DOMAIN_RE = re.compile(r"[^\W\d_]\.[^\W\d_]{2}")
+# Lone one-letter words allowed per recipe language (its own copy of the
+# masker's table); any other lone letter, or any with no known language, is a hit.
+_INV_LONE_LETTERS = {"es": "ayoeu", "en": "ai", "ca": "aioe"}
 
 
 def _inv_too_much_punctuation(gap: str) -> bool:
@@ -989,7 +1003,7 @@ def _inv_capitalised(token: str, start: bool, abbreviations: frozenset[str]) -> 
     return False
 
 
-def _inv_text_hit(text: object, abbreviations: frozenset[str]) -> bool:
+def _inv_text_hit(text: object, abbreviations: frozenset[str], lone_letters: str = "") -> bool:
     if not isinstance(text, str) or len(text) > _MAX_CHARS:
         return True
     if any(c.isdigit() for c in text):
@@ -1012,15 +1026,19 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str]) -> bool:
         token = previous = m.group(0)
         if not token.startswith("{") and _inv_capitalised(token, start, abbreviations):
             return True
+        if len(token) == 1 and token.casefold() not in lone_letters:
+            return True
     tail = text[previous_end:]
     return any(not (c.isspace() or c in _INV_ALLOWED) for c in tail) or _inv_too_much_punctuation(tail)
 
 
 def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
+    language = recipe.get("language")
+    lone = _INV_LONE_LETTERS.get(language, "") if isinstance(language, str) else ""
     for key, value in recipe.items():
         path = "/" + _key(key)
         if key in ("title", "when_to_use", "narrative"):
-            if _inv_text_hit(value, abbreviations):
+            if _inv_text_hit(value, abbreviations, lone):
                 yield path
         elif key in _TOP_FIELDS:
             if not _TOP_FIELDS[key](value):
@@ -1053,7 +1071,7 @@ def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
                                 if not _slot(slot):
                                     yield f"{sub}/{j}"
                     elif k == "note":
-                        if _inv_text_hit(v, abbreviations):
+                        if _inv_text_hit(v, abbreviations, lone):
                             yield sub
                     else:
                         yield sub
@@ -1062,7 +1080,7 @@ def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
                 yield path
                 continue
             for i, item in enumerate(value):
-                if _inv_text_hit(item, abbreviations):
+                if _inv_text_hit(item, abbreviations, lone):
                     yield f"/pitfalls/{i}"
         else:
             yield path
