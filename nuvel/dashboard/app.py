@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from nuvel.dashboard.headlines import describe_run
 from nuvel.dashboard.loader import TraceLoader
 from nuvel.eval.schema import ScoredRun
+from nuvel.recipes_view import load_recipe_candidates
 from nuvel.traces_cli import Run, step_error_rates
 
 
@@ -151,6 +152,19 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
     def home(request: Request) -> HTMLResponse:
         runs = loader.runs()
         return templates.TemplateResponse(request, "home.html", _home_context(runs))
+
+    @app.get("/recipes", response_class=HTMLResponse)
+    def recipes(request: Request) -> HTMLResponse:
+        cands = load_recipe_candidates(loader.skill_roots())
+        return templates.TemplateResponse(
+            request,
+            "recipes.html",
+            {
+                "candidates": cands,
+                "total_uses": sum(c.uses for c in cands),
+                "live": watcher is not None,
+            },
+        )
 
     @app.get("/run/{trace_id:path}", response_class=HTMLResponse)
     def run_detail(request: Request, trace_id: str) -> HTMLResponse:

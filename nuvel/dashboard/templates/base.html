@@ -15,7 +15,7 @@
 <body class="bg-[#f8f6f2] text-[#1f1d1a] font-sans antialiased">
   <div class="max-w-5xl mx-auto px-10 py-10">
     <header class="flex items-center justify-between pb-5 border-b border-black/10 mb-8 font-mono text-[11px] text-[#6b6b6b]">
-      <a href="/" class="brand">nuvel</a>
+      <span><a href="/" class="brand">nuvel</a> · <a href="/recipes">recipes</a></span>
       <div>{% block topbar_right %}{{ runs|length if runs is defined else "" }}{% endblock %}</div>
     </header>
     {% block body %}{% endblock %}

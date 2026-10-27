@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}nuvel · recipe candidates{% endblock %}
+{% block topbar_right %}{{ candidates|length }} categor{{ 'y' if candidates|length == 1 else 'ies' }}{% endblock %}
+{% block body %}
+
+<h1 class="ed-h1">
+  {% if candidates %}Recipe candidates. <span class="accent">{{ total_uses }}</span> uses.{% else %}No recipe signals yet.{% endif %}
+</h1>
+<div class="ed-sub">By category · counters from each recipe's latest signal · anonymised, shared copies only</div>
+
+{% if candidates %}
+<table class="ed-steps">
+  <thead><tr><th>Category</th><th>Recipes</th><th>Tenants</th><th>Uses</th><th>Success</th><th>Corrections</th><th>Latest anonymised version</th></tr></thead>
+  <tbody>
+  {% for c in candidates %}
+    <tr>
+      <td><code>{{ c.category }}</code></td>
+      <td>{{ c.recipes }}</td>
+      <td>{{ c.tenants }}</td>
+      <td>{{ c.uses }}</td>
+      <td>{{ '%.0f' % (c.success_rate * 100) }}%</td>
+      <td>{{ c.corrections }}</td>
+      <td>
+        {% if c.latest %}
+          <strong>{{ c.latest.get('title', '') }}</strong>
+          <div>{{ c.latest.get('when_to_use', '') }}</div>
+          <ol>
+          {% for step in c.latest.get('steps', []) if step is mapping %}
+            <li><code>{{ step.get('tool_kind', '') }}</code> {{ step.get('text', '') }}</li>
+          {% endfor %}
+          </ol>
+          {% if c.latest.get('pitfalls') %}
+          <div>Pitfalls:</div>
+          <ul>{% for p in c.latest.get('pitfalls', []) %}<li>{{ p }}</li>{% endfor %}</ul>
+          {% endif %}
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endblock %}

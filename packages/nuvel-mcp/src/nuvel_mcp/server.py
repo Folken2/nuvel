@@ -103,8 +103,9 @@ FEEDBACK_TOOLS = frozenset({
     "record_recipe_signal", "share_recipe",
 })
 # Tools the HTTP transport exposes when no explicit allow-list (--tools) is
-# given: the hub read tools plus run traces and their health summary. Off
-# unless named: record_feedback / propose_improvement (free-text input) and
+# given: the hub read tools, run traces and their health summary, and the two
+# recipe tools (closed-schema signals and PII-screened anonymised recipes).
+# Off unless named: record_feedback / propose_improvement (free-text input) and
 # install_skill (writes to the server's filesystem).
 HTTP_DEFAULT_TOOLS = frozenset({
     "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",

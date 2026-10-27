@@ -146,6 +146,8 @@ do. They apply to every HTTP server, whether or not you use `--no-auth`.
 | `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value` | The hub read tools: serving the hub is what a remote server is for. |
 | `record_run_trace` | Takes a closed-schema `nuvel.skill_run/1` trace with no free-text fields; anything else is rejected without being echoed. |
 | `check_skill_health` | Read-only; see remote mode below. |
+| `record_recipe_signal` | Takes a closed-schema `nuvel.recipe_signal/1` event with identifiers and counters only, no free text. See [Skill run traces](../reference/skill-run-traces.md#recipe-signals-and-shared-recipes). |
+| `share_recipe` | Takes an anonymised `nuvel.recipe/1` recipe. Closed schema, and the server rejects the whole recipe if any text looks like personal data (field paths only in the error). |
 
 Off unless you name them in `--tools`:
 

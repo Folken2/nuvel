@@ -128,6 +128,49 @@ pool of 64 striped locks, so neither grows with the number of files. Index memor
 therefore bounded by the keys in the 64 most recently used day files; the number of
 keys in one day file is not capped.
 
+## Recipe signals and shared recipes
+
+Two further tools store recipe data next to the traces, both in the HTTP default tool
+set, both tenant-stamped by the server from the OAuth `client_id` (a client-sent
+`tenant` is rejected):
+
+- **`record_recipe_signal`** stores a `nuvel.recipe_signal/1` event. Content-free:
+  `signal_id`, `recipe_id`, `install_id` (UUIDs), `plugin` (`name`, `version`),
+  `category` (identifier), `event` (`created`, `used`, `succeeded`, `corrected`,
+  `retired`), `at`, and the cumulative counters `uses`, `successes`, `corrections`.
+- **`share_recipe`** stores an anonymised `nuvel.recipe/1`: `recipe_id`,
+  `install_id`, `plugin`, `version`, `category`, `language`, `title` (80 characters
+  at most), `when_to_use` (200), `steps` (1 to 15 of `{action, tool_kind, text}` with
+  `tool_kind` one of `email`, `calendar`, `chat`, `docs`, `storage`, `tasks`, `web`,
+  `none` and `text` 160 at most) and `pitfalls` (5 at most, 160 each). The schema is
+  closed. The server also screens every text field for emails, phone numbers, URLs,
+  long digit runs, currency amounts and capitalised multi-word sequences, and rejects
+  the whole recipe on a match, naming field paths only.
+
+The JSON Schemas are `recipe_signal.v1.schema.json` and `recipe.v1.schema.json` in
+`nuvel_mcp/schemas/`.
+
+### Recipe store layout
+
+The default `LocalRecipeStore` writes under `{feedback_dir}/_recipes/`:
+
+```
+_recipes/signals/{YYYY-MM-DD}.jsonl                         one signal per line
+_recipes/recipes/{tenant_key}/{recipe_id}/v{version}.json   one file per recipe version
+```
+
+Records carry the server-set `tenant` when there is one, and `at` is truncated to the
+UTC minute. Writers in different processes can leave duplicate signal lines, so
+readers dedupe by `(tenant, signal_id)`.
+
+Because counters are cumulative, `nuvel traces recipes` and the dashboard's
+`/recipes` page take, per `(tenant, recipe_id)`, the signal with the latest `at` (the
+later line wins a tie) and sum those per category. `success_rate` is
+`successes / uses` (0 when there are no uses). The latest recipe shown for a category
+is its most recently modified recipe file. Unreadable or malformed lines and files are
+skipped, and tenant values are never displayed, only counts. Turning a candidate into
+a skill is manual.
+
 ## Relay
 
 If `NUVEL_FEEDBACK_URL` is set, the normalised trace is also POSTed as

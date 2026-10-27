@@ -846,6 +846,32 @@ def _print_recent_errors(records: list[tuple[Path, dict]], n: int) -> int:
     return 0
 
 
+def _cmd_recipes(args: argparse.Namespace) -> int:
+    from nuvel.recipes_view import load_recipe_candidates
+
+    roots = [resolve_feedback_dir()] + [Path(s) for s in args.source or []]
+    cands = load_recipe_candidates(roots)
+    if not cands:
+        print("No recipe signals found.")
+        return 0
+    rows = [
+        (
+            c.category,
+            str(c.recipes),
+            str(c.tenants),
+            str(c.uses),
+            f"{c.success_rate * 100:.0f}%",
+            str(c.corrections),
+            _short(str(c.latest.get("title", "")), 50) if c.latest else "-",
+        )
+        for c in cands
+    ]
+    _print_table(
+        ("CATEGORY", "RECIPES", "TENANTS", "USES", "SUCCESS", "CORRECTIONS", "LATEST"), rows
+    )
+    return 0
+
+
 # ── Parser wiring ────────────────────────────────────────────────────
 
 
@@ -899,3 +925,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Instead of the summary, print the last N error events with messages.",
     )
     p_errors.set_defaults(func=_cmd_errors)
+
+    p_recipes = sub.add_parser(
+        "recipes",
+        help="List recipe candidates (signals and shared recipes) by category.",
+    )
+    p_recipes.add_argument(
+        "--source", "-s", action="append", default=None,
+        help="Extra directory to search for a `_recipes` tree (repeatable). "
+             "The feedback directory is always searched.",
+    )
+    p_recipes.set_defaults(func=_cmd_recipes)

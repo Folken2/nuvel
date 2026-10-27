@@ -121,6 +121,14 @@ nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>]
 
 Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total cost. Prints a cost-coverage warning at the bottom when runs have token usage but no cost — the symptom of a model missing from `pricing.json`. Run `nuvel doctor` to verify.
 
+### `nuvel traces recipes`
+
+```bash
+nuvel traces recipes [-s <dir>]
+```
+
+Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest anonymised version. The feedback directory is always searched; `--source` adds more roots. Counters come from each recipe's latest signal per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
+
 ### `nuvel traces errors`
 
 ```bash
@@ -183,7 +191,7 @@ nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-op
 | `--demo` | off | Load bundled demo fixtures instead of real traces. |
 | `--no-open` | off | Don't open the browser automatically. |
 
-Two pages: a home view (hero + headline stats + recent activity) and a per-run detail with the thinking timeline. Live updates push new runs as the watcher sees them.
+Three pages: a home view (hero + headline stats + recent activity), a per-run detail with the thinking timeline, and `/recipes`, the **Recipe candidates** view (the same data as `nuvel traces recipes`, plus the latest anonymised recipe text per category). Live updates push new runs as the watcher sees them.
 
 ## `nuvel eval`
 
