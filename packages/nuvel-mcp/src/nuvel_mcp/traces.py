@@ -42,7 +42,7 @@ IDENTIFIER_RE = re.compile(r"\A[a-z0-9][a-z0-9_.:-]{0,79}\Z")
 VALIDATION_KEYWORDS = frozenset({
     "type", "enum", "const", "pattern", "minimum", "maximum", "maxItems",
     "maxProperties", "required", "properties", "additionalProperties", "items",
-    "propertyNames", "format",
+    "propertyNames", "format", "maxLength", "minItems",
 })
 #: Keywords that carry no validation meaning and are ignored.
 ANNOTATION_KEYWORDS = frozenset({"$schema", "title", "description"})
@@ -82,32 +82,40 @@ def check_schema_keywords(schema: dict) -> None:
     walk(schema, "")
 
 
-@lru_cache(maxsize=1)
-def _packaged_schema() -> str:
-    return resources.files("nuvel_mcp").joinpath(SCHEMA_RESOURCE).read_text(encoding="utf-8")
+@lru_cache(maxsize=None)
+def _packaged_schema(resource: str) -> str:
+    return resources.files("nuvel_mcp").joinpath(resource).read_text(encoding="utf-8")
 
 
-def load_schema() -> dict:
-    """Return the packaged ``nuvel.skill_run/1`` JSON Schema (keyword-checked)."""
-    schema = json.loads(_packaged_schema())
+def load_schema(resource: str = SCHEMA_RESOURCE) -> dict:
+    """Return the packaged JSON Schema at *resource* (keyword-checked).
+
+    Defaults to ``nuvel.skill_run/1``.
+    """
+    schema = json.loads(_packaged_schema(resource))
     check_schema_keywords(schema)
     return schema
 
 
-@lru_cache(maxsize=1)
-def _schema() -> dict:
-    return load_schema()
+@lru_cache(maxsize=None)
+def _schema(resource: str = SCHEMA_RESOURCE) -> dict:
+    return load_schema(resource)
 
 
-def validate_skill_run(trace: object) -> list[str]:
-    """Validate *trace* against ``nuvel.skill_run/1``.
+def validate(document: object, resource: str) -> list[str]:
+    """Validate *document* against the packaged schema *resource*.
 
     Returns the JSON-pointer paths of failing fields (``"/"`` for the root);
     an empty list means valid. Values are never included.
     """
     errors: list[str] = []
-    _validate(trace, _schema(), "", errors)
+    _validate(document, _schema(resource), "", errors)
     return list(dict.fromkeys(p or ROOT_PATH for p in errors))
+
+
+def validate_skill_run(trace: object) -> list[str]:
+    """Validate *trace* against ``nuvel.skill_run/1`` (paths only, no values)."""
+    return validate(trace, SCHEMA_RESOURCE)
 
 
 def _safe_key(key: object) -> str:
@@ -160,6 +168,9 @@ def _validate(value: object, schema: dict, path: str, errors: list[str]) -> None
         return
 
     if isinstance(value, str):
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            errors.append(path)
+            return
         if "pattern" in schema and re.fullmatch(schema["pattern"], value, re.ASCII) is None:
             errors.append(path)
             return
@@ -177,6 +188,9 @@ def _validate(value: object, schema: dict, path: str, errors: list[str]) -> None
 
     if isinstance(value, list):
         if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errors.append(path)
+            return
+        if "minItems" in schema and len(value) < schema["minItems"]:
             errors.append(path)
             return
         if "items" in schema:
