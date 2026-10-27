@@ -10,10 +10,11 @@ text. ``invariant_hits`` is the independent third layer (spec §4.5).
 
 from __future__ import annotations
 
-import copy
 import functools
 import importlib.resources
 import re
+import string
+import sys
 import unicodedata
 from dataclasses import dataclass
 from typing import Iterator
@@ -53,6 +54,7 @@ class Lexicon:
     dates: frozenset[str]
     currency: frozenset[str]
     version: str
+    sources: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,54 +77,79 @@ def fold(s: str) -> str:
 
 _LANG_RE = re.compile(r"[a-z]{2,3}(?:-[a-z]{2,4})?")
 _VERSION_TAIL_RE = re.compile(r"\d{4}\.\d{2}\.\d+")
-_SECTION_RE = re.compile(r"#\s*\[(words|numbers|dates|currency)\]\s*")
-_OTHER_SECTION_RE = re.compile(r"#\s*\[[^\]]*\]\s*")
+_SECTION_RE = re.compile(r"#\s*\[([^\]]*)\]\s*")
+_SECTIONS = ("words", "numbers", "dates", "currency")
 _VERSION_RE = re.compile(r"#\s*version:\s*(\S+)\s*")
+_SOURCES_RE = re.compile(r"#\s*sources:\s*(.*?)\s*")
+_INVALID_LEXICON = "nuvel-mcp: lexicon file invalid; that language ships structure only"
+
+
+class _InvalidLexicon(ValueError):
+    pass
 
 
 def _lexicon_dir():
     return importlib.resources.files("nuvel_mcp").joinpath("lexicon")
 
 
+def _parse_lexicon(text: str, language: str | None) -> Lexicon:
+    version = None
+    sources = ""
+    section = None
+    sets: dict[str, set[str]] = {name: set() for name in _SECTIONS}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            if m := _SECTION_RE.fullmatch(line):
+                if m.group(1) not in _SECTIONS:
+                    raise _InvalidLexicon("unknown section")
+                section = m.group(1)
+            elif section is None and (m := _VERSION_RE.fullmatch(line)):
+                if version is not None:
+                    raise _InvalidLexicon("two versions")
+                version = m.group(1)
+            elif section is None and (m := _SOURCES_RE.fullmatch(line)):
+                sources = m.group(1)
+            continue
+        if section is None:
+            raise _InvalidLexicon("entry before the first section")
+        if any(c in line for c in "-'’") or any(c.isspace() for c in line):
+            raise _InvalidLexicon("entry is not a single word")  # lookups are per part
+        sets[section].add(fold(line))
+    if version is None:
+        raise _InvalidLexicon("no version")
+    lang, sep, tail = version.rpartition("-")
+    if not sep or not _LANG_RE.fullmatch(lang) or not _VERSION_TAIL_RE.fullmatch(tail):
+        raise _InvalidLexicon("bad version")
+    if language is not None and lang != language:
+        raise _InvalidLexicon("wrong language")
+    return Lexicon(
+        words=frozenset(sets["words"]),
+        numbers=frozenset(sets["numbers"]),
+        dates=frozenset(sets["dates"]),
+        currency=frozenset(sets["currency"]),
+        version=version,
+        sources=sources,
+    )
+
+
 def _load_lexicon_from(path, language: str | None = None) -> Lexicon | None:
-    """Parse one lexicon file (a ``Path`` or ``Traversable``); ``None`` if it is
-    missing, unreadable or has no valid ``# version: <lang>-<YYYY.MM.N>``."""
+    """Parse one lexicon file (a ``Path`` or ``Traversable``). ``None`` if it is
+    missing, or (logged with a constant message, never file content) if it is
+    unreadable or invalid: no valid ``# version: <lang>-<YYYY.MM.N>``, an entry
+    before the first section, an unknown section, or an entry holding ``-``,
+    an apostrophe or whitespace."""
     try:
         if not path.is_file():
             return None
-        text = path.read_text(encoding="utf-8")
-        version = None
-        section = None
-        sets: dict[str, set[str]] = {"words": set(), "numbers": set(), "dates": set(), "currency": set()}
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith("#"):
-                if m := _SECTION_RE.fullmatch(line):
-                    section = m.group(1)
-                elif _OTHER_SECTION_RE.fullmatch(line):
-                    section = None
-                elif (m := _VERSION_RE.fullmatch(line)) and version is None:
-                    version = m.group(1)
-                continue
-            if section is not None:
-                sets[section].add(fold(line))
-        if version is None:
-            return None
-        lang, sep, tail = version.rpartition("-")
-        if not sep or not _LANG_RE.fullmatch(lang) or not _VERSION_TAIL_RE.fullmatch(tail):
-            return None
-        if language is not None and lang != language:
-            return None
-        return Lexicon(
-            words=frozenset(sets["words"]),
-            numbers=frozenset(sets["numbers"]),
-            dates=frozenset(sets["dates"]),
-            currency=frozenset(sets["currency"]),
-            version=version,
-        )
     except Exception:
+        return None
+    try:
+        return _parse_lexicon(path.read_text(encoding="utf-8"), language)
+    except Exception:
+        print(_INVALID_LEXICON, file=sys.stderr, flush=True)
         return None
 
 
@@ -208,6 +235,11 @@ _AMOUNT_RE = re.compile(
 # Any remaining alphanumeric run containing a digit (``15th``, ``v2``, ``14:30``).
 _DIGITS_RE = re.compile(r"(?<![^\W_])[^\W_]*\d(?:[^\W_]|[.,:/\-](?=\d))*")
 
+# Domains with Unicode letters (``rosá.com``): letters.letters, last label >= 2 letters.
+_IDN_RE = re.compile(
+    r"(?<![^\W_])[^\W\d_]+(?:-[^\W\d_]+)*(?:\.[^\W\d_]+(?:-[^\W\d_]+)*)*\.[^\W\d_]{2,}(?:[/:?#]\S*)?"
+)
+
 _LEAD_TRIM = "([{\"'«“‘¿¡<"
 _TRAIL_TRIM = ".,;:!?)]}\"'»”’>"
 
@@ -220,6 +252,7 @@ _TYPED = (
     ("email", re.compile(r"(?<![^\s@])" + EMAIL_RE.pattern), True),
     ("url", re.compile(URL_RE.pattern + r"\S*", re.IGNORECASE), True),
     ("url", re.compile(DOMAIN_RE.pattern + r"[\w.\-]*(?:[/:?#]\S*)?", re.IGNORECASE), True),
+    ("url", _IDN_RE, True),
     ("id", IBAN_RE, True),
     ("amount", _AMOUNT_RE, False),
     ("phone", PHONE_RE, False),
@@ -286,13 +319,32 @@ _NUM_JOIN = frozenset({"y", "i", "and"})
 _LINK_JOIN = frozenset({"de", "del", "d", "of", "the"})
 
 
+# Characters allowed between tokens. Everything else (symbols, emoji, flags,
+# enclosed or braille letters…) is deny-by-default: a counted ``{?}``.
+GAP_ALLOWED = frozenset(string.punctuation + "¿¡«»“”‘’–—…•·")
+_GAP_RUN_RE = re.compile(r"[\s" + re.escape("".join(sorted(GAP_ALLOWED))) + r"]+")
+
+
+def _split_gap(gap: str) -> Iterator[tuple[str, str]]:
+    """Allowed runs stay ``gap``; each run of other characters is ``bad``."""
+    pos = 0
+    for m in _GAP_RUN_RE.finditer(gap):
+        if m.start() > pos:
+            yield "bad", gap[pos:m.start()]
+        yield "gap", m.group(0)
+        pos = m.end()
+    if pos < len(gap):
+        yield "bad", gap[pos:]
+
+
 def _tokenise(text: str) -> list[tuple[str, str]]:
-    """``(kind, value)``: kinds ``gap``, ``srv`` (type), ``cli`` (type) and ``word``."""
+    """``(kind, value)``: kinds ``gap``, ``bad`` (disallowed characters), ``srv``
+    (type), ``cli`` (type) and ``word``."""
     tokens: list[tuple[str, str]] = []
     pos = 0
     for m in _TOKEN_RE.finditer(text):
         if m.start() > pos:
-            tokens.append(("gap", text[pos:m.start()]))
+            tokens.extend(_split_gap(text[pos:m.start()]))
         if m.group(1) is not None:
             tokens.append(("srv", PLACEHOLDER_TYPES[ord(m.group(1)) - _SENTINEL_BASE]))
         elif m.group(2) is not None:
@@ -301,7 +353,7 @@ def _tokenise(text: str) -> list[tuple[str, str]]:
             tokens.append(("word", m.group(3)))
         pos = m.end()
     if pos < len(text):
-        tokens.append(("gap", text[pos:]))
+        tokens.extend(_split_gap(text[pos:]))
     return tokens
 
 
@@ -453,6 +505,57 @@ def _is_abbreviation(word: str, abbreviations: frozenset[str]) -> bool:
     return word.isalpha() and word.isupper() and len(word) <= 4 and fold(word) in abbreviations
 
 
+# Single-letter parts are allowed only as apostrophe elisions: a prefix
+# (``l'``, ``d'``, ``s'``, ``n'``, ``m'``, ``t'`` and the pronoun ``I'``) or an
+# English contraction suffix (``'s``, ``'t``, ``'m``, ``'d``).
+_ELISION_PREFIX = frozenset("ldsnmti")
+_ELISION_SUFFIX = frozenset("stmd")
+_SEP_SPLIT = re.compile(r"(['’\-])")
+
+
+def _shape_ok(word: str) -> bool:
+    """Rejects spelled-out names: in a joined word every part has >= 2 letters,
+    except an apostrophe elision."""
+    pieces = _SEP_SPLIT.split(word)
+    if len(pieces) == 1:
+        return True
+    for i in range(0, len(pieces), 2):
+        part = pieces[i]
+        if len(part) >= 2:
+            continue
+        before = pieces[i - 1] if i > 0 else None
+        after = pieces[i + 1] if i + 1 < len(pieces) else None
+        if after in ("'", "’") and before in (None, "'", "’") and fold(part) in _ELISION_PREFIX:
+            continue
+        if before in ("'", "’") and after is None and fold(part) in _ELISION_SUFFIX:
+            continue
+        return False
+    return True
+
+
+def _single_letter_runs(tokens: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Three or more consecutive one-letter words (``a e i o``) become one ``run``."""
+    out: list[tuple[str, str]] = []
+    i, n = 0, len(tokens)
+    while i < n:
+        if tokens[i][0] == "word" and len(tokens[i][1]) == 1:
+            j, last, count = i, i, 0
+            while j < n and (tokens[j][0] == "gap" or (tokens[j][0] == "word" and len(tokens[j][1]) == 1)):
+                if tokens[j][0] == "word":
+                    last, count = j, count + 1
+                j += 1
+            if count >= 3:
+                out.append(("run", str(count)))
+                i = last + 1
+                continue
+            out.extend(tokens[i:last + 1])
+            i = last + 1
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
 def _case_ok(word: str, at_start: bool) -> bool:
     """Rule 6, second half: no capital letter except a sentence-initial one or ``I``."""
     for k, part in enumerate(_PART_SPLIT.split(word)):
@@ -474,6 +577,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
     tokens = _tokenise(text)
     tokens = _number_words(tokens, lx)
     tokens = _dates(tokens, lx)
+    tokens = _single_letter_runs(tokens)
 
     out: list[str] = []
     last_mask = False        # the last non-gap output is {?}
@@ -513,10 +617,19 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
                 words += 1
                 masked += 1
                 emit_mask()
+        elif kind == "bad":  # characters outside the gap allowlist
+            words += 1
+            masked += 1
+            emit_mask()
+        elif kind == "run":  # spelled-out letters
+            words += int(value)
+            masked += int(value)
+            emit_mask()
         else:
             words += 1
             if _is_abbreviation(value, abbreviations) or (
-                all(p in lx.words for p in _parts(value)) and _case_ok(value, at_start)
+                _shape_ok(value) and all(p in lx.words for p in _parts(value))
+                and _case_ok(value, at_start)
             ):
                 out.append(value)
                 last_mask, pending_gap = False, None
@@ -541,101 +654,183 @@ def mask_text(text: str, lexicon: Lexicon, abbreviations: frozenset[str] | None 
 
 # --- Recipes -------------------------------------------------------------------
 
-def _mask_field(value: object, lexicon: Lexicon | None) -> MaskResult | None:
+# Structured (non-free-text) fields are copied only from this allowlist, and
+# only when their value has the expected shape. Everything else is dropped.
+_ID_RE = re.compile(r"[a-z0-9][a-z0-9_.:-]{0,79}")
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_SEMVER_RE = re.compile(r"\d{1,6}\.\d{1,6}\.\d{1,6}")
+_SCHEMA_RE = re.compile(r"nuvel\.recipe/\d{1,3}")
+_LANGUAGE_RE = re.compile(r"[a-z]{2}")
+_ACTION_RE = re.compile(r"[a-z][a-z_]{0,39}")
+_TOOL_KINDS = frozenset({"email", "calendar", "chat", "docs", "storage", "tasks", "web", "none"})
+_POINTER_KEY_RE = re.compile(r"[a-z_][a-z0-9_]{0,39}")
+
+
+def _match(regex: re.Pattern):
+    return lambda v: isinstance(v, str) and regex.fullmatch(v) is not None
+
+
+def _identifier(v: object) -> bool:
+    return isinstance(v, str) and _ID_RE.fullmatch(v) is not None and not DIGIT_RUN_RE.search(v)
+
+
+def _recipe_version(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1000
+
+
+_TOP_FIELDS = {
+    "schema": _match(_SCHEMA_RE),
+    "recipe_id": _match(_UUID_RE),
+    "install_id": _match(_UUID_RE),
+    "version": _recipe_version,
+    "category": _identifier,
+    "language": _match(_LANGUAGE_RE),
+}
+_PLUGIN_FIELDS = {"name": _identifier, "version": _match(_SEMVER_RE)}
+_STEP_FIELDS = {"action": _match(_ACTION_RE), "tool_kind": lambda v: v in _TOOL_KINDS if isinstance(v, str) else False}
+
+
+def _slot(v: object) -> bool:
+    return isinstance(v, str) and v in _KNOWN
+
+
+def _key(key: object) -> str:
+    """A JSON-pointer segment for *key*. Keys are client text, so anything that
+    is not a plain identifier is reported as ``{?}``."""
+    return key if isinstance(key, str) and _POINTER_KEY_RE.fullmatch(key) else MASK
+
+
+def _mask_field(value: object, lexicon: Lexicon | None, abbreviations) -> MaskResult | None:
     """The masked field, or ``None`` when it must be dropped."""
     if lexicon is None or not isinstance(value, str):
         return None
-    result = mask_text(value, lexicon)
+    result = mask_text(value, lexicon, abbreviations)
     if result.words > 0 and result.masked / result.words > DROP_THRESHOLD:
         return None
     return result
 
 
-def _mask_recipe(recipe: object, lexicon: Lexicon | None) -> tuple[dict, dict]:
+def _mask_recipe(recipe: object, lexicon: Lexicon | None, abbreviations) -> tuple[dict, dict]:
     info = {"lexicon": lexicon.version if lexicon is not None else None,
             "masked": 0, "words": 0, "dropped": []}
-    if not isinstance(recipe, dict):
-        info["dropped"].append("")
-        return {}, info
-    out = copy.deepcopy(recipe)
     dropped: list[str] = info["dropped"]
+    if not isinstance(recipe, dict):
+        dropped.append("")
+        return {}, info
 
-    def keep(result: MaskResult) -> str:
+    def text(value: object) -> str | None:
+        result = _mask_field(value, lexicon, abbreviations)
+        if result is None:
+            return None
         info["masked"] += result.masked
         info["words"] += result.words
         return result.text
 
-    for key in ("title", "when_to_use"):
-        if key in out:
-            result = _mask_field(out[key], lexicon)
-            if result is None:
-                out[key] = ""  # required (title) or kept empty (when_to_use)
-                dropped.append(f"/{key}")
+    out: dict = {}
+    for key, value in recipe.items():
+        path = "/" + _key(key)
+        if key in ("title", "when_to_use"):
+            masked = text(value)
+            out[key] = "" if masked is None else masked  # required / kept empty
+            if masked is None:
+                dropped.append(path)
+        elif key == "narrative":
+            masked = text(value)
+            if masked is None:
+                dropped.append(path)
             else:
-                out[key] = keep(result)
-
-    if "steps" in out:
-        steps = out["steps"]
-        if not isinstance(steps, list):
-            del out["steps"]
-            dropped.append("/steps")
-        else:
-            kept_steps = []
-            for i, step in enumerate(steps):
+                out[key] = masked
+        elif key in _TOP_FIELDS:
+            if _TOP_FIELDS[key](value):
+                out[key] = value
+            else:
+                dropped.append(path)
+        elif key == "plugin":
+            if not isinstance(value, dict):
+                dropped.append(path)
+                continue
+            plugin = {}
+            for k, v in value.items():
+                if k in _PLUGIN_FIELDS and _PLUGIN_FIELDS[k](v):
+                    plugin[k] = v
+                else:
+                    dropped.append(f"{path}/{_key(k)}")
+            out[key] = plugin
+        elif key == "steps":
+            if not isinstance(value, list):
+                dropped.append(path)
+                continue
+            steps = []
+            for i, step in enumerate(value):
                 if not isinstance(step, dict):
                     dropped.append(f"/steps/{i}")
                     continue
-                if "note" in step:
-                    result = _mask_field(step["note"], lexicon)
-                    if result is None:
-                        del step["note"]
-                        dropped.append(f"/steps/{i}/note")
+                kept: dict = {}
+                for k, v in step.items():
+                    sub = f"/steps/{i}/{_key(k)}"
+                    if k in _STEP_FIELDS:
+                        if _STEP_FIELDS[k](v):
+                            kept[k] = v
+                        else:
+                            dropped.append(sub)
+                    elif k == "slots":
+                        if not isinstance(v, list):
+                            dropped.append(sub)
+                            continue
+                        slots = []
+                        for j, slot in enumerate(v):
+                            if _slot(slot):
+                                slots.append(slot)
+                            else:
+                                dropped.append(f"{sub}/{j}")
+                        kept[k] = slots
+                    elif k == "note":
+                        masked = text(v)
+                        if masked is None:
+                            dropped.append(sub)
+                        else:
+                            kept[k] = masked
                     else:
-                        step["note"] = keep(result)
-                kept_steps.append(step)
-            out["steps"] = kept_steps
-
-    if "pitfalls" in out:
-        pitfalls = out["pitfalls"]
-        if not isinstance(pitfalls, list):
-            del out["pitfalls"]
-            dropped.append("/pitfalls")
-        else:
-            kept_pitfalls = []
-            for i, item in enumerate(pitfalls):
-                result = _mask_field(item, lexicon)
-                if result is None:
+                        dropped.append(sub)
+                steps.append(kept)
+            out[key] = steps
+        elif key == "pitfalls":
+            if not isinstance(value, list):
+                dropped.append(path)
+                continue
+            pitfalls = []
+            for i, item in enumerate(value):
+                masked = text(item)
+                if masked is None:
                     dropped.append(f"/pitfalls/{i}")
                 else:
-                    kept_pitfalls.append(keep(result))
-            out["pitfalls"] = kept_pitfalls
-
-    if "narrative" in out:
-        result = _mask_field(out["narrative"], lexicon)
-        if result is None:
-            del out["narrative"]
-            dropped.append("/narrative")
+                    pitfalls.append(masked)
+            out[key] = pitfalls
         else:
-            out["narrative"] = keep(result)
+            dropped.append(path)  # unknown key: never copied
     return out, info
 
 
-def mask_recipe(recipe: dict, lexicon: Lexicon | None) -> tuple[dict, dict]:
+def mask_recipe(recipe: dict, lexicon: Lexicon | None,
+                abbreviations: frozenset[str] | None = None) -> tuple[dict, dict]:
     """A masked copy of *recipe* and ``{"lexicon", "masked", "words", "dropped"}``.
 
-    Free-text fields are ``title``, ``when_to_use``, ``steps[].note``,
-    ``pitfalls[]`` and ``narrative``. A field more than ``DROP_THRESHOLD``
-    masked, or any field when *lexicon* is ``None``, is dropped: ``title`` and
-    ``when_to_use`` become ``""``, the others are removed. ``dropped`` lists
-    JSON pointers into the input. ``masked``/``words`` count the kept fields.
-    Never raises; the input is not modified.
+    The copy is built from an allowlist, never by copying the input: schema
+    fields with the expected shape, plus the masked free-text fields
+    (``title``, ``when_to_use``, ``steps[].note``, ``pitfalls[]``,
+    ``narrative``). A free-text field more than ``DROP_THRESHOLD`` masked, or
+    any when *lexicon* is ``None``, is dropped: ``title`` and ``when_to_use``
+    become ``""``, the others are removed. Unknown keys and badly shaped
+    values are dropped too. ``dropped`` lists JSON pointers into the input
+    (keys that are not plain identifiers appear as ``{?}``). ``masked`` and
+    ``words`` count the kept fields. Never raises; the input is not modified.
     """
     try:
-        return _mask_recipe(recipe, lexicon)
+        return _mask_recipe(recipe, lexicon, abbreviations)
     except Exception:
         pass
     try:  # fail safe: keep the structure, drop every free-text field
-        out, info = _mask_recipe(recipe, None)
+        out, info = _mask_recipe(recipe, None, abbreviations)
         info["lexicon"] = lexicon.version if isinstance(lexicon, Lexicon) else None
         return out, info
     except Exception:
@@ -643,73 +838,134 @@ def mask_recipe(recipe: dict, lexicon: Lexicon | None) -> tuple[dict, dict]:
 
 
 # --- Invariant (third layer) ---------------------------------------------------
+# Deliberately written apart from the masker: its own tokens, its own
+# sentence-start logic and its own character allowlist.
 
-_INV_TOKEN_RE = re.compile(r"\{[a-z_?]{1,20}\}|[^\W\d_]+(?:['’\-][^\W\d_]+)*")
-
-
-def _free_text(recipe: dict) -> Iterator[tuple[str, object]]:
-    for key in ("title", "when_to_use"):
-        if key in recipe:
-            yield f"/{key}", recipe[key]
-    steps = recipe.get("steps")
-    if isinstance(steps, list):
-        for i, step in enumerate(steps):
-            if isinstance(step, dict) and "note" in step:
-                yield f"/steps/{i}/note", step["note"]
-    if "pitfalls" in recipe:
-        pitfalls = recipe["pitfalls"]
-        if isinstance(pitfalls, list):
-            for i, item in enumerate(pitfalls):
-                yield f"/pitfalls/{i}", item
-        else:
-            yield "/pitfalls", pitfalls
-    if "narrative" in recipe:
-        yield "/narrative", recipe["narrative"]
+_INV_ALLOWED = frozenset(string.punctuation) | frozenset("¿¡«»“”‘’–—…•·")
+_INV_CLOSERS = "\"'”’»)]"
+_INV_TOKEN_RE = re.compile(
+    r"\{(?:" + "|".join(PLACEHOLDER_TYPES) + r"|\?)\}"
+    r"|[^\W\d_]+(?:['’\-][^\W\d_]+)*"
+)
+_INV_DOMAIN_RE = re.compile(r"[^\W\d_]\.[^\W\d_]{2}")
 
 
-def _capital_outside_start(text: str) -> bool:
-    """Re-check of rule 6's capitalisation half over masked output. Independent
-    of the masker's tokeniser state: placeholders and words only."""
+def _inv_sentence_break(gap: str) -> bool:
+    if "\n" in gap:
+        return True
+    for i, c in enumerate(gap):
+        if c in ".!?:":
+            j = i + 1
+            while j < len(gap) and gap[j] in _INV_CLOSERS:
+                j += 1
+            if j < len(gap) and gap[j].isspace():
+                return True
+    return False
+
+
+def _inv_capitalised(token: str, start: bool, abbreviations: frozenset[str]) -> bool:
+    if token.isalpha() and token.isupper() and len(token) <= 4 and fold(token) in abbreviations:
+        return False
+    for k, part in enumerate(re.split(r"['’\-]", token)):
+        if part == "I":
+            continue
+        capitals = [c.isupper() or c.istitle() for c in part]
+        if not any(capitals):
+            continue
+        if start and k == 0 and capitals[0] and not any(capitals[1:]):
+            continue
+        return True
+    return False
+
+
+def _inv_text_hit(text: object, abbreviations: frozenset[str]) -> bool:
+    if not isinstance(text, str) or len(text) > _MAX_CHARS:
+        return True
+    if any(c.isdigit() for c in text):
+        return True
+    normal = unicodedata.normalize("NFKC", text)
+    if any(p.search(normal) for p in PII_PATTERNS) or _INV_DOMAIN_RE.search(normal):
+        return True
     previous_end = 0
     first = True
     for m in _INV_TOKEN_RE.finditer(text):
         gap = text[previous_end:m.start()]
-        previous_end = m.end()
-        start = first or _BREAK_RE.search(gap) is not None
-        first = False
-        token = m.group(0)
-        if token.startswith("{"):
-            continue
-        if token.isalpha() and token.isupper() and len(token) <= 4 and fold(token) in ABBREVIATIONS:
-            continue
-        for k, part in enumerate(re.split(r"['’\-]", token)):
-            if part == "I":
-                continue
-            capitals = [c.isupper() or c.istitle() for c in part]
-            if not any(capitals):
-                continue
-            if start and k == 0 and capitals[0] and not any(capitals[1:]):
-                continue
+        if any(not (c.isspace() or c in _INV_ALLOWED) for c in gap):
             return True
-    return False
+        start = first or _inv_sentence_break(gap)
+        first = False
+        previous_end = m.end()
+        token = m.group(0)
+        if not token.startswith("{") and _inv_capitalised(token, start, abbreviations):
+            return True
+    tail = text[previous_end:]
+    return any(not (c.isspace() or c in _INV_ALLOWED) for c in tail)
 
 
-def _text_hits(text: object) -> bool:
-    if not isinstance(text, str) or len(text) > _MAX_CHARS:
-        return True
-    normal = unicodedata.normalize("NFKC", text)
-    if any(p.search(normal) for p in PII_PATTERNS):
-        return True
-    return _capital_outside_start(normal)
+def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
+    for key, value in recipe.items():
+        path = "/" + _key(key)
+        if key in ("title", "when_to_use", "narrative"):
+            if _inv_text_hit(value, abbreviations):
+                yield path
+        elif key in _TOP_FIELDS:
+            if not _TOP_FIELDS[key](value):
+                yield path
+        elif key == "plugin":
+            if not isinstance(value, dict):
+                yield path
+                continue
+            for k, v in value.items():
+                if not (k in _PLUGIN_FIELDS and _PLUGIN_FIELDS[k](v)):
+                    yield f"{path}/{_key(k)}"
+        elif key == "steps":
+            if not isinstance(value, list):
+                yield path
+                continue
+            for i, step in enumerate(value):
+                if not isinstance(step, dict):
+                    yield f"/steps/{i}"
+                    continue
+                for k, v in step.items():
+                    sub = f"/steps/{i}/{_key(k)}"
+                    if k in _STEP_FIELDS:
+                        if not _STEP_FIELDS[k](v):
+                            yield sub
+                    elif k == "slots":
+                        if not isinstance(v, list):
+                            yield sub
+                        else:
+                            for j, slot in enumerate(v):
+                                if not _slot(slot):
+                                    yield f"{sub}/{j}"
+                    elif k == "note":
+                        if _inv_text_hit(v, abbreviations):
+                            yield sub
+                    else:
+                        yield sub
+        elif key == "pitfalls":
+            if not isinstance(value, list):
+                yield path
+                continue
+            for i, item in enumerate(value):
+                if _inv_text_hit(item, abbreviations):
+                    yield f"/pitfalls/{i}"
+        else:
+            yield path
 
 
-def invariant_hits(recipe: dict) -> list[str]:
-    """JSON-pointer paths of masked free-text fields that still match a typed
-    PII regex or hold a capitalised word outside a sentence start (spec §4.5).
-    A hit means a masker bug. Never raises; fails closed (``[""]``)."""
+def invariant_hits(recipe: dict, abbreviations: frozenset[str] | None = None) -> list[str]:
+    """JSON-pointer paths of a masked recipe that break the masking guarantees
+    (spec §4.5). Every value at every depth is checked: free text must hold no
+    digit, no character outside letters, whitespace, the punctuation allowlist
+    and ``{type}``/``{?}`` placeholders, no typed-PII match and no capitalised
+    word outside a sentence start; structured fields must have their schema
+    shape; unknown keys and wrongly shaped containers are hits. Pass the same
+    *abbreviations* the masker used. Never raises; fails closed (``[""]``)."""
     try:
         if not isinstance(recipe, dict):
             return [""]
-        return [path for path, value in _free_text(recipe) if _text_hits(value)]
+        abbrevs = ABBREVIATIONS if abbreviations is None else abbreviations
+        return list(dict.fromkeys(_inv_hits(recipe, abbrevs)))
     except Exception:
         return [""]

@@ -167,16 +167,25 @@ def test_unknown_placeholder_masked():
 
 
 def test_collapse():
-    r = mask_text("a X Y b", lex({"a", "b", "x", "y"}))
-    assert (r.text, r.masked, r.words) == ("a {?} b", 2, 4)
-    assert masked("a x {?} y b", lex({"a", "b"})) == "a {?} b"
-    assert masked("a x. Y b", lex({"a", "b"})) == "a {?}. {?} b"    # punctuation is kept
+    r = mask_text("uno Xx Yy dos", lex({"uno", "dos", "xx", "yy"}))
+    assert (r.text, r.masked, r.words) == ("uno {?} dos", 2, 4)
+    assert masked("uno xx {?} yy dos", lex({"uno", "dos"})) == "uno {?} dos"
+    assert masked("uno xx. Yy dos", lex({"uno", "dos"})) == "uno {?}. {?} dos"  # punctuation is kept
+
+
+RID = "123e4567-e89b-42d3-a456-426614174000"
+IID = "0b8f7a2c-1d3e-4f5a-9b6c-7d8e9f0a1b2c"
 
 
 def _recipe(**over):
     doc = {
         "schema": "nuvel.recipe/2",
-        "recipe_id": "r1",
+        "recipe_id": RID,
+        "install_id": IID,
+        "plugin": {"name": "chief-of-staff", "version": "0.4.0"},
+        "version": 1,
+        "category": "invoicing",
+        "language": "es",
         "title": "a b",
         "when_to_use": "a b",
         "steps": [{"action": "search", "tool_kind": "email", "slots": ["person"], "note": "a b"},
@@ -189,11 +198,12 @@ def _recipe(**over):
 
 
 def test_drop_rule():
-    out, info = mask_recipe(_recipe(narrative="a b c d e"), lex({"a", "b"}))
+    five = "uno dos tres cuatro cinco"
+    out, info = mask_recipe(_recipe(narrative=five), lex({"a", "b", "uno", "dos"}))
     assert "narrative" not in out
     assert info["dropped"] == ["/narrative"]
-    out, info = mask_recipe(_recipe(narrative="a b c d e"), lex({"a", "b", "c"}))
-    assert out["narrative"] == "a b c {?}"
+    out, info = mask_recipe(_recipe(narrative=five), lex({"a", "b", "uno", "dos", "tres"}))
+    assert out["narrative"] == "uno dos tres {?}"
     assert info["dropped"] == []
     assert info["masked"] == 2 and info["lexicon"] == "xx-2026.10.1"
 
@@ -237,7 +247,7 @@ def test_no_lexicon_drops_all_text():
     assert info == {"lexicon": None, "masked": 0, "words": 0,
                     "dropped": ["/title", "/when_to_use", "/steps/0/note",
                                 "/pitfalls/0", "/pitfalls/1", "/narrative"]}
-    assert out["steps"][1] == rec["steps"][1] and out["recipe_id"] == "r1"
+    assert out["steps"][1] == rec["steps"][1] and out["recipe_id"] == RID
 
 
 def test_non_string_free_text_is_dropped():
@@ -260,6 +270,13 @@ HOSTILE = [
     "hablé con pedro­",                 # soft hyphen
     "hablé con Реdro",                       # Cyrillic look-alikes
     "hablé con " + "pedro" * 400,            # a 2000-character token
+    "hablé con 🇲🇽",                          # regional-indicator flag
+    "hablé con 🇵🇪🇩🇷🇴",                       # regional indicators spelling a name
+    "hablé con 🅿🅴🅳🆁🅾",                       # negative squared letters
+    "hablé con ⠏⠑⠙⠗⠕",                       # braille
+    "hablé con 😀🎉",                         # other emoji
+    "hablé con ᴘᴇᴅʀᴏ",                        # small capitals
+    "hablé con p-e-d-r-o",                   # spelled out
 ]
 
 
@@ -374,7 +391,7 @@ def test_invariant_flags_each_kind(field, value, path):
 def test_invariant_paths_for_steps_and_pitfalls():
     rec = {"steps": [{"note": "ok"}, {"note": "con Pedro"}], "pitfalls": ["ok", "x@y.com"],
            "title": 3}
-    assert invariant_hits(rec) == ["/title", "/steps/1/note", "/pitfalls/1"]
+    assert invariant_hits(rec) == ["/steps/1/note", "/pitfalls/1", "/title"]  # input order
 
 
 def test_invariant_allows_sentence_starts_and_exceptions():
@@ -451,3 +468,182 @@ def test_mask_text_uses_injected_abbreviations():
     assert masked("el CRM revisa", lx) == "el CRM revisa"
     assert mask_text("el CRM revisa", lx, abbreviations=frozenset()).text == "el {?} revisa"
     assert masked("el CEOS revisa", lx) == "el {?} revisa"
+
+
+# --- fix round 1 -------------------------------------------------------------
+
+def test_gap_characters_are_deny_by_default():
+    lx = lex({"cliente", "hola", "mundo"})
+    r = mask_text("cliente 🇲🇽", lx)
+    assert (r.text, r.masked, r.words) == ("cliente {?}", 1, 2)
+    r = mask_text("hola ★ mundo ☎ hola", lx)
+    assert (r.text, r.masked, r.words) == ("hola {?} mundo {?} hola", 2, 5)
+    # the closed punctuation set passes untouched
+    text = "hola — mundo… «hola» ¿mundo? “hola” ‘mundo’ – hola · mundo • hola; (mundo) [hola] {person}!"
+    assert masked(text, lx) == unicodedata_nfkc(text)
+
+
+def unicodedata_nfkc(s):
+    import unicodedata
+    return unicodedata.normalize("NFKC", s)
+
+
+def test_disallowed_gap_counts_toward_drop():
+    out, info = mask_recipe(_recipe(narrative="a 🇲🇽 🅿🅴🅳🆁🅾 ⠏⠑⠙ b"), lex({"a", "b"}))
+    assert "narrative" not in out and "/narrative" in info["dropped"]
+
+
+def test_mask_recipe_copies_only_allowlisted_keys():
+    rec = _recipe(extra="Pedro García", tenant="acme", masking={"x": 1})
+    rec["Pedro García"] = "secret"
+    rec["plugin"] = {"name": "chief-of-staff", "version": "0.4.0", "owner": "Pedro"}
+    rec["steps"][0]["text"] = "pedro@x.com"
+    rec["steps"][0]["slots"] = ["person", "Pedro", 3]
+    rec["category"] = "Pedro García"
+    rec["steps"][1]["action"] = "call pedro"
+    rec["steps"][1]["tool_kind"] = "fax"
+    out, info = mask_recipe(rec, lex({"a", "b"}))
+    blob = json.dumps([out, info], ensure_ascii=False)
+    assert "Pedro" not in blob and "pedro" not in blob and "acme" not in blob
+    assert set(out) == {"schema", "recipe_id", "install_id", "plugin", "version", "language",
+                        "title", "when_to_use", "steps", "pitfalls", "narrative"}
+    assert out["plugin"] == {"name": "chief-of-staff", "version": "0.4.0"}
+    assert out["steps"][0] == {"action": "search", "tool_kind": "email", "slots": ["person"], "note": "a b"}
+    assert out["steps"][1] == {"slots": []}
+    assert info["dropped"] == [
+        "/plugin/owner", "/category", "/steps/0/slots/1", "/steps/0/slots/2", "/steps/0/text",
+        "/steps/1/action", "/steps/1/tool_kind", "/extra", "/tenant", "/masking", "/{?}",
+    ]
+    assert invariant_hits(out) == []
+
+
+@pytest.mark.parametrize("field, value", [
+    ("schema", "nuvel.other/2"), ("recipe_id", "pedro"), ("install_id", 5), ("version", True),
+    ("version", 0), ("language", "esp"), ("category", "612345678"), ("plugin", "x"),
+])
+def test_badly_shaped_structured_fields_dropped(field, value):
+    out, info = mask_recipe(_recipe(**{field: value}), lex({"a", "b"}))
+    assert field not in out and info["dropped"] == [f"/{field}"]
+
+
+def test_mask_recipe_output_is_not_aliased_to_input():
+    rec = _recipe()
+    out, _ = mask_recipe(rec, lex({"a", "b"}))
+    out["steps"][0]["slots"].append("date")
+    out["plugin"]["name"] = "x"
+    assert rec["steps"][0]["slots"] == ["person"] and rec["plugin"]["name"] == "chief-of-staff"
+
+
+@pytest.mark.parametrize("rec, hits", [
+    ({"extra": "Pedro"}, ["/extra"]),
+    ({"Pedro García": "x"}, ["/{?}"]),
+    ({"steps": "Pedro García pedro@x.com"}, ["/steps"]),
+    ({"steps": ["Pedro", {"note": "ok"}]}, ["/steps/0"]),
+    ({"steps": [{"slots": "person"}]}, ["/steps/0/slots"]),
+    ({"steps": [{"slots": ["person", "Pedro"]}]}, ["/steps/0/slots/1"]),
+    ({"steps": [{"text": "x", "action": "Pedro"}]}, ["/steps/0/text", "/steps/0/action"]),
+    ({"pitfalls": "Pedro"}, ["/pitfalls"]),
+    ({"plugin": {"name": "x", "owner": "Pedro"}}, ["/plugin/owner"]),
+    ({"recipe_id": "Pedro"}, ["/recipe_id"]),
+    ({"tenant": "acme"}, ["/tenant"]),
+])
+def test_invariant_scans_every_value(rec, hits):
+    assert invariant_hits(rec) == hits
+
+
+def test_invariant_accepts_a_full_masked_recipe():
+    out, _ = mask_recipe(_recipe(), lex({"a", "b"}))
+    assert invariant_hits(out) == []
+
+
+@pytest.mark.parametrize("text", [
+    "paso 5", "paso ５", "cliente 🇲🇽", "con ⠏⠑⠙⠗⠕", "con 🅿🅴🅳", "visita rosá.com", "con pédro",
+    "x​y",
+])
+def test_invariant_independent_checks(text):
+    assert invariant_hits({"narrative": text}) == ["/narrative"]
+
+
+def test_invariant_takes_the_maskers_abbreviations(monkeypatch):
+    monkeypatch.setattr(masking, "ABBREVIATIONS", frozenset())
+    iva = frozenset({"iva"})
+    lx = lex({"con"})
+    assert mask_text("con IVA", lx, abbreviations=iva).text == "con IVA"
+    assert invariant_hits({"narrative": "con IVA"}, abbreviations=iva) == []
+    assert invariant_hits({"narrative": "con IVA"}) == ["/narrative"]
+    out, _ = mask_recipe({"narrative": "con IVA"}, lx, abbreviations=iva)
+    assert out["narrative"] == "con IVA"
+    assert invariant_hits(out, abbreviations=iva) == []
+
+
+def test_invariant_does_not_share_the_maskers_break_regex():
+    import inspect
+    src = inspect.getsource(masking._inv_text_hit) + inspect.getsource(masking._inv_sentence_break)
+    assert "_BREAK_RE" not in src and "_tokenise" not in src
+
+
+def test_idn_domains():
+    lx = lex({"visita", "rosa", "com", "e", "g"})
+    assert masked("visita rosá.com", lx) == "visita {url}"
+    assert masked("visita rosá.com.", lx) == "visita {url}."
+    assert masked("visita e.g. rosa", lx) == "visita e.g. rosa"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("con s-o-l", "con {?}"),
+    ("a e i o", "{?}"),
+    ("con a e i o y", "con {?}"),
+    ("con a, e, i o", "con {?}"),
+    ("p-e-d-r-o", "{?}"),
+    ("con e-mail", "con {?}"),
+    ("con e i", "con e i"),
+    ("con l'informe d'avui", "con l'informe d'avui"),
+    ("it's I'm don't", "it's I'm don't"),
+    ("con l'o", "con {?}"),
+    ("con x'informe", "con {?}"),
+])
+def test_spelled_out_names(text, expected):
+    lx = lex({"con", "s", "o", "l", "a", "e", "i", "p", "d", "r", "y", "mail", "informe", "avui",
+              "it", "m", "don", "t", "x"})
+    assert masked(text, lx) == expected
+
+
+def test_lexicon_stores_sources(tmp_path):
+    p = tmp_path / "es.txt"
+    p.write_text(LEXICON_FILE, encoding="utf-8")
+    assert masking._load_lexicon_from(p, "es").sources == "base-x, names-y"
+
+
+@pytest.mark.parametrize("content", [
+    "# version: es-2026.10.1\nhola\n# [words]\nmundo\n",           # entry before the first section
+    "# version: es-2026.10.1\n# [names]\npedro\n",                 # unknown section
+    "# version: es-2026.10.1\n# [words]\ne-mail\n",                # hyphen
+    "# version: es-2026.10.1\n# [words]\nl'aigua\n",               # apostrophe
+    "# version: es-2026.10.1\n# [dates]\nd’abril\n",               # typographic apostrophe
+    "# version: es-2026.10.1\n# [words]\nbuenos dias\n",           # two words
+    "# sources: x\n# [words]\nhola\n",                             # no version
+])
+def test_lexicon_reader_fails_closed(tmp_path, capsys, content):
+    p = tmp_path / "es.txt"
+    p.write_text(content, encoding="utf-8")
+    assert masking._load_lexicon_from(p, "es") is None
+    err = capsys.readouterr().err
+    assert err.strip() == masking._INVALID_LEXICON
+    for secret in ("hola", "mundo", "pedro", "mail", "aigua", "abril", "buenos"):
+        assert secret not in err
+
+
+def test_name_list_folding_is_the_maskers_fold(tmp_path):
+    """Task 4 subtracts name lists with ``masking.fold``; lookups use the same fold."""
+    import masking_corpus
+    samples = ["Rösa", "GARCÍA", "Straße", "Ŀlorenç", "ÉMILE", "Nuñez", "ﬁnance"]
+    assert [masking.fold(s) for s in samples] == [masking_corpus.fold(s) for s in samples]
+    p = tmp_path / "es.txt"
+    p.write_text("# version: es-2026.10.1\n# [words]\nRösa\ncon\n", encoding="utf-8")
+    lx = masking._load_lexicon_from(p, "es")
+    assert lx.words == frozenset({masking.fold("Rösa"), "con"}) == frozenset({"rosa", "con"})
+    # a folded name-list entry removes every accent and case variant
+    names = {masking.fold("Rosa")}
+    pruned = Lexicon(lx.words - names, lx.numbers, lx.dates, lx.currency, lx.version)
+    assert masked("con rösa", pruned) == "con {?}"
+    assert masked("con rosa", lx) == "con rosa"
