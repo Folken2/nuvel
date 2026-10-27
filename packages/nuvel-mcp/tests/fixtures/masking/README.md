@@ -35,8 +35,10 @@ that keeps them is not scored as leaking and the readability measure stays hones
   (de, the, of, to, al) are never marked: `[[14]] de [[noviembre]]`,
   `the [[third]] of [[March]]`. A weekday that is part of an exact date is marked
   (`[[jueves 5]] de [[febrero]]`); a bare weekday ("el viernes", "Tuesday
-  morning") is not a secret. A bare month or year ("cierre de [[septiembre]]",
-  `spring [[2027]]`) is marked.
+  morning") is not a secret. A bare month or weekday passes the masker, so it is
+  not a secret ("cierre de septiembre", "until June", "los lunes", "Tuesday
+  morning"); it is marked only when adjacent to a number or number word, as
+  in the examples above. A bare year in digits (`spring [[2027]]`) is marked.
 - Amounts: the number words and the currency word, never function words:
   `[[doce mil quinientos euros]]`, `[[treinta]] y [[dos mil euros]]`.
 
