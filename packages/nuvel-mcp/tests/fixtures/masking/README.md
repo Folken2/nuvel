@@ -45,3 +45,5 @@ that keeps them is not scored as leaking and the readability measure stays hones
 `evaluate` counts leaks as a multiset: a secret token is a leak only when more
 copies survive in the output than the non-secret input explains, so a perfect
 masker (one that replaces exactly the marked spans) scores zero leaks.
+
+`holdout/` is written blind (without looking at the masker, its lexicon or `tune/`) and must never be used for tuning.
