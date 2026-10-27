@@ -1,0 +1,58 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "d9e5e49c-59b9-431d-b5d0-7facca2c1884",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "skill": {
+    "name": "recall",
+    "version": "0.3.0"
+  },
+  "host": "claude-chat",
+  "mode": "interactive",
+  "started_at": "2026-10-27T12:30:00Z",
+  "duration_s": 95,
+  "outcome": "success",
+  "steps": [
+    {
+      "id": "recall.find-registry",
+      "status": "ok"
+    },
+    {
+      "id": "recall.search",
+      "status": "ok",
+      "counts": {
+        "runs_read": 6,
+        "hits": 3,
+        "live_checks": 1,
+        "handoffs_written": 0,
+        "config_changes": 0
+      }
+    },
+    {
+      "id": "recall.answer",
+      "status": "ok"
+    },
+    {
+      "id": "recall.handoff",
+      "status": "ok"
+    },
+    {
+      "id": "recall.config-change",
+      "status": "ok"
+    }
+  ],
+  "routing": {
+    "watch": 0,
+    "rank": 0,
+    "ignore": 0,
+    "remind": 0
+  },
+  "safety": {
+    "injection_suspected": 0,
+    "forbidden_tool_requested": 0
+  },
+  "user_corrected": false
+}
