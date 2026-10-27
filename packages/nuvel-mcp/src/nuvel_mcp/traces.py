@@ -42,7 +42,7 @@ IDENTIFIER_RE = re.compile(r"\A[a-z0-9][a-z0-9_.:-]{0,79}\Z")
 VALIDATION_KEYWORDS = frozenset({
     "type", "enum", "const", "pattern", "minimum", "maximum", "maxItems",
     "maxProperties", "required", "properties", "additionalProperties", "items",
-    "propertyNames", "format", "maxLength", "minItems",
+    "propertyNames", "format", "maxLength", "minItems", "uniqueItems",
 })
 #: Keywords that carry no validation meaning and are ignored.
 ANNOTATION_KEYWORDS = frozenset({"$schema", "title", "description"})
@@ -154,6 +154,15 @@ def _format_ok(value: str, fmt: str) -> bool:
     raise ValueError(f"unsupported format {fmt!r}")
 
 
+def _unique(items: list) -> bool:
+    """JSON equality: key order is ignored, and ``1`` and ``true`` differ."""
+    try:
+        seen = {json.dumps(item, sort_keys=True) for item in items}
+    except (TypeError, ValueError):
+        return False  # not JSON data: cannot be shown unique
+    return len(seen) == len(items)
+
+
 def _validate(value: object, schema: dict, path: str, errors: list[str]) -> None:
     expected = schema.get("type")
     if expected is not None and not _type_ok(value, expected):
@@ -191,6 +200,9 @@ def _validate(value: object, schema: dict, path: str, errors: list[str]) -> None
             errors.append(path)
             return
         if "minItems" in schema and len(value) < schema["minItems"]:
+            errors.append(path)
+            return
+        if schema.get("uniqueItems") is True and not _unique(value):
             errors.append(path)
             return
         if "items" in schema:

@@ -22,7 +22,8 @@ Tools:
     check_skill_health   Health report for a skill from the local feedback store.
     record_run_trace     Record one content-free ``nuvel.skill_run/1`` run trace.
     record_recipe_signal Record one content-free ``nuvel.recipe_signal/1`` event.
-    share_recipe         Share one anonymised ``nuvel.recipe/1`` recipe.
+    share_recipe         Share one ``nuvel.recipe/2`` recipe; its free text is masked
+                         server-side before it is stored, relayed or logged.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
-from nuvel_mcp import feedback, recipes, traces
+from nuvel_mcp import feedback, masking, recipes, traces
 from nuvel_mcp.auth import current_principal
 from nuvel_mcp.installer import install_skill
 from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
@@ -104,7 +105,7 @@ FEEDBACK_TOOLS = frozenset({
 })
 # Tools the HTTP transport exposes when no explicit allow-list (--tools) is
 # given: the hub read tools, run traces and their health summary, and the two
-# recipe tools (closed-schema signals and PII-screened anonymised recipes).
+# recipe tools (closed-schema signals and server-masked recipes).
 # Off unless named: record_feedback / propose_improvement (free-text input) and
 # install_skill (writes to the server's filesystem).
 HTTP_DEFAULT_TOOLS = frozenset({
@@ -277,6 +278,36 @@ def _describe_failure(exc: BaseException) -> str:
     if isinstance(exc, urllib.error.HTTPError):
         return f"{name} {exc.code}"
     return name
+
+
+def _masked_recipe(recipe: object) -> dict:
+    """The stored form of a client recipe (spec §5), or ``ToolInputError(paths)``.
+
+    validate ``nuvel.recipe/2`` → ``mask_recipe`` → ``invariant_hits`` on the
+    masked output (before any server field is added) → re-validate the masked
+    output → stamp ``masking``. The caller stamps ``tenant``. The result is
+    built by the masker from the schema's keys, so it shares nothing with
+    *recipe*. A masker failure is logged by exception type only.
+    """
+    errors = recipes.validate_recipe(recipe)
+    if errors:
+        raise ToolInputError(errors)
+    try:
+        abbreviations = masking.ABBREVIATIONS
+        lexicon = masking.load_lexicon(recipe["language"])
+        masked, info = masking.mask_recipe(recipe, lexicon, abbreviations)
+        hits = masking.invariant_hits(masked, abbreviations, dropped=info["dropped"])
+    except Exception as exc:  # noqa: BLE001 - its text may quote the input
+        log(f"Could not mask the recipe: {type(exc).__name__}")
+        raise McpError(INTERNAL_ERROR, "Could not mask the recipe") from None
+    if hits:
+        raise ToolInputError(hits)
+    errors = recipes.validate_recipe(masked)
+    if errors:  # e.g. a required field lost in masking: never stored
+        raise ToolInputError(errors)
+    masked["masking"] = {"lexicon": info["lexicon"], "masked": info["masked"],
+                         "words": info["words"], "dropped": list(info["dropped"])}
+    return masked
 
 
 def _relay_feedback(url: str, payload: dict) -> dict:
@@ -1029,21 +1060,29 @@ class SkillsMCPServer:
                 {
                     "name": "share_recipe",
                     "description": (
-                        "Share one anonymised nuvel.recipe/1 recipe, when the learn "
-                        "skill tells you to. The recipe must be generic, rewritten "
-                        "from scratch: roles instead of names, and no names, "
-                        "companies, amounts, dates, places, contacts (emails, phone "
-                        "numbers), URLs, file names or quotes. The server screens "
-                        "every text field and rejects the whole recipe on a hit, "
-                        "returning the failing field paths only. Do not send "
-                        "'tenant' (the server sets it). Re-sending the same "
+                        "Share one nuvel.recipe/2 recipe, when the learn skill tells "
+                        "you to. A recipe is structure (steps with an action from the "
+                        "catalogue, a tool kind and placeholder slots), short notes "
+                        "(title, when_to_use, step notes, pitfalls) and a narrative: "
+                        "the original wording of what was asked and how it was "
+                        "solved. In every free-text field write a {type} placeholder "
+                        "(for example {person}, {company}, {amount}, {date}, {email}) "
+                        "instead of names, companies, products, places, amounts, "
+                        "dates, contacts (emails, phone numbers), URLs or file names. "
+                        "All free text is masked server-side before anything is "
+                        "stored: every word that is not a common word of the "
+                        "recipe's language becomes {?}, and a field that is mostly "
+                        "masked is dropped. The reply gives the masked and word "
+                        "counts and the dropped field paths; a schema error returns "
+                        "the failing field paths only. Do not send 'tenant' or "
+                        "'masking' (the server sets them). Re-sending the same "
                         "recipe_id and version returns 'duplicate'."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "recipe": self._doc_input_schema(
-                                recipes.RECIPE_RESOURCE, "One nuvel.recipe/1 recipe object."
+                                recipes.RECIPE_RESOURCE, "One nuvel.recipe/2 recipe object."
                             )
                         },
                         "required": ["recipe"],
@@ -1404,26 +1443,28 @@ class SkillsMCPServer:
         return {"status": "recorded", **result}
 
     def tool_share_recipe(self, args):
-        """Validate, screen, stamp, store and (optionally) relay one anonymised recipe."""
-        recipe = args.get("recipe")
-        errors = recipes.validate_recipe(recipe) or recipes.screen_recipe(recipe)
-        if errors:
-            raise ToolInputError(errors)
+        """Validate, mask, check, stamp, store and (optionally) relay one recipe.
 
-        record = copy.deepcopy(recipe)
+        Only the masked record (``_masked_recipe``) reaches the store, the relay
+        or a log line; the raw input is never kept beyond this call.
+        """
+        record = _masked_recipe(args.get("recipe"))
         tenant = current_principal.get()
         if tenant is not None:
             record["tenant"] = tenant
+        info = record["masking"]
         try:
             stored = self._recipe_store().put_recipe(record)
         except OSError as exc:
-            log(f"Could not store the recipe: {exc}")  # detail stays server-side
+            # Type only: a store's message is not ours to vouch for.
+            log(f"Could not store the recipe: {type(exc).__name__}")
             raise McpError(INTERNAL_ERROR, "Could not store the recipe") from None
         result = {"recipe_id": record["recipe_id"], "version": record["version"]}
         if not stored:
             return {"status": "duplicate", **result}
         self._relay_record("recipe", record)
-        return {"status": "recorded", **result}
+        return {"status": "recorded", **result, "masked": info["masked"],
+                "words": info["words"], "dropped": list(info["dropped"])}
 
     @staticmethod
     def _relay_record(kind: str, record: dict) -> None:
@@ -1652,6 +1693,11 @@ class SkillsMCPServer:
                 return error_response(msg_id, INTERNAL_ERROR, "Skills error")
             return error_response(msg_id, INTERNAL_ERROR, f"Skills error: {exc}")
         except Exception as exc:  # noqa: BLE001 - report as JSON-RPC internal error
+            if method == "tools/call" and isinstance(params, dict) and params.get("name") == "share_recipe":
+                # share_recipe carries raw client text until it is masked, and an
+                # exception's text may quote it: the type only, here and to the caller.
+                log(f"Internal error in {method} (share_recipe): {type(exc).__name__}")
+                return error_response(msg_id, INTERNAL_ERROR, "Internal error")
             log(f"Internal error in {method}: {type(exc).__name__}: {exc}")
             if self.health_runs_only:
                 # Remote callers get no server paths or exception text; the

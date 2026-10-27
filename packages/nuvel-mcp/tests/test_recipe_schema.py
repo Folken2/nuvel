@@ -1,31 +1,57 @@
-"""nuvel.recipe_signal/1 and nuvel.recipe/1 schemas, validator keywords and the PII screen."""
+"""nuvel.recipe_signal/1 and nuvel.recipe/2 schemas, validator keywords and the signal screen."""
+
+import json
+from pathlib import Path
 
 import pytest
 
-from nuvel_mcp import recipes, traces
+from nuvel_mcp import masking, recipes, traces
 
 UUID_A = "11111111-1111-4111-8111-111111111111"
 UUID_B = "22222222-2222-4222-8222-222222222222"
 UUID_C = "33333333-3333-4333-8333-333333333333"
 PLUGIN = {"name": "chief-of-staff", "version": "0.3.0"}
+FIXTURE = Path(__file__).parent / "fixtures" / "chief_of_staff" / "recipe.json"
 
 SIGNAL = {
     "schema": "nuvel.recipe_signal/1", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
     "plugin": PLUGIN, "category": "client-followup", "event": "used",
     "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0,
 }
+STEP = {"action": "draft", "tool_kind": "email", "slots": ["person", "topic"],
+        "note": "Redactar el resumen para {person}"}
 RECIPE = {
-    "schema": "nuvel.recipe/1", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
+    "schema": "nuvel.recipe/2", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
     "version": 1, "category": "client-followup", "language": "es",
     "title": "Seguimiento tras una reunión", "when_to_use": "Cuando hay que cerrar acuerdos con el cliente",
-    "steps": [{"action": "draft", "tool_kind": "email", "text": "Redactar el resumen para el cliente"}],
+    "steps": [STEP],
     "pitfalls": ["No enviar sin revisar"],
+    "narrative": "El usuario pidió un resumen de la reunión con {company}.",
 }
 SKILL_RUN = {
     "schema": "nuvel.skill_run/1", "run_id": UUID_A, "install_id": UUID_C, "plugin": PLUGIN,
     "skill": {"name": "brief", "version": "0.3.0"}, "host": "claude-code", "mode": "interactive",
     "started_at": "2026-10-27T10:00:00Z", "duration_s": 5, "outcome": "success",
 }
+ACTIONS = [
+    "search", "read", "summarise", "extract", "compare", "check", "calculate",
+    "list", "draft", "edit", "translate", "create", "update", "file", "propose_slot",
+    "schedule", "send", "reply", "forward", "share", "remind", "follow_up", "ask",
+    "decide", "wait", "other",
+]
+PLACEHOLDERS = [
+    "person", "company", "team", "product", "project", "document", "file",
+    "folder", "amount", "number", "date", "time", "period", "place", "email",
+    "phone", "url", "id", "topic", "other",
+]
+
+
+def _schema():
+    return traces.load_schema(recipes.RECIPE_RESOURCE)
+
+
+def _step_schema():
+    return _schema()["properties"]["steps"]["items"]["properties"]
 
 
 def test_signal_valid():
@@ -34,12 +60,60 @@ def test_signal_valid():
 
 def test_recipe_valid():
     assert recipes.validate_recipe(RECIPE) == []
-    assert recipes.validate_recipe({k: v for k, v in RECIPE.items() if k != "pitfalls"}) == []
+    minimal = {k: v for k, v in RECIPE.items() if k not in ("pitfalls", "narrative")}
+    minimal["steps"] = [{"action": "draft", "tool_kind": "email", "slots": []}]
+    assert recipes.validate_recipe(minimal) == []
 
 
 def test_schema_ids():
     assert recipes.SIGNAL_SCHEMA_ID == "nuvel.recipe_signal/1"
-    assert recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/1"
+    assert recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/2"
+    assert recipes.RECIPE_RESOURCE == "schemas/recipe.v2.schema.json"
+    assert _schema()["properties"]["schema"]["const"] == recipes.RECIPE_SCHEMA_ID == masking.SCHEMA_ID
+
+
+def test_v1_schema_removed():
+    from importlib import resources
+    assert not resources.files("nuvel_mcp").joinpath("schemas/recipe.v1.schema.json").is_file()
+    assert not hasattr(recipes, "screen_recipe")
+
+
+def test_v2_schema_accepts_fixture():
+    assert recipes.validate_recipe(json.loads(FIXTURE.read_text())) == []
+
+
+def test_v1_shape_rejected():
+    v1_step = {"action": "draft", "tool_kind": "email", "text": "Redactar el resumen"}
+    errors = recipes.validate_recipe(RECIPE | {"steps": [v1_step]})
+    assert "/steps/0/text" in errors and "/steps/0/slots" in errors
+    assert recipes.validate_recipe(RECIPE | {"schema": "nuvel.recipe/1"}) == ["/schema"]
+
+
+def test_action_enum_exact():
+    assert _step_schema()["action"]["enum"] == ACTIONS == list(recipes.ACTIONS)
+
+
+def test_placeholder_enum_exact():
+    assert _step_schema()["slots"]["items"]["enum"] == PLACEHOLDERS == list(masking.PLACEHOLDER_TYPES)
+
+
+def test_schema_enums_match_code_constants():
+    schema = _schema()
+    props = schema["properties"]
+    assert props["category"]["enum"] == list(recipes.CATEGORIES)
+    assert props["plugin"]["properties"]["name"]["enum"] == list(recipes.PLUGIN_NAMES)
+    assert props["plugin"]["properties"]["version"]["pattern"] == r"^\d{1,2}\.\d{1,2}\.\d{1,2}$"
+    assert _step_schema()["tool_kind"]["enum"] == list(recipes.TOOL_KINDS)
+    assert frozenset(recipes.TOOL_KINDS) == masking._TOOL_KINDS
+    assert _step_schema()["action"]["enum"] == list(recipes.ACTIONS)
+    assert _step_schema()["slots"]["items"]["enum"] == list(masking.PLACEHOLDER_TYPES)
+    assert "tenant" not in props and "masking" not in props
+
+
+def test_server_fields_rejected_by_schema():
+    assert recipes.validate_recipe(RECIPE | {"tenant": "x"}) == ["/tenant"]
+    masking_stamp = {"lexicon": "es-1", "masked": 0, "words": 1, "dropped": []}
+    assert recipes.validate_recipe(RECIPE | {"masking": masking_stamp}) == ["/masking"]
 
 
 def test_signal_rejects_tenant():
@@ -48,14 +122,29 @@ def test_signal_rejects_tenant():
     assert "x" not in "".join(errors).replace("tenant", "")
 
 
-def test_recipe_rejects_extra_property_and_nested_extra():
-    assert "/tenant" in recipes.validate_recipe(RECIPE | {"tenant": "x"})
-    step = {"action": "draft", "tool_kind": "email", "text": "ok", "extra": 1}
-    assert recipes.validate_recipe(RECIPE | {"steps": [step]}) == ["/steps/0/extra"]
+def test_recipe_rejects_nested_extra():
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"extra": 1}]}) == ["/steps/0/extra"]
+    plugin = PLUGIN | {"extra": 1}
+    assert recipes.validate_recipe(RECIPE | {"plugin": plugin}) == ["/plugin/extra"]
 
 
-def test_new_category_accepted():
+def test_new_signal_category_accepted_by_schema():
     assert recipes.validate_signal(SIGNAL | {"category": "brand-new-thing"}) == []
+
+
+def test_recipe_closed_identifier_sets():
+    assert recipes.validate_recipe(RECIPE | {"category": "brand-new-thing"}) == ["/category"]
+    assert recipes.validate_recipe(RECIPE | {"plugin": PLUGIN | {"name": "other"}}) == ["/plugin/name"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"action": "call_pedro"}]}) == ["/steps/0/action"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"slots": ["pedro"]}]}) == ["/steps/0/slots/0"]
+
+
+@pytest.mark.parametrize("version,ok", [
+    ("0.3.0", True), ("10.20.30", True), ("100.0.0", False), ("612.345.678", False), ("1.2", False),
+])
+def test_plugin_semver(version, ok):
+    errors = recipes.validate_recipe(RECIPE | {"plugin": PLUGIN | {"version": version}})
+    assert errors == ([] if ok else ["/plugin/version"])
 
 
 def test_signal_bad_event_and_counter():
@@ -73,14 +162,40 @@ def test_recipe_needs_a_step():
 
 
 def test_recipe_limits():
-    step = RECIPE["steps"][0]
-    assert recipes.validate_recipe(RECIPE | {"steps": [step] * 16}) == ["/steps"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP] * 15}) == []
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP] * 16}) == ["/steps"]
     assert recipes.validate_recipe(RECIPE | {"pitfalls": ["a"] * 6}) == ["/pitfalls"]
     assert recipes.validate_recipe(RECIPE | {"pitfalls": ["a" * 161]}) == ["/pitfalls/0"]
+    assert recipes.validate_recipe(RECIPE | {"when_to_use": "a" * 201}) == ["/when_to_use"]
+    assert recipes.validate_recipe(RECIPE | {"narrative": "a" * 2000}) == []
+    assert recipes.validate_recipe(RECIPE | {"narrative": "a" * 2001}) == ["/narrative"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"note": "a" * 161}]}) == ["/steps/0/note"]
     assert recipes.validate_recipe(RECIPE | {"language": "ESP"}) == ["/language"]
     assert recipes.validate_recipe(RECIPE | {"version": 0}) == ["/version"]
-    bad = dict(step, tool_kind="fax")
-    assert recipes.validate_recipe(RECIPE | {"steps": [bad]}) == ["/steps/0/tool_kind"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"tool_kind": "fax"}]}) == ["/steps/0/tool_kind"]
+
+
+def test_slots_limits_and_unique():
+    four = ["person", "company", "date", "amount"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"slots": four}]}) == []
+    five = four + ["topic"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"slots": five}]}) == ["/steps/0/slots"]
+    dup = ["person", "person"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"slots": dup}]}) == ["/steps/0/slots"]
+
+
+def test_unique_items_keyword():
+    schema = {"type": "array", "uniqueItems": True, "items": {"type": "object"}}
+    traces.check_schema_keywords(schema)
+    errors: list[str] = []
+    traces._validate([{"a": 1, "b": 2}, {"b": 2, "a": 1}], schema, "/x", errors)
+    assert errors == ["/x"]
+    errors = []
+    traces._validate([1, True], {"type": "array", "uniqueItems": True}, "/x", errors)
+    assert errors == []  # JSON: 1 and true are different values
+    errors = []
+    traces._validate(["a", "b"], {"type": "array", "uniqueItems": False}, "/x", errors)
+    assert errors == []
 
 
 def test_skill_run_still_validates():
@@ -91,68 +206,6 @@ def test_skill_run_still_validates():
 def test_new_schemas_pass_keyword_check():
     for resource in (recipes.SIGNAL_RESOURCE, recipes.RECIPE_RESOURCE):
         traces.check_schema_keywords(traces.load_schema(resource))
-
-
-def _with_text(text):
-    return RECIPE | {"steps": [{"action": "draft", "tool_kind": "email", "text": text}]}
-
-
-@pytest.mark.parametrize("text", [
-    "Enviar a Marta García el resumen", "Escribir a marta@acme.com", "Pagar 1.250 €",
-    "Llamar al +34 600 123 456", "Abrir https://acme.com/x", "IBAN ES9121000418450200051332",
-])
-def test_screen_blocks(text):
-    assert recipes.screen_recipe(_with_text(text)) == ["/steps/0/text"]
-
-
-@pytest.mark.parametrize("text", ["Revisar la propuesta con el cliente", "Preparar el resumen de la reunión"])
-def test_screen_allows_generic(text):
-    assert recipes.screen_recipe(_with_text(text)) == []
-
-
-def test_screen_valid_recipe_is_clean():
-    assert recipes.screen_recipe(RECIPE) == []
-
-
-def test_screen_covers_all_text_fields_in_order_without_values():
-    recipe = RECIPE | {
-        "title": "Escribir a a@b.co", "when_to_use": "Ver www.acme.com",
-        "steps": [{"action": "draft", "tool_kind": "email", "text": "Pagar $50"}] * 2,
-        "pitfalls": ["ok", "Llamar a Juan Pérez"],
-    }
-    found = recipes.screen_recipe(recipe)
-    assert found == ["/title", "/when_to_use", "/steps/0/text", "/steps/1/text", "/pitfalls/1"]
-    assert not any("@" in p or "Juan" in p for p in found)
-
-
-def test_screen_allows_capitalised_word_at_start():
-    assert recipes.screen_recipe(_with_text("Revisar. Cliente Importante")) == ["/steps/0/text"]
-    assert recipes.screen_recipe(_with_text("Cliente Importante pide algo")) == []
-
-
-@pytest.mark.parametrize("text", [
-    "Enviar a Ana García-López el resumen", "Enviar a Juan O'Brien", "Enviar a Juan O’Brien",
-    "Pagar EUR 1250", "Pagar USD 300", "Pagar GBP 20", "Pagar 300 eur", "Pagar 300 euros",
-    "Pagar 20 dólares", "Pagar ¥300", "Abrir acme.com/precios", "Mirar acme.es",
-    "Escribir a marta＠acme.com",
-])
-def test_screen_blocks_round1(text):
-    assert recipes.screen_recipe(_with_text(text)) == ["/steps/0/text"]
-
-
-@pytest.mark.parametrize("text", [
-    "p. ej. revisar el acta", "e.g. check the agenda", "versión 2.1", "Revisar el acta, etc.",
-    "Calcular 3,5 de media",
-])
-def test_screen_allows_round1(text):
-    assert recipes.screen_recipe(_with_text(text)) == []
-
-
-def test_screen_action_field():
-    step = {"action": "llamar_600123456", "tool_kind": "none", "text": "Revisar"}
-    assert recipes.screen_recipe(RECIPE | {"steps": [step]}) == ["/steps/0/action"]
-    step = {"action": "a@b.co", "tool_kind": "none", "text": "Revisar"}
-    assert recipes.screen_recipe(RECIPE | {"steps": [step]}) == ["/steps/0/action"]
 
 
 def test_screen_signal():

@@ -30,6 +30,8 @@ from .recipes import (
     PHONE_RE,
     PII_PATTERNS,
     PLUGIN_NAMES,
+    RECIPE_SCHEMA_ID,
+    TOOL_KINDS,
     URL_RE,
 )
 
@@ -761,8 +763,8 @@ def mask_text(text: str, lexicon: Lexicon, abbreviations: frozenset[str] | None 
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _SEMVER_RE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{1,2}")  # ≤ 6 digits: no room for a phone number
 _LANGUAGE_RE = re.compile(r"[a-z]{2}")
-SCHEMA_ID = "nuvel.recipe/2"
-_TOOL_KINDS = frozenset({"email", "calendar", "chat", "docs", "storage", "tasks", "web", "none"})
+SCHEMA_ID = RECIPE_SCHEMA_ID
+_TOOL_KINDS = frozenset(TOOL_KINDS)
 
 
 def _in(values) -> object:

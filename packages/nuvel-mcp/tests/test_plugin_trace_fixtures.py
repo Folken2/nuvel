@@ -55,13 +55,33 @@ def test_unknown_step_names_still_valid_identifiers(server):
     assert call(server, "record_run_trace", {"trace": trace})["status"] == "recorded"
 
 
-def test_learn_signal_and_recipe_fixtures(server):
+def test_learn_signal_and_recipe_fixtures(server, tmp_path):
     signal = json.loads((FIXTURES / "recipe_signal.json").read_text())
     recipe = json.loads((FIXTURES / "recipe.json").read_text())
     assert recipes.validate_signal(signal) == [] and recipes.screen_signal(signal) == []
-    assert recipes.validate_recipe(recipe) == [] and recipes.screen_recipe(recipe) == []
-    assert "tenant" not in signal and "tenant" not in recipe
+    assert recipes.validate_recipe(recipe) == []
+    assert recipe["schema"] == recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/2"
+    assert "tenant" not in signal and "tenant" not in recipe and "masking" not in recipe
+    assert "{person}" in recipe["narrative"] and "marta" in recipe["narrative"]
     assert signal["recipe_id"] == recipe["recipe_id"]
     assert call(server, "record_recipe_signal", {"signal": signal})["status"] == "recorded"
     assert call(server, "record_recipe_signal", {"signal": signal})["status"] == "duplicate"
     assert call(server, "share_recipe", {"recipe": recipe})["status"] == "recorded"
+    assert call(server, "share_recipe", {"recipe": recipe})["status"] == "duplicate"
+    [stored] = (tmp_path / "_recipes" / "recipes").rglob("v2.json")
+    assert "marta" not in stored.read_text().casefold()
+
+
+def test_recipe_fixture_with_real_lexicon(server, tmp_path):
+    """The one share test on the packaged es lexicon: the lowercase name is masked."""
+    from nuvel_mcp import masking
+    if masking.load_lexicon("es") is None:
+        pytest.skip("es lexicon not packaged")
+    recipe = json.loads((FIXTURES / "recipe.json").read_text())
+    body = call(server, "share_recipe", {"recipe": recipe})
+    assert body["status"] == "recorded" and body["masked"] >= 1
+    assert "/narrative" not in body["dropped"]
+    [stored] = (tmp_path / "_recipes" / "recipes").rglob("v2.json")
+    record = json.loads(stored.read_text())
+    assert "marta" not in record["narrative"].casefold() and "{?}" in record["narrative"]
+    assert record["masking"]["lexicon"].startswith("es")

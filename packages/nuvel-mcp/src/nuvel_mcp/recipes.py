@@ -1,11 +1,13 @@
-"""Recipe signals (``nuvel.recipe_signal/1``) and anonymised recipes (``nuvel.recipe/1``).
+"""Recipe signals (``nuvel.recipe_signal/1``) and shared recipes (``nuvel.recipe/2``).
 
 Stdlib-only. Shapes live in the packaged schemas ``recipe_signal.v1.schema.json``
-and ``recipe.v1.schema.json``; validation reuses :mod:`nuvel_mcp.traces`.
+and ``recipe.v2.schema.json``; validation reuses :mod:`nuvel_mcp.traces`.
 Errors are JSON-pointer paths only, never values.
 
-``screen_recipe`` is the server-side PII screen: it flags text fields that look
-like they carry customer detail. False positives are acceptable.
+A recipe's free text is not screened here: ``share_recipe`` masks it with
+:mod:`nuvel_mcp.masking` (allowlist) and re-checks it with
+``masking.invariant_hits`` before anything is stored. ``screen_signal`` keeps
+the content-free signal's identifier fields to their closed lists.
 """
 
 from __future__ import annotations
@@ -23,9 +25,9 @@ from typing import Protocol, runtime_checkable
 from . import traces
 
 SIGNAL_SCHEMA_ID = "nuvel.recipe_signal/1"
-RECIPE_SCHEMA_ID = "nuvel.recipe/1"
+RECIPE_SCHEMA_ID = "nuvel.recipe/2"
 SIGNAL_RESOURCE = "schemas/recipe_signal.v1.schema.json"
-RECIPE_RESOURCE = "schemas/recipe.v1.schema.json"
+RECIPE_RESOURCE = "schemas/recipe.v2.schema.json"
 
 
 def validate_signal(doc: object) -> list[str]:
@@ -34,13 +36,14 @@ def validate_signal(doc: object) -> list[str]:
 
 
 def validate_recipe(doc: object) -> list[str]:
-    """Paths of fields failing ``nuvel.recipe/1`` (empty list = valid)."""
+    """Paths of fields failing ``nuvel.recipe/2`` (empty list = valid)."""
     return traces.validate(doc, RECIPE_RESOURCE)
 
 
 
 # Closed lists. CATEGORIES mirrors plugins/chief-of-staff/references/recipe-categories.md
-# (nuvel-plugins); PLUGIN_NAMES and ACTIONS grow with server releases.
+# (nuvel-plugins); PLUGIN_NAMES and ACTIONS grow with server releases. The
+# recipe.v2 schema enums are a copy of these (a test checks they are equal).
 CATEGORIES = (
     "client-proposal", "client-onboarding", "client-followup", "meeting-prep",
     "meeting-followup", "sales-pipeline", "partner-relations", "investor-update",
@@ -56,6 +59,7 @@ ACTIONS = (
     "schedule", "send", "reply", "forward", "share", "remind", "follow_up", "ask",
     "decide", "wait", "other",
 )
+TOOL_KINDS = ("email", "calendar", "chat", "docs", "storage", "tasks", "web", "none")
 
 # Typed PII regexes, module-level so ``nuvel_mcp.masking`` reuses them.
 EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
@@ -74,69 +78,12 @@ _EMAIL_RE = EMAIL_RE
 _DIGIT_RUN_RE = DIGIT_RUN_RE
 _CURRENCY_WORDS = CURRENCY_WORDS
 _PII_PATTERNS = PII_PATTERNS
-_BREAK_CHARS = ".,;:!?()[]{}\"'“”«»"
-
-
-def _is_capitalised_word(word: str) -> bool:
-    """Uppercase first letter; letters joined by ``-``, ``'`` or ``’`` (García-López, O'Brien)."""
-    parts = re.split(r"[-'’]", word)
-    return bool(word) and word[0].isupper() and all(p.isalpha() for p in parts)
-
-
-def _capitalised_run(text: str) -> bool:
-    """True for two or more consecutive capitalised words, not at the start of the text."""
-    run = 0
-    for index, token in enumerate(text.split()):
-        word = token.strip(_BREAK_CHARS)
-        if index > 0 and _is_capitalised_word(word):
-            run += 1
-            if run >= 2:
-                return True
-        else:
-            run = 0
-        if token[-1] in _BREAK_CHARS:
-            run = 0  # punctuation ends a name-like sequence
-    return False
-
-
-def _text_matches(text: str) -> bool:
-    text = unicodedata.normalize("NFKC", text)  # fullwidth '＠' etc. -> ASCII
-    return any(p.search(text) for p in _PII_PATTERNS) or _capitalised_run(text)
 
 
 def _id_matches(text: str) -> bool:
-    """Identifier-shaped fields (step action, signal category): emails and digit runs only."""
+    """Identifier-shaped fields (signal category): emails and digit runs only."""
     text = unicodedata.normalize("NFKC", text)
     return _EMAIL_RE.search(text) is not None or _DIGIT_RUN_RE.search(text) is not None
-
-
-def _text_fields(recipe: dict):
-    """Yield ``(pointer, text, matcher)`` for every screened field, in document order."""
-    for key in ("title", "when_to_use"):
-        if isinstance(recipe.get(key), str):
-            yield f"/{key}", recipe[key], _text_matches
-    steps = recipe.get("steps")
-    if isinstance(steps, list):
-        for i, step in enumerate(steps):
-            if not isinstance(step, dict):
-                continue
-            if isinstance(step.get("action"), str):
-                yield f"/steps/{i}/action", step["action"], _id_matches
-            if isinstance(step.get("text"), str):
-                yield f"/steps/{i}/text", step["text"], _text_matches
-    pitfalls = recipe.get("pitfalls")
-    if isinstance(pitfalls, list):
-        for i, item in enumerate(pitfalls):
-            if isinstance(item, str):
-                yield f"/pitfalls/{i}", item, _text_matches
-
-
-def screen_recipe(recipe: dict) -> list[str]:
-    """JSON-pointer paths of text fields matching a PII pattern (deduplicated,
-    document order). Matched text is never returned."""
-    if not isinstance(recipe, dict):
-        return []
-    return list(dict.fromkeys(path for path, text, matches in _text_fields(recipe) if matches(text)))
 
 
 def screen_signal(signal: dict) -> list[str]:
