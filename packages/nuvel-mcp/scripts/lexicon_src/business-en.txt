@@ -1,0 +1,29 @@
+# Hand-reviewed English business vocabulary (spec §4.2 "Plus"). Generic words
+# only: no names, companies, products or places. The build drops any entry
+# that a name, place or brand list contains.
+
+# recipe actions and common work verbs
+summarise summarize summarised summarized summary summaries draft drafts redraft
+review reviews send sends forward reply replies follow followup remind reminds reminder reminders
+schedule reschedule reschedules book books cancel cancels confirm confirms chase chases
+renegotiate renegotiates renew renews reconcile reconciles digitise digitize onboard escalate prioritise prioritize
+invoice invoices invoiced invoicing billing billings bill quote quotes quotation
+check checks compare compares calculate list lists extract translate create update updates file files
+share shares ask decide wait close closes call calls open opens
+
+# nouns and adjectives of business
+client clients customer customers supplier suppliers vendor vendors contract contracts
+policy policies insurance insurer renewal renewals premium claim claims
+meeting meetings minutes agenda report reports overview kickoff offsite onboarding
+project projects milestone milestones phase phases deliverable deliverables deadline deadlines timeline timelines
+email emails inbox thread threads attachment attachments link links folder folders document documents
+payroll payslip payslips staff hire hiring candidate candidates interview interviews
+sales purchases payments expenses revenue margin margins cost costs profit cash flow treasury budget budgets variance
+quarterly quarter annual monthly penalty penalties investor investors investment round capital shareholder shareholders board
+logistics shipping shipment shipments delivery deliveries warehouse stock inventory supplies
+booking bookings flight flights train hotel hotels catering venue
+marketing campaign campaigns newsletter newsletters feedback leads lead partner partners marketplace
+dashboard portal website
+grant grants tender tenders subsidy subsidies
+team teams department manager director
+morning afternoon evening today tomorrow yesterday week weeks month months

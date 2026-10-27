@@ -22,14 +22,17 @@ from nuvel_mcp.masking import (
 )
 
 
-def lex(words=(), numbers=(), dates=(), currency=(), version="xx-2026.10.1"):
+def lex(words=(), numbers=(), dates=(), currency=(), version=None, language="xx"):
     f = masking.fold
+    if version is None:
+        version = f"{language}-2026.10.1"
     return Lexicon(
         words=frozenset(f(w) for w in words),
         numbers=frozenset(f(w) for w in numbers),
         dates=frozenset(f(w) for w in dates),
         currency=frozenset(f(w) for w in currency),
         version=version,
+        language=language,
     )
 
 
@@ -80,7 +83,7 @@ def test_sentence_start_rules(text, expected):
 
 
 def test_pronoun_i_passes():
-    lx = lex({"yes", "i", "m", "think", "so"})
+    lx = lex({"yes", "i", "m", "think", "so"}, language="en")
     assert masked("yes I think so, I'm", lx) == "yes I think so, I'm"
 
 
@@ -145,7 +148,7 @@ def test_number_words_english_and_catalan():
     assert masked("costa vint-i-cinc euros", lx) == "costa {amount}"
     assert masked("on March 15th", lx) == "on {date}"
     assert masked("on the twenty-five", lx) == "on the {number}"  # two number words in one token
-    assert masked("on the five", lx) == "on the {?}"              # one number word: lexicon decides
+    assert masked("on the five", lx) == "on the {number}"         # one number word outside [words]
 
 
 def test_hyphen_parts_all_checked():
@@ -589,22 +592,22 @@ def test_idn_domains():
     assert masked("visita e.g. rosa", lx) == "visita e.g. rosa"
 
 
-@pytest.mark.parametrize("text, expected", [
-    ("con s-o-l", "con {?}"),
-    ("a e i o", "{?}"),
-    ("con a e i o y", "con {?}"),
-    ("con a, e, i o", "con {?}"),
-    ("p-e-d-r-o", "{?}"),
-    ("con e-mail", "con {?}"),
-    ("con e i", "con e i"),
-    ("con l'informe d'avui", "con l'informe d'avui"),
-    ("it's I'm don't", "it's I'm don't"),
-    ("con l'o", "con {?}"),
-    ("con x'informe", "con {?}"),
+@pytest.mark.parametrize("language, text, expected", [
+    ("xx", "con s-o-l", "con {?}"),
+    ("xx", "a e i o", "{?}"),
+    ("xx", "con a e i o y", "con {?}"),
+    ("xx", "con a, e, i o", "con {?}"),
+    ("xx", "p-e-d-r-o", "{?}"),
+    ("xx", "con e-mail", "con {?}"),
+    ("xx", "con e i", "con e i"),
+    ("ca", "con l'informe d'avui", "con l'informe d'avui"),
+    ("en", "it's I'm don't", "it's I'm don't"),
+    ("ca", "con l'o", "con {?}"),
+    ("ca", "con x'informe", "con {?}"),
 ])
-def test_spelled_out_names(text, expected):
+def test_spelled_out_names(language, text, expected):
     lx = lex({"con", "s", "o", "l", "a", "e", "i", "p", "d", "r", "y", "mail", "informe", "avui",
-              "it", "m", "don", "t", "x"})
+              "it", "m", "don", "t", "x"}, language=language)
     assert masked(text, lx) == expected
 
 
@@ -612,6 +615,15 @@ def test_lexicon_stores_sources(tmp_path):
     p = tmp_path / "es.txt"
     p.write_text(LEXICON_FILE, encoding="utf-8")
     assert masking._load_lexicon_from(p, "es").sources == "base-x, names-y"
+
+
+def test_lexicon_carries_its_language(tmp_path):
+    p = tmp_path / "ca.txt"
+    p.write_text("# version: ca-2026.10.1\n# [words]\ninforme\nl\n", encoding="utf-8")
+    lx = masking._load_lexicon_from(p, "ca")
+    assert lx.language == "ca"
+    assert masked("con l'informe", Lexicon(lx.words | {"con"}, lx.numbers, lx.dates, lx.currency,
+                                           lx.version, language=lx.language)) == "con l'informe"
 
 
 @pytest.mark.parametrize("content", [
@@ -727,21 +739,40 @@ def test_invariant_checks_dropped(dropped, hits):
     assert invariant_hits({"title": "ok"}, dropped=dropped) == hits
 
 
-@pytest.mark.parametrize("text, expected", [
-    ("con t'i'm", "con {?}"),
-    ("con s'i'd", "con {?}"),
-    ("con d'l's", "con {?}"),
-    ("con t’i’m", "con {?}"),
-    ("con s’i’d", "con {?}"),
-    ("con d’l’s", "con {?}"),
-    ("con d's", "con {?}"),            # no part of two letters
-    ("con informe'l", "con {?}"),      # a prefix elision on the last part
-    ("con l'informe's", "con l'informe's"),
-    ("con l'informe", "con l'informe"),
-    ("I'm here, I'd go, don't", "I'm here, I'd go, don't"),
+@pytest.mark.parametrize("language", ["ca", "en", "es", "xx"])
+@pytest.mark.parametrize("text", [
+    "con t'i'm", "con s'i'd", "con d'l's", "con t’i’m", "con s’i’d", "con d’l’s",
+    "con d's",           # no part of two letters
+    "con informe'l",     # a prefix elision on the last part
+    "con l'informe's",   # a prefix and a suffix elision: no language allows both
 ])
-def test_chained_elisions(text, expected):
-    lx = lex({"con", "t", "i", "m", "s", "d", "l", "informe", "here", "go", "don"})
+def test_chained_elisions_masked_in_every_language(language, text):
+    lx = lex({"con", "t", "i", "m", "s", "d", "l", "informe"}, language=language)
+    assert masked(text, lx) == "con {?}"
+    assert invariant_hits({"narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("language, text, expected", [
+    ("ca", "con l'informe", "con l'informe"),
+    ("ca", "con l’informe d'avui", "con l’informe d'avui"),
+    ("ca", "con s'am i n'an, m'an t'an", "con s'am i n'an, m'an t'an"),
+    ("ca", "con it's", "con {?}"),               # English suffixes are not Catalan
+    ("ca", "con I'm", "con {?}"),
+    ("en", "con s'am", "con {?}"),               # prefix elisions are Catalan only
+    ("en", "con d'an", "con {?}"),
+    ("en", "con l'informe", "con {?}"),
+    ("en", "I'm here, I'd go, don't", "I'm here, I'd go, don't"),
+    ("en", "it's", "it's"),
+    ("en", "con it'l", "con {?}"),               # only 's 't 'm 'd
+    ("es", "con l'informe", "con {?}"),          # Spanish has no elisions
+    ("es", "con it's", "con {?}"),
+    ("es", "con I'm", "con {?}"),
+    ("xx", "con l'informe", "con {?}"),          # unknown language: none either
+    ("xx", "I'm here", "{?} here"),
+])
+def test_elisions_per_language(language, text, expected):
+    lx = lex({"con", "s", "am", "i", "n", "an", "m", "t", "d", "l", "informe", "avui", "it",
+              "here", "go", "don"}, language=language)
     assert masked(text, lx) == expected
     assert invariant_hits({"narrative": masked(text, lx)}) == []
 
@@ -771,3 +802,36 @@ def test_punctuation_runs(text, expected):
 ])
 def test_invariant_flags_punctuation_runs(text):
     assert invariant_hits({"narrative": text}) == ["/narrative"]
+
+
+# --- Task 4: corpus-gate rules ------------------------------------------------
+
+@pytest.mark.parametrize("text, expected", [
+    ("el pedido PO-55102 hoy", "el pedido {id} hoy"),        # the letter prefix is part of the id
+    ("la factura F-2026-0412 hoy", "la factura {id} hoy"),
+    ("el pedido po-55102/a hoy", "el pedido {id} hoy"),
+    ("el pedido 55102/a hoy", "el pedido {number} hoy"),
+    ("el pedido ACME-X-7 hoy", "el pedido {id} hoy"),
+    ("el pedido sin-número hoy", "el pedido sin-número hoy"),     # no digit: an ordinary word
+])
+def test_letter_prefixed_ids_are_one_token(text, expected):
+    lx = lex({"el", "pedido", "la", "factura", "hoy", "po", "acme", "x", "sin", "numero"})
+    assert masked(text, lx) == expected
+    assert invariant_hits({"narrative": masked(text, lx)}) == []
+
+
+def test_letter_prefixed_id_regex_is_linear():
+    import time
+    start = time.perf_counter()
+    for text in ("a-" * 3999 + "a", "ab-" * 2600 + "x", ("a-" * 1000 + " ") * 3):
+        mask_text(text, lex({"a"}))
+    assert time.perf_counter() - start < 2
+
+
+def test_lone_number_word_outside_words_is_a_number():
+    lx = lex({"para", "meses", "una", "carta", "con"},
+             numbers={"una", "catorce", "dos", "veinte", "mil"}, currency={"euros"})
+    r = mask_text("para catorce meses", lx)
+    assert (r.text, r.masked, r.words) == ("para {number} meses", 0, 3)
+    assert masked("una carta con dos", lx) == "una carta con {number}"   # "una" is in [words]
+    assert masked("veinte mil euros", lx) == "{amount}"

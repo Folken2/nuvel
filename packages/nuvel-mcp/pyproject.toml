@@ -21,4 +21,4 @@ nuvel-mcp = "nuvel_mcp.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nuvel_mcp = ["schemas/*.json"]
+nuvel_mcp = ["schemas/*.json", "lexicon/*.txt", "lexicon/*.md"]

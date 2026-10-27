@@ -1,0 +1,9 @@
+# Spanish number words (cardinals and the ordinals used in dates). Hand-written closed set.
+cero un uno una dos tres cuatro cinco seis siete ocho nueve diez
+once doce trece catorce quince dieciséis diecisiete dieciocho diecinueve
+veinte veintiún veintiuno veintiuna veintidós veintitrés veinticuatro veinticinco veintiséis veintisiete veintiocho veintinueve
+treinta cuarenta cincuenta sesenta setenta ochenta noventa
+cien ciento doscientos doscientas trescientos trescientas cuatrocientos cuatrocientas
+quinientos quinientas seiscientos seiscientas setecientos setecientas ochocientos ochocientas
+novecientos novecientas mil millón millon millones billón billones
+primero primer segundo tercero tercer cuarto quinto sexto séptimo octavo noveno décimo

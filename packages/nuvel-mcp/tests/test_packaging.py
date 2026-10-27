@@ -94,3 +94,17 @@ def test_package_license_matches_the_repository_license():
     if not repo_license.is_file():  # an unpacked sdist has no repository around it
         pytest.skip("not inside the repository")
     assert (pkg / "LICENSE").read_text() == repo_license.read_text()
+
+
+def test_wheel_carries_the_lexicons(tmp_path):
+    pkg = pathlib.Path(__file__).parents[1]
+    lexicon_dir = pkg / "src" / "nuvel_mcp" / "lexicon"
+    expected = {f"nuvel_mcp/lexicon/{p.name}" for p in lexicon_dir.iterdir()
+                if p.suffix in (".txt", ".md")}
+    assert "nuvel_mcp/lexicon/SOURCES.md" in expected
+    assert "nuvel_mcp/lexicon/abbreviations.txt" in expected
+    _build_wheel(pkg, tmp_path)
+    names = set(zipfile.ZipFile(next(tmp_path.glob("nuvel_mcp-*.whl"))).namelist())
+    assert expected <= names, sorted(expected - names)
+    # the build inputs are not shipped
+    assert not [n for n in names if "lexicon_src" in n or "build_lexicon" in n]

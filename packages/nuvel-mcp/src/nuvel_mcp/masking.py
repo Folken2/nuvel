@@ -58,6 +58,7 @@ class Lexicon:
     currency: frozenset[str]
     version: str
     sources: str = ""
+    language: str = ""  # selects the elision rules; empty → the version's language tag
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,7 @@ def _parse_lexicon(text: str, language: str | None) -> Lexicon:
         currency=frozenset(sets["currency"]),
         version=version,
         sources=sources,
+        language=lang,
     )
 
 
@@ -235,8 +237,15 @@ _AMOUNT_RE = re.compile(
     + r"|\b(?:eur|usd|gbp)\s?" + _NUM,
     re.IGNORECASE,
 )
-# Any remaining alphanumeric run containing a digit (``15th``, ``v2``, ``14:30``).
-_DIGITS_RE = re.compile(r"(?<![^\W_])[^\W_]*\d(?:[^\W_]|[.,:/\-](?=\d))*")
+# Any remaining alphanumeric run containing a digit (``15th``, ``v2``, ``14:30``),
+# together with a hyphen-joined letter prefix and any joined tail
+# (``PO-55102``, ``F-2026-0412``, ``55102/a``): an id is one token. The prefix
+# group is possessive, so a long hyphenated word without digits fails in
+# linear time.
+_DIGITS_RE = re.compile(r"(?<![^\W_])(?:[^\W\d_]+-)*+[^\W_]*\d(?:[^\W_]|[.,:/\-](?=[^\W_]))*")
+# The same shape with at least one letter prefix is an id (``PO-55102``,
+# ``F-2026-0412``); it runs before phones so the prefix is not left behind.
+_PREFIXED_ID_RE = re.compile(r"(?<![^\W_])(?:[^\W\d_]+-)++[^\W_]*\d(?:[^\W_]|[.,:/\-](?=[^\W_]))*")
 
 # Domains with Unicode letters (``rosá.com``): letters.letters, last label >= 2 letters.
 _IDN_RE = re.compile(
@@ -247,8 +256,9 @@ _LEAD_TRIM = "([{\"'«“‘¿¡<"
 _TRAIL_TRIM = ".,;:!?)]}\"'»”’>"
 
 # (placeholder type, regex, trim punctuation at the edges). Spec order, except
-# that the IBAN regex runs before phones and amounts before phones and digit
-# runs, so ``ES91 2100 …`` is an ``{id}`` and ``125.000 €`` an ``{amount}``
+# that the IBAN regex runs before phones, amounts before phones and digit
+# runs, and letter-prefixed ids before phones, so ``ES91 2100 …`` is an
+# ``{id}``, ``125.000 €`` an ``{amount}`` and ``F-2026-0412`` an ``{id}``
 # rather than a phone or id. Every digit is replaced either way.
 _TYPED = (
     # Anchored to a token start: same leftmost matches as EMAIL_RE, linear time.
@@ -258,6 +268,7 @@ _TYPED = (
     ("url", _IDN_RE, True),
     ("id", IBAN_RE, True),
     ("amount", _AMOUNT_RE, False),
+    ("id", _PREFIXED_ID_RE, False),
     ("phone", PHONE_RE, False),
     ("id", DIGIT_RUN_RE, False),
     ("number", _DIGITS_RE, False),
@@ -483,6 +494,8 @@ def _number_words(tokens: list[tuple[str, str]], lx: Lexicon) -> list[tuple[str,
                 hi, count = hi + 2, count + c
             else:
                 break
+        # One number word that is not in [words] ("catorce meses") is a {number} too.
+        lone_number = lo == hi and els.tok(lo)[0] == "word" and fold(els.tok(lo)[1]) not in lx.words
         start, end, is_amount = lo, hi, False
         if hi + 1 < n and els.linked(hi, hi + 1) and currency(hi + 1):
             end, is_amount = hi + 1, True
@@ -493,7 +506,7 @@ def _number_words(tokens: list[tuple[str, str]], lx: Lexicon) -> list[tuple[str,
             start, is_amount = lo - 1, True
         if is_amount:
             spans.append((start, end, "amount"))
-        elif count >= 2:
+        elif count >= 2 or lone_number:
             spans.append((start, end, "number"))
         k = hi + 1
     return els.collapse(_merge(spans, "amount")) if spans else tokens
@@ -533,21 +546,36 @@ def _is_abbreviation(word: str, abbreviations: frozenset[str]) -> bool:
     return word.isalpha() and word.isupper() and len(word) <= 4 and fold(word) in abbreviations
 
 
-# Single-letter parts are allowed only as apostrophe elisions: a prefix on the
-# first part (``l'``, ``d'``, ``s'``, ``n'``, ``m'``, ``t'``) or an English
-# contraction suffix on the last part (``'s``, ``'t``, ``'m``, ``'d``), in a
-# word that has a part of two or more letters. ``I'm`` and ``I'd`` are the
-# only words exempt from that last condition.
-_ELISION_PREFIX = frozenset("ldsnmt")
-_ELISION_SUFFIX = frozenset("stmd")
-_PRONOUN_CONTRACTIONS = frozenset({"I'm", "I’m", "I'd", "I’d"})
+# Single-letter parts are allowed only as apostrophe elisions, per language,
+# in a word that has a part of two or more letters:
+#   ca: a prefix on the first part (``l'``, ``d'``, ``s'``, ``n'``, ``m'``, ``t'``);
+#   en: a contraction suffix on the last part (``'s``, ``'t``, ``'m``, ``'d``),
+#       and ``I'm`` / ``I'd``, the only words exempt from the two-letter part;
+#   es and every other language: none.
+@dataclass(frozen=True)
+class _Elisions:
+    prefix: frozenset[str] = frozenset()
+    suffix: frozenset[str] = frozenset()
+    exempt: frozenset[str] = frozenset()
+
+
+_ELISIONS = {
+    "ca": _Elisions(prefix=frozenset("ldsnmt")),
+    "en": _Elisions(suffix=frozenset("stmd"), exempt=frozenset({"I'm", "I’m", "I'd", "I’d"})),
+}
+_NO_ELISIONS = _Elisions()
 _SEP_SPLIT = re.compile(r"(['’\-])")
 
 
-def _shape_ok(word: str) -> bool:
-    """Rejects spelled-out names (``s-o-l``, ``t'i'm``)."""
+def _language(lx: Lexicon) -> str:
+    return lx.language or lx.version.rpartition("-")[0]
+
+
+def _shape_ok(word: str, elisions: _Elisions) -> bool:
+    """Rejects spelled-out names (``s-o-l``, ``t'i'm``) and elisions the
+    language does not have."""
     pieces = _SEP_SPLIT.split(word)
-    if len(pieces) == 1 or word in _PRONOUN_CONTRACTIONS:
+    if len(pieces) == 1 or word in elisions.exempt:
         return True
     parts, seps = pieces[0::2], pieces[1::2]
     if not any(len(p) >= 2 for p in parts):
@@ -556,9 +584,9 @@ def _shape_ok(word: str) -> bool:
     for i, part in enumerate(parts):
         if len(part) >= 2:
             continue
-        if i == 0 and seps[0] in ("'", "’") and fold(part) in _ELISION_PREFIX:
+        if i == 0 and seps[0] in ("'", "’") and fold(part) in elisions.prefix:
             continue
-        if i == last and seps[-1] in ("'", "’") and fold(part) in _ELISION_SUFFIX:
+        if i == last and seps[-1] in ("'", "’") and fold(part) in elisions.suffix:
             continue
         return False
     return True
@@ -609,6 +637,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
     tokens = _number_words(tokens, lx)
     tokens = _dates(tokens, lx)
     tokens = _single_letter_runs(tokens)
+    elisions = _ELISIONS.get(_language(lx), _NO_ELISIONS)
 
     out: list[str] = []
     last_mask = False        # the last non-gap output is {?}
@@ -659,7 +688,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
         else:
             words += 1
             if _is_abbreviation(value, abbreviations) or (
-                _shape_ok(value) and all(p in lx.words for p in _parts(value))
+                _shape_ok(value, elisions) and all(p in lx.words for p in _parts(value))
                 and _case_ok(value, at_start)
             ):
                 out.append(value)

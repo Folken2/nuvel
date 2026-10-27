@@ -1,0 +1,35 @@
+# Hand-reviewed Catalan business vocabulary (spec §4.2 "Plus"). Generic words
+# only: no names, companies, products or places. The build drops any entry
+# that a name, place or brand list contains.
+
+# imperatives of the recipe actions (clitics joined with a hyphen are checked part by part)
+revisa repassa comprova redacta escriu envia reenvia respon contesta prepara actualitza crea genera
+arxiva desa resumeix extreu compara calcula llista enumera tradueix agenda programa planifica
+recorda pregunta demana truca avisa confirma concilia busca cerca esbrina investiga mira decideix espera
+assigna segueix fes digues corregeix valida aprova reclama negocia renegocia renova reserva bloqueja
+comparteix adjunta puja descarrega marca filtra ordena classifica etiqueta mou anota apunta organitza
+coordina convoca reprograma ajorna tanca obre factura cobra paga tria
+li ho hi els les en ens us
+
+# infinitives and forms often missing from news text
+enviar recordar preguntar digitalitzar facturar renegociar prioritzar mirare revisare enviare
+
+# nouns and adjectives of business
+factura factures pressupost pressupostos proposta propostes oferta ofertes comanda comandes albarà albarans
+client clients clienta proveïdor proveïdors proveïdora proveïdores contracte contractes pòlissa pòlisses
+reunió reunions acta actes ordre informe informes resum resums esborrany esborranys
+projecte projectes fita fites fase fases lliurament lliuraments termini terminis
+correu correus safata bústia adjunt adjunts enllaç enllaços carpeta carpetes document documents
+assegurança assegurances asseguradora sinistre renovació venciment venç vençuda
+nòmina nòmines plantilla empleat empleats contractació candidat candidats entrevista entrevistes
+vendes compres cobraments pagaments despeses ingressos marge marges cost costos benefici caixa tresoreria brut bruts
+trimestral trimestre semestral semestre mensual anual desviació penalització inversor inversors inversió ronda capital soci socis consell
+logística transport transports enviament enviaments magatzem estoc inventari embalatge
+reserva reserves vol vols tren hotel hotels localitzador sala sales càtering
+màrqueting campanya campanyes butlletí newsletter newsletters feedback leads lead partners partner marketplace
+offsite onboarding kickoff teletreball tauler portal web
+taller tallers mecànic fleca impremta hostaleria enginyeria naviliera reformes solucions sistemes
+indústries ceràmiques tèxtils plàstics mobles acers cartonatges distribucions cellers germans
+subvenció subvencions ajut ajuts licitació licitacions
+equip equips departament àrea responsable gerent director directora
+matí demà tarda avui ahir setmana setmanes mes mesos
