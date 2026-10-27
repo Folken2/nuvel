@@ -1721,8 +1721,8 @@ class SkillsMCPServer:
                 continue
             try:
                 message = json.loads(line)
-            except json.JSONDecodeError as exc:
-                log(f"Parse error: {exc}")
+            except ValueError as exc:  # JSONDecodeError, or e.g. an int over the digit limit
+                log(f"Parse error: {type(exc).__name__}")  # never the line's content
                 _write_message(stdout, error_response(None, PARSE_ERROR, "Parse error"))
                 continue
 

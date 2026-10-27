@@ -30,14 +30,54 @@ SIGNAL_RESOURCE = "schemas/recipe_signal.v1.schema.json"
 RECIPE_RESOURCE = "schemas/recipe.v2.schema.json"
 
 
+_UNKNOWN_SEGMENT = "*"
+# Server-stamped top-level fields: fixed names, so naming them leaks nothing
+# and tells the client which field it must not send.
+_SERVER_FIELDS = frozenset({"tenant", "masking"})
+
+
+def _schema_path(path: str, schema: dict) -> str:
+    """*path* with every segment that is not a schema property name at its
+    position, or an array index, replaced by ``*`` (and everything below it).
+
+    ``traces.validate`` keeps identifier-shaped keys, so an extra key such as
+    ``pedro`` or ``acme.sl`` would otherwise be echoed back to the client.
+    """
+    if not path or path == traces.ROOT_PATH:
+        return path
+    out: list[str] = []
+    node: object = schema
+    for segment in path[1:].split("/"):
+        if isinstance(node, dict) and node.get("type") == "object" and segment in node.get("properties", {}):
+            node = node["properties"][segment]
+            out.append(segment)
+        elif isinstance(node, dict) and node.get("type") == "array" and segment.isdigit() and segment.isascii():
+            node = node.get("items")
+            out.append(segment)
+        elif node is schema and segment in _SERVER_FIELDS:
+            out.append(segment)
+            break
+        else:
+            out.append(_UNKNOWN_SEGMENT)
+            break
+    return "/" + "/".join(out)
+
+
+def _validate_known_keys(doc: object, resource: str) -> list[str]:
+    schema = traces.load_schema(resource)
+    return list(dict.fromkeys(_schema_path(p, schema) for p in traces.validate(doc, resource)))
+
+
 def validate_signal(doc: object) -> list[str]:
-    """Paths of fields failing ``nuvel.recipe_signal/1`` (empty list = valid)."""
-    return traces.validate(doc, SIGNAL_RESOURCE)
+    """Paths of fields failing ``nuvel.recipe_signal/1`` (empty list = valid).
+    Keys that are not in the schema are reported as ``*``."""
+    return _validate_known_keys(doc, SIGNAL_RESOURCE)
 
 
 def validate_recipe(doc: object) -> list[str]:
-    """Paths of fields failing ``nuvel.recipe/2`` (empty list = valid)."""
-    return traces.validate(doc, RECIPE_RESOURCE)
+    """Paths of fields failing ``nuvel.recipe/2`` (empty list = valid).
+    Keys that are not in the schema are reported as ``*``."""
+    return _validate_known_keys(doc, RECIPE_RESOURCE)
 
 
 

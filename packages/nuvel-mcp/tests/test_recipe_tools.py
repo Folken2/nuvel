@@ -410,3 +410,56 @@ def test_relay_failure_swallowed(tmp_path, monkeypatch):
     assert res["isError"] is False and body["status"] == "recorded"
     res, body = call_signal(s, SIGNAL)
     assert res["isError"] is False and body["status"] == "recorded"
+
+
+@pytest.mark.parametrize("mutate,expected", [
+    (lambda r: r.update({"pedro": 1}), ["/*"]),
+    (lambda r: r["steps"][0].update({"garcia-lopez": 1}), ["/steps/0/*"]),
+    (lambda r: r["plugin"].update({"acme.sl": 1}), ["/plugin/*"]),
+    (lambda r: r.update({"pedro": 1, "ana:612345678": 2}), ["/*"]),
+])
+def test_share_rejection_never_echoes_client_keys(tmp_path, mutate, expected):
+    recipe = json.loads(json.dumps(RECIPE))
+    mutate(recipe)
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    response = _rpc(s, recipe)
+    body = json.loads(response["result"]["content"][0]["text"])
+    assert body == {"status": "rejected", "errors": expected}
+    text = json.dumps(response)
+    for word in ("pedro", "garcia", "acme", "612345678"):
+        assert word not in text
+    assert not (tmp_path / "_recipes").exists()
+
+
+@pytest.mark.parametrize("mutate,expected", [
+    (lambda d: d.update({"pedro": 1}), ["/*"]),
+    (lambda d: d["plugin"].update({"acme.sl": 1}), ["/plugin/*"]),
+])
+def test_signal_rejection_never_echoes_client_keys(tmp_path, mutate, expected):
+    signal = json.loads(json.dumps(SIGNAL))
+    mutate(signal)
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    res, body = call_signal(s, signal)
+    assert res["isError"] is True and body == {"status": "rejected", "errors": expected}
+    assert "pedro" not in json.dumps(res) and "acme" not in json.dumps(res)
+
+
+def test_known_paths_kept_in_rejections(tmp_path):
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    bad = {**RECIPE, "steps": [{**RECIPE["steps"][0], "slots": ["person", "pedro"]}], "title": "x" * 81}
+    _, body = call_recipe(s, bad)
+    assert body["errors"] == ["/title", "/steps/0/slots/1"]
+
+
+def test_stdio_serve_survives_any_parse_error(capsys):
+    s = SkillsMCPServer(None)
+    huge = '{"jsonrpc":"2.0","id":1,"method":"pedro","params":{"n":' + "9" * 5000 + "}}"
+    lines = [huge, '{"pedro garcia": ', json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})]
+    out = io.StringIO()
+    s.serve(io.StringIO("\n".join(lines) + "\n"), out)
+    responses = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [r["error"]["message"] for r in responses[:2]] == ["Parse error", "Parse error"]
+    assert all(r["id"] is None for r in responses[:2])
+    assert len(responses) == 3 and responses[2]["id"] == 2
+    err = capsys.readouterr().err
+    assert "pedro" not in err and "999" not in err

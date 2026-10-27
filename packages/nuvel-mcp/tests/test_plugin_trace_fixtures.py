@@ -1,6 +1,7 @@
 """Chief-of-staff plugin traces (one fixture per skill) validate on the server."""
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -55,7 +56,18 @@ def test_unknown_step_names_still_valid_identifiers(server):
     assert call(server, "record_run_trace", {"trace": trace})["status"] == "recorded"
 
 
-def test_learn_signal_and_recipe_fixtures(server, tmp_path):
+def _fixture_lexicon(recipe):
+    """A tiny es Lexicon: every word of the fixture's free text except the name."""
+    from nuvel_mcp import masking
+    texts = [recipe["title"], recipe["when_to_use"], recipe["narrative"], *recipe.get("pitfalls", [])]
+    texts += [step.get("note", "") for step in recipe["steps"]]
+    words = {masking.fold(w) for w in re.findall(r"[^\W\d_]+", " ".join(texts))} - {"marta"}
+    return masking.Lexicon(words=frozenset(words), numbers=frozenset(), dates=frozenset(),
+                           currency=frozenset(), version="es-test.1", language="es")
+
+
+def test_learn_signal_and_recipe_fixtures(server, tmp_path, monkeypatch):
+    from nuvel_mcp import masking
     signal = json.loads((FIXTURES / "recipe_signal.json").read_text())
     recipe = json.loads((FIXTURES / "recipe.json").read_text())
     assert recipes.validate_signal(signal) == [] and recipes.screen_signal(signal) == []
@@ -64,11 +76,17 @@ def test_learn_signal_and_recipe_fixtures(server, tmp_path):
     assert "tenant" not in signal and "tenant" not in recipe and "masking" not in recipe
     assert "{person}" in recipe["narrative"] and "marta" in recipe["narrative"]
     assert signal["recipe_id"] == recipe["recipe_id"]
+    lexicon = _fixture_lexicon(recipe)
+    monkeypatch.setattr(masking, "load_lexicon", lambda language: lexicon if language == "es" else None)
+    monkeypatch.setattr(masking, "ABBREVIATIONS", frozenset())
     assert call(server, "record_recipe_signal", {"signal": signal})["status"] == "recorded"
     assert call(server, "record_recipe_signal", {"signal": signal})["status"] == "duplicate"
-    assert call(server, "share_recipe", {"recipe": recipe})["status"] == "recorded"
+    body = call(server, "share_recipe", {"recipe": recipe})
+    assert body["status"] == "recorded" and body["masked"] == 1 and body["dropped"] == []
     assert call(server, "share_recipe", {"recipe": recipe})["status"] == "duplicate"
     [stored] = (tmp_path / "_recipes" / "recipes").rglob("v2.json")
+    record = json.loads(stored.read_text())
+    assert record["narrative"] == recipe["narrative"].replace("marta", "{?}")
     assert "marta" not in stored.read_text().casefold()
 
 
@@ -78,6 +96,7 @@ def test_recipe_fixture_with_real_lexicon(server, tmp_path):
     if masking.load_lexicon("es") is None:
         pytest.skip("es lexicon not packaged")
     recipe = json.loads((FIXTURES / "recipe.json").read_text())
+    assert "marta" in recipe["narrative"]
     body = call(server, "share_recipe", {"recipe": recipe})
     assert body["status"] == "recorded" and body["masked"] >= 1
     assert "/narrative" not in body["dropped"]

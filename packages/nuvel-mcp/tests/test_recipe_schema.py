@@ -85,7 +85,7 @@ def test_v2_schema_accepts_fixture():
 def test_v1_shape_rejected():
     v1_step = {"action": "draft", "tool_kind": "email", "text": "Redactar el resumen"}
     errors = recipes.validate_recipe(RECIPE | {"steps": [v1_step]})
-    assert "/steps/0/text" in errors and "/steps/0/slots" in errors
+    assert errors == ["/steps/0/slots", "/steps/0/*"]  # unknown keys are never echoed
     assert recipes.validate_recipe(RECIPE | {"schema": "nuvel.recipe/1"}) == ["/schema"]
 
 
@@ -123,9 +123,11 @@ def test_signal_rejects_tenant():
 
 
 def test_recipe_rejects_nested_extra():
-    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"extra": 1}]}) == ["/steps/0/extra"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"extra": 1}]}) == ["/steps/0/*"]
     plugin = PLUGIN | {"extra": 1}
-    assert recipes.validate_recipe(RECIPE | {"plugin": plugin}) == ["/plugin/extra"]
+    assert recipes.validate_recipe(RECIPE | {"plugin": plugin}) == ["/plugin/*"]
+    assert recipes.validate_recipe(RECIPE | {"pedro": 1, "acme.sl": 2}) == ["/*"]
+    assert recipes.validate_signal(SIGNAL | {"pedro": 1}) == ["/*"]
 
 
 def test_new_signal_category_accepted_by_schema():
