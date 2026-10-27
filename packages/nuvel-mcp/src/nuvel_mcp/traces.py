@@ -309,26 +309,12 @@ class _DayIndex:
                 and _bytes_before(path, self.offset, len(self.tail)) == self.tail)
 
 
-class LocalTraceStore:
-    """JSONL files at ``{feedback_dir}/_runs/{plugin}.{skill}/{YYYY-MM-DD}.jsonl``.
+class DayFileIndex:
+    """Shared dedupe index over JSONL day files (see :class:`LocalTraceStore`).
 
-    One line per run, dated by the normalised (UTC) ``started_at``. Each line is
-    a single ``write()`` in append mode.
-
-    Idempotency: a run is a duplicate when its ``(tenant, run_id)`` is already in
-    the same UTC day file (``tenant`` absent counts as its own key). Appends to a
-    file are serialised by one of ``LOCK_STRIPES`` process-wide locks (a fixed
-    pool, so the registry never grows with the number of files), and the check
-    runs against an in-memory index of that file's keys.
-
-    The index stores the byte offset it has read up to and the file's identity
-    (device, inode, ctime). On every append it reads only the complete lines
-    past that offset, so lines written by another process (or another store
-    instance) are picked up before the check. The index is rebuilt from the
-    start if the file shrank, was replaced (different device or inode), or was
-    touched (new ctime) and the bytes just before the offset changed -- a
-    rewrite in place. At most ``MAX_INDEXED_FILES`` day files are indexed
-    per store; the least recently used is dropped and rebuilt lazily from disk.
+    Subclasses call ``_init_day_index()`` and implement ``_record_key(record)``,
+    returning the dedupe key of a stored line or ``None`` to ignore it. Appends
+    to a day file hold ``_lock_for(path)`` and call ``_keys_for(path)``.
     """
 
     LOCK_STRIPES = 64
@@ -336,13 +322,9 @@ class LocalTraceStore:
 
     _lock_pool: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(LOCK_STRIPES))
 
-    def __init__(self, feedback_dir: Path):
-        self.feedback_dir = Path(feedback_dir)
+    def _init_day_index(self) -> None:
         self._index: OrderedDict[Path, _DayIndex] = OrderedDict()
         self._index_guard = threading.Lock()
-
-    def _skill_dir(self, plugin: str, skill: str) -> Path:
-        return self.feedback_dir / RUNS_DIRNAME / f"{plugin}.{skill}"
 
     @classmethod
     def _lock_for(cls, path: Path) -> threading.Lock:
@@ -368,15 +350,53 @@ class LocalTraceStore:
                     entry.offset += consumed
                     entry.tail = _last_line(_bytes_before(path, entry.offset,
                                                           _DayIndex.TAIL_BYTES))
-                entry.keys.update(
-                    _dedupe_key(r) for r in records
-                    if isinstance(r.get("run_id"), str) and isinstance(r.get("tenant"), (str, type(None)))
-                )
+                for r in records:
+                    key = self._record_key(r)
+                    if key is not None:
+                        entry.keys.add(key)
         with self._index_guard:
             self._index[path] = entry
             while len(self._index) > self.MAX_INDEXED_FILES:
                 self._index.popitem(last=False)
         return entry.keys
+
+    def _record_key(self, record: dict) -> tuple[object, object] | None:
+        raise NotImplementedError
+
+
+class LocalTraceStore(DayFileIndex):
+    """JSONL files at ``{feedback_dir}/_runs/{plugin}.{skill}/{YYYY-MM-DD}.jsonl``.
+
+    One line per run, dated by the normalised (UTC) ``started_at``. Each line is
+    a single ``write()`` in append mode.
+
+    Idempotency: a run is a duplicate when its ``(tenant, run_id)`` is already in
+    the same UTC day file (``tenant`` absent counts as its own key). Appends to a
+    file are serialised by one of ``LOCK_STRIPES`` process-wide locks (a fixed
+    pool, so the registry never grows with the number of files), and the check
+    runs against an in-memory index of that file's keys.
+
+    The index stores the byte offset it has read up to and the file's identity
+    (device, inode, ctime). On every append it reads only the complete lines
+    past that offset, so lines written by another process (or another store
+    instance) are picked up before the check. The index is rebuilt from the
+    start if the file shrank, was replaced (different device or inode), or was
+    touched (new ctime) and the bytes just before the offset changed -- a
+    rewrite in place. At most ``MAX_INDEXED_FILES`` day files are indexed
+    per store; the least recently used is dropped and rebuilt lazily from disk.
+    """
+
+    def __init__(self, feedback_dir: Path):
+        self.feedback_dir = Path(feedback_dir)
+        self._init_day_index()
+
+    def _skill_dir(self, plugin: str, skill: str) -> Path:
+        return self.feedback_dir / RUNS_DIRNAME / f"{plugin}.{skill}"
+
+    def _record_key(self, record: dict) -> tuple[object, object] | None:
+        if isinstance(record.get("run_id"), str) and isinstance(record.get("tenant"), (str, type(None))):
+            return _dedupe_key(record)
+        return None
 
     def append(self, trace: dict) -> bool:
         plugin, skill = trace["plugin"]["name"], trace["skill"]["name"]

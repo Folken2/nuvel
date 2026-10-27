@@ -16,7 +16,6 @@ import json
 import os
 import re
 import tempfile
-import threading
 import unicodedata
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -151,57 +150,28 @@ class RecipeStore(Protocol):
         ...
 
 
-class LocalRecipeStore:
+class LocalRecipeStore(traces.DayFileIndex):
     """Files under ``{feedback_dir}/_recipes/``.
 
     Signals: ``signals/{YYYY-MM-DD}.jsonl`` (UTC day of ``at``), one line each,
     deduped on ``(tenant, signal_id)``. Recipes:
     ``recipes/{tenant_key}/{recipe_id}/v{version}.json``, written atomically
-    (temp file + ``os.replace``); an existing file means duplicate. The store
+    (temp file published with ``os.link``, which fails if the version exists). The store
     does not validate; callers validate and stamp ``tenant`` first.
     """
 
-    LOCK_STRIPES = 64
-    _lock_pool: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(LOCK_STRIPES))
-
     def __init__(self, feedback_dir: Path):
         self.feedback_dir = Path(feedback_dir)
-        # day file -> (size when scanned, keys); trusted only while size matches.
-        self._seen: dict[Path, tuple[int, set[tuple[object, object]]]] = {}
-        self._seen_guard = threading.Lock()
-
-    @classmethod
-    def _lock_for(cls, path: Path) -> threading.Lock:
-        return cls._lock_pool[hash(str(path)) % len(cls._lock_pool)]
+        self._init_day_index()
 
     @staticmethod
     def _key(record: dict) -> tuple[object, object]:
         return (record.get("tenant"), record.get("signal_id"))
 
-    def _keys_for(self, path: Path) -> set[tuple[object, object]]:
-        """Dedupe keys in *path*, rescanned when its size changed. Caller holds the lock."""
-        try:
-            size = path.stat().st_size
-        except FileNotFoundError:
-            return set()
-        with self._seen_guard:
-            cached = self._seen.get(path)
-        if cached is not None and cached[0] == size:
-            return cached[1]
-        keys: set[tuple[object, object]] = set()
-        with path.open("rb") as fh:
-            for raw in fh:
-                if not raw.endswith(b"\n"):
-                    continue  # partial line from a concurrent writer
-                try:
-                    rec = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(rec, dict):
-                    keys.add(self._key(rec))
-        with self._seen_guard:
-            self._seen[path] = (size, keys)
-        return keys
+    def _record_key(self, record: dict) -> tuple[object, object] | None:
+        if isinstance(record.get("signal_id"), str) and isinstance(record.get("tenant"), (str, type(None))):
+            return self._key(record)
+        return None
 
     def append_signal(self, signal: dict) -> bool:
         day = traces._parse_started_at(signal["at"]).date().isoformat()
@@ -216,7 +186,7 @@ class LocalRecipeStore:
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
             keys.add(key)
-            # Size now differs from the cached one; the next call rescans.
+            # The offset is not advanced: the next append re-reads this line only.
         return True
 
     def put_recipe(self, recipe: dict) -> bool:
@@ -225,25 +195,27 @@ class LocalRecipeStore:
                 and isinstance(version, int) and not isinstance(version, bool)):
             raise ValueError("recipe_id and version are not storable")
         directory = (self.feedback_dir / RECIPES_DIRNAME / "recipes"
-                     / tenant_key(recipe.get("tenant")) / recipe_id)
+                     / tenant_key(recipe.get("tenant")) / recipe_id).resolve()
         path = directory / f"v{version}.json"
         data = json.dumps(recipe, ensure_ascii=False, indent=2) + "\n"
         with self._lock_for(path):
-            if path.exists():
-                return False
             directory.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(data)
-                os.replace(tmp, path)
-            except BaseException:
+                # link() is atomic and fails if the version exists, so a
+                # re-sent version is stored once even across processes.
+                try:
+                    os.link(tmp, path)
+                except FileExistsError:
+                    return False
+                return True
+            finally:
                 try:
                     os.unlink(tmp)
                 except FileNotFoundError:
                     pass
-                raise
-        return True
 
 
 def load_recipe_store(spec: str, feedback_dir: Path) -> RecipeStore:

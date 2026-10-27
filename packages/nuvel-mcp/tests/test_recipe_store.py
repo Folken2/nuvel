@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from nuvel_mcp import traces as traces_mod
 from nuvel_mcp.cli import main
 from nuvel_mcp.recipes import LocalRecipeStore, RecipeStore, load_recipe_store
 from nuvel_mcp.server import SkillsMCPServer
@@ -118,3 +119,38 @@ def test_cli_recipe_store_flag(capsys):
 def test_cli_bad_recipe_store_exits_1(tmp_path, capsys):
     assert main(["serve", "--feedback-dir", str(tmp_path), "--recipe-store", "no_such_mod_xyz:f"]) == 1
     assert "recipe store" in capsys.readouterr().err.lower()
+
+
+def test_signal_append_reads_only_new_bytes(tmp_path, monkeypatch):
+    store = LocalRecipeStore(tmp_path)
+    offsets = []
+    real = traces_mod._read_complete_lines
+
+    def spy(path, offset):
+        offsets.append(offset)
+        return real(path, offset)
+
+    monkeypatch.setattr(traces_mod, "_read_complete_lines", spy)
+    path = tmp_path / "_recipes" / "signals" / "2026-10-27.jsonl"
+    sizes = []
+    for _ in range(5):
+        sizes.append(path.stat().st_size if path.exists() else 0)
+        store.append_signal(_signal("acme"))
+    assert offsets == sizes[:-1] and offsets[1:] and all(offsets[1:])
+
+
+def test_signal_index_rebuilds_when_file_replaced(tmp_path):
+    store = LocalRecipeStore(tmp_path)
+    sig = _signal("acme")
+    store.append_signal(sig)
+    (path,) = (tmp_path / "_recipes" / "signals").glob("*.jsonl")
+    path.unlink()
+    assert store.append_signal(dict(sig)) is True
+
+
+def test_recipe_concurrent_put_stored_once(tmp_path):
+    r = _recipe("acme")
+    with ThreadPoolExecutor(8) as pool:
+        results = list(pool.map(lambda _: LocalRecipeStore(tmp_path).put_recipe(dict(r)), range(16)))
+    assert results.count(True) == 1
+    assert not list((tmp_path / "_recipes").rglob(".tmp-*"))
