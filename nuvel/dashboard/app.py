@@ -8,6 +8,7 @@ the templates stay logic-light.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 
 from nuvel.dashboard.headlines import describe_run
 from nuvel.dashboard.loader import TraceLoader
@@ -47,6 +49,25 @@ def _run_has_error(run: Run) -> bool:
         if ev.get("event") == "tool_end" and ev.get("status") == "error":
             return True
     return False
+
+
+_PLACEHOLDER = re.compile(r"\{(\?|[a-z][a-z0-9_]*)\}")
+
+
+def _chips(text: object) -> Markup:
+    """Escape ``text`` first, then wrap ``{type}`` / ``{?}`` placeholders in chips.
+
+    ``{?}`` means the server masked a word; ``{type}`` is a client-side slot.
+    """
+    safe = str(escape("" if text is None else str(text)))
+
+    def wrap(m: re.Match) -> str:
+        name = m.group(1)
+        if name == "?":
+            return '<span class="chip chip-masked" title="masked by the server">{?}</span>'
+        return f'<span class="chip chip-slot">{{{name}}}</span>'
+
+    return Markup(_PLACEHOLDER.sub(wrap, safe))
 
 
 def _score_class(overall: float) -> str:
@@ -122,6 +143,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
     app.state.loader = loader
     app.state.watcher = watcher
     templates = Jinja2Templates(directory=str(_DASHBOARD_DIR / "templates"))
+    templates.env.filters["chips"] = _chips
     app.mount("/static", StaticFiles(directory=str(_DASHBOARD_DIR / "static")), name="static")
 
     def _home_context(runs: list[Run]) -> dict:
@@ -162,6 +184,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
             {
                 "candidates": cands,
                 "total_uses": sum(c.uses for c in cands),
+                "skipped_v1": cands.skipped_v1,
                 "live": watcher is not None,
             },
         )

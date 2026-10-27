@@ -13,7 +13,7 @@ from nuvel.dashboard.loader import TraceLoader
 RID = "11111111-1111-4111-8111-111111111111"
 
 
-def _setup(root: Path, title: str) -> None:
+def _setup(root: Path, title: str, narrative: str = "Met {?} about {company}.") -> None:
     sd = root / "_recipes" / "signals"
     sd.mkdir(parents=True)
     (sd / "2026-10-27.jsonl").write_text(json.dumps({
@@ -24,10 +24,16 @@ def _setup(root: Path, title: str) -> None:
     rd = root / "_recipes" / "recipes" / "tenant-secret" / RID
     rd.mkdir(parents=True)
     (rd / "v1.json").write_text(json.dumps({
-        "schema": "nuvel.recipe/1", "recipe_id": RID, "version": 1, "category": "triage",
+        "schema": "nuvel.recipe/2", "recipe_id": RID, "version": 2, "category": "triage",
         "title": title, "when_to_use": "<b>soon</b>",
-        "steps": [{"action": "read", "tool_kind": "email", "text": "Read <i>it</i>"}],
-        "pitfalls": ["<img src=x>"], "tenant": "tenant-secret",
+        "steps": [
+            {"action": "search", "tool_kind": "email", "slots": ["person"], "note": "Read <i>it</i> for {person}"},
+            {"action": "summarise", "tool_kind": "docs", "slots": []},
+            {"action": "draft", "tool_kind": "none", "slots": []},
+        ],
+        "pitfalls": ["<img src=x>"], "narrative": narrative,
+        "masking": {"lexicon": "en", "masked": 1, "words": 4, "dropped": 0},
+        "tenant": "tenant-secret",
     }))
 
 
@@ -42,9 +48,37 @@ def test_dashboard_recipes_page(tmp_path: Path) -> None:
     assert "<script>alert(1)" not in html
     assert "<b>soon</b>" not in html and "<img src=x>" not in html
     assert "tenant-secret" not in html
+    assert "search → summarise → draft" in html
+    assert "25%" in html
+    assert '<details>' in html
+    assert '<span class="chip chip-masked"' in html and '<span class="chip chip-slot">{company}</span>' in html
+    assert "&lt;i&gt;it&lt;/i&gt;" in html and "<i>it</i>" not in html
 
 
 def test_dashboard_recipes_empty(tmp_path: Path) -> None:
     client = TestClient(build_app(TraceLoader([], skill_roots=[tmp_path])))
     r = client.get("/recipes")
     assert r.status_code == 200 and "No recipe signals yet" in r.text
+
+
+def test_dashboard_escapes_narrative(tmp_path: Path) -> None:
+    _setup(tmp_path, "T", narrative="<script>alert(2)</script> {?} {<b>x</b>}")
+    client = TestClient(build_app(TraceLoader([], skill_roots=[tmp_path])))
+    html = client.get("/recipes").text
+    assert "<script>alert(2)" not in html
+    assert "&lt;script&gt;alert(2)&lt;/script&gt;" in html
+    assert '<span class="chip chip-masked"' in html
+    assert "<b>x</b>" not in html
+
+
+def test_dashboard_zero_words_and_malformed(tmp_path: Path) -> None:
+    _setup(tmp_path, "T")
+    f = next((tmp_path / "_recipes" / "recipes").rglob("v1.json"))
+    doc = json.loads(f.read_text())
+    doc["masking"]["words"] = 0
+    f.write_text(json.dumps(doc))
+    client = TestClient(build_app(TraceLoader([], skill_roots=[tmp_path])))
+    assert "Masked: —" in client.get("/recipes").text
+    doc["steps"] = "nope"
+    f.write_text(json.dumps(doc))
+    assert client.get("/recipes").status_code == 200

@@ -869,6 +869,13 @@ def _cmd_recipes(args: argparse.Namespace) -> int:
     _print_table(
         ("CATEGORY", "RECIPES", "TENANTS", "USES", "SUCCESS", "CORRECTIONS", "LATEST"), rows
     )
+    for c in cands:
+        actions = c.latest.get("actions") if c.latest else None
+        if actions:
+            print(f"  {c.category}: {' → '.join(actions)}")
+    skipped = getattr(cands, "skipped_v1", 0)
+    if skipped:
+        print(f"({skipped} older recipe file(s) in pre-masking format skipped)")
     return 0
 
 

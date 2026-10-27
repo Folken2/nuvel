@@ -40,9 +40,15 @@ def _write_recipe(root: Path, rid: str, version: int, category: str, title: str,
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"v{version}.json"
     f.write_text(json.dumps({
-        "schema": "nuvel.recipe/1", "recipe_id": rid, "version": version,
+        "schema": "nuvel.recipe/2", "recipe_id": rid, "version": version,
         "category": category, "title": title, "when_to_use": "when asked",
-        "steps": [{"action": "read", "tool_kind": "email", "text": "Read it"}],
+        "steps": [
+            {"action": "search", "tool_kind": "email", "slots": ["person"], "note": "Find {person}"},
+            {"action": "summarise", "tool_kind": "docs", "slots": ["person", "document"]},
+            {"action": "draft", "tool_kind": "none", "slots": []},
+        ],
+        "narrative": "Asked {company}, then {?} replied.",
+        "masking": {"lexicon": "en", "masked": 1, "words": 4, "dropped": 0},
         "tenant": "secret-tenant",
     }))
     if mtime is not None:
@@ -129,4 +135,48 @@ def test_cli_recipes_lists_categories(tmp_path: Path, monkeypatch, capsys) -> No
     out = capsys.readouterr().out
     assert rc in (0, None)
     assert "triage" in out and "7" in out and "Triage mail" in out
+    assert "search → summarise → draft" in out
     assert "tenant-secret" not in out and "secret-tenant" not in out
+
+
+def test_latest_has_structure_and_narrative(tmp_path: Path) -> None:
+    _write_signals(tmp_path, [_sig(RID1, uses=3)])
+    _write_recipe(tmp_path, RID1, 1, "triage", "T")
+    [c] = load_recipe_candidates([tmp_path])
+    assert c.latest["actions"] == ["search", "summarise", "draft"]
+    assert c.latest["slots"] == ["person", "document"]
+    assert c.latest["steps"][0]["note"] == "Find {person}"
+    assert c.latest["narrative"] == "Asked {company}, then {?} replied."
+    assert c.latest["mask_ratio"] == 0.25
+    assert "install_id" not in c.latest
+
+
+def test_mask_ratio_none_when_no_words(tmp_path: Path) -> None:
+    f = _write_recipe(tmp_path, RID1, 1, "triage", "T")
+    doc = json.loads(f.read_text())
+    doc["masking"] = {"lexicon": "en", "masked": 0, "words": 0, "dropped": 0}
+    f.write_text(json.dumps(doc))
+    [c] = load_recipe_candidates([tmp_path])
+    assert c.latest["mask_ratio"] is None
+
+
+def test_v1_files_skipped(tmp_path: Path) -> None:
+    f = _write_recipe(tmp_path, RID1, 1, "triage", "Old")
+    doc = json.loads(f.read_text())
+    doc["schema"] = "nuvel.recipe/1"
+    f.write_text(json.dumps(doc))
+    _write_signals(tmp_path, [_sig(RID1, uses=2)])
+    cands = load_recipe_candidates([tmp_path])
+    assert cands.skipped_v1 == 1
+    assert cands[0].latest is None and cands[0].uses == 2
+
+
+def test_non_list_steps_do_not_500(tmp_path: Path) -> None:
+    for bad in ("oops", {"a": 1}, None, 7):
+        f = _write_recipe(tmp_path, RID1, 1, "triage", "Bad")
+        doc = json.loads(f.read_text())
+        doc["steps"] = bad
+        f.write_text(json.dumps(doc))
+        _write_signals(tmp_path, [_sig(RID1, uses=1)])
+        cands = load_recipe_candidates([tmp_path])
+        assert cands[0].latest is None

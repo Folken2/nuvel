@@ -8,7 +8,13 @@
 </h1>
 <div class="ed-sub">By category · counters from each recipe's latest signal · anonymised, shared copies only</div>
 
+{% if skipped_v1 %}<div class="ed-sub">{{ skipped_v1 }} older recipe file{{ '' if skipped_v1 == 1 else 's' }} (pre-masking format) not shown</div>{% endif %}
 {% if candidates %}
+<style>
+.chip{display:inline-block;padding:0 .35em;border-radius:.6em;font-family:monospace;font-size:.85em;border:1px solid currentColor}
+.chip-slot{background:#e8f0fe;color:#1a4fb4}
+.chip-masked{background:#fdecc8;color:#8a5a00}
+</style>
 <table class="ed-steps">
   <thead><tr><th>Category</th><th>Recipes</th><th>Tenants</th><th>Uses</th><th>Success</th><th>Corrections</th><th>Latest anonymised version</th></tr></thead>
   <tbody>
@@ -24,14 +30,24 @@
         {% if c.latest %}
           <strong>{{ c.latest.get('title', '') }}</strong>
           <div>{{ c.latest.get('when_to_use', '') }}</div>
+          {% if c.latest.actions %}
+          <div class="recipe-actions"><code>{{ c.latest.actions | join(' → ') }}</code></div>
+          {% endif %}
+          {% if c.latest.slots %}
+          <div>Slots: {% for sl in c.latest.slots %}{{ ('{' ~ sl ~ '}') | chips }} {% endfor %}</div>
+          {% endif %}
           <ol>
-          {% for step in c.latest.get('steps', []) if step is mapping %}
-            <li><code>{{ step.get('tool_kind', '') }}</code> {{ step.get('text', '') }}</li>
+          {% for step in c.latest.steps %}
+            <li><code>{{ step.action }}</code> <code>{{ step.tool_kind }}</code>{% if step.note %} {{ step.note | chips }}{% endif %}</li>
           {% endfor %}
           </ol>
-          {% if c.latest.get('pitfalls') %}
+          {% if c.latest.pitfalls %}
           <div>Pitfalls:</div>
-          <ul>{% for p in c.latest.get('pitfalls', []) %}<li>{{ p }}</li>{% endfor %}</ul>
+          <ul>{% for p in c.latest.pitfalls %}<li>{{ p }}</li>{% endfor %}</ul>
+          {% endif %}
+          <div>Masked: {% if c.latest.mask_ratio is none %}—{% else %}{{ '%.0f' % (c.latest.mask_ratio * 100) }}%{% endif %}</div>
+          {% if c.latest.narrative %}
+          <details><summary>Masked narrative</summary><p>{{ c.latest.narrative | chips }}</p></details>
           {% endif %}
         {% else %}—{% endif %}
       </td>

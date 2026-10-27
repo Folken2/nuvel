@@ -3,7 +3,7 @@
 Layout (written by ``nuvel_mcp.recipes.LocalRecipeStore``)::
 
     {root}/_recipes/signals/{YYYY-MM-DD}.jsonl            nuvel.recipe_signal/1
-    {root}/_recipes/recipes/{tenant_key}/{recipe_id}/v{N}.json   nuvel.recipe/1
+    {root}/_recipes/recipes/{tenant_key}/{recipe_id}/v{N}.json   nuvel.recipe/2
 
 Signal counters are cumulative, so per ``(tenant, recipe_id)`` only the signal
 with the greatest ``at`` counts (ties: the later line wins). Unreadable or
@@ -22,6 +22,13 @@ from pathlib import Path
 RECIPES_DIRNAME = "_recipes"
 _MAX_DEPTH = 3
 UNKNOWN_CATEGORY = "unknown"
+RECIPE_SCHEMA = "nuvel.recipe/2"
+
+
+class CandidateList(list):
+    """A plain list of candidates plus the count of skipped non-/2 recipe files."""
+
+    skipped_v1: int = 0
 
 
 @dataclass
@@ -107,13 +114,60 @@ def _read_signals(rdir: Path):
                 yield rec
 
 
-def _latest_recipes(rdir: Path) -> dict[str, tuple[float, dict]]:
-    """Newest recipe JSON (by mtime) per category."""
+def _str_list(value: object) -> list[str]:
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _mask_ratio(masking: object) -> float | None:
+    """masked / words, or None when it cannot be computed (words == 0)."""
+    if not isinstance(masking, dict):
+        return None
+    masked, words = _count(masking.get("masked")), _count(masking.get("words"))
+    if masked is None or not words:
+        return None
+    return masked / words
+
+
+def _view_doc(doc: dict) -> dict | None:
+    """Reduce a stored /2 recipe to the display shape; None if malformed."""
+    steps = doc.get("steps")
+    if not isinstance(steps, list):
+        return None
+    clean: list[dict] = []
+    slots: list[str] = []
+    for st in steps:
+        if not isinstance(st, dict):
+            continue
+        s_slots = _str_list(st.get("slots"))
+        for sl in s_slots:
+            if sl not in slots:
+                slots.append(sl)
+        note = st.get("note")
+        clean.append({
+            "action": st["action"] if isinstance(st.get("action"), str) else "",
+            "tool_kind": st["tool_kind"] if isinstance(st.get("tool_kind"), str) else "",
+            "slots": s_slots,
+            "note": note if isinstance(note, str) else "",
+        })
+    out = {k: v for k, v in doc.items() if k not in ("tenant", "install_id")}
+    out["steps"] = clean
+    out["actions"] = [st["action"] for st in clean if st["action"]]
+    out["slots"] = slots
+    out["pitfalls"] = _str_list(doc.get("pitfalls"))
+    narrative = doc.get("narrative")
+    out["narrative"] = narrative if isinstance(narrative, str) else ""
+    out["mask_ratio"] = _mask_ratio(doc.get("masking"))
+    return out
+
+
+def _latest_recipes(rdir: Path) -> tuple[dict[str, tuple[float, dict]], int]:
+    """Newest /2 recipe (by mtime) per category, plus the count of skipped non-/2 files."""
     best: dict[str, tuple[float, dict]] = {}
+    skipped = 0
     try:
         files = list(rdir.glob("recipes/*/*/v*.json"))
     except OSError:
-        return best
+        return best, skipped
     for f in files:
         try:
             mtime = f.stat().st_mtime
@@ -122,17 +176,24 @@ def _latest_recipes(rdir: Path) -> dict[str, tuple[float, dict]]:
             continue
         if not isinstance(doc, dict):
             continue
+        if doc.get("schema") != RECIPE_SCHEMA:
+            skipped += 1
+            continue
+        view = _view_doc(doc)
+        if view is None:
+            continue
         cat = _category(doc.get("category"))
         if cat not in best or mtime > best[cat][0]:
-            best[cat] = (mtime, {k: v for k, v in doc.items() if k != "tenant"})
-    return best
+            best[cat] = (mtime, view)
+    return best, skipped
 
 
-def load_recipe_candidates(roots: list[Path]) -> list[RecipeCandidate]:
+def load_recipe_candidates(roots: list[Path]) -> CandidateList:
     """One candidate per category, sorted by ``uses`` descending."""
     # (tenant, recipe_id) -> (at, category, uses, successes, corrections)
     latest_sig: dict[tuple[object, str], tuple[datetime, str, int, int, int]] = {}
     latest_recipe: dict[str, tuple[float, dict]] = {}
+    skipped_v1 = 0
 
     for rdir in _recipe_dirs(roots):
         for rec in _read_signals(rdir):
@@ -148,7 +209,9 @@ def load_recipe_candidates(roots: list[Path]) -> list[RecipeCandidate]:
             cur = latest_sig.get(key)
             if cur is None or at >= cur[0]:
                 latest_sig[key] = (at, _category(rec.get("category")), uses, succ, corr)
-        for cat, item in _latest_recipes(rdir).items():
+        found, skipped = _latest_recipes(rdir)
+        skipped_v1 += skipped
+        for cat, item in found.items():
             if cat not in latest_recipe or item[0] > latest_recipe[cat][0]:
                 latest_recipe[cat] = item
 
@@ -167,7 +230,7 @@ def load_recipe_candidates(roots: list[Path]) -> list[RecipeCandidate]:
             cat, {"recipes": 0, "tenants": set(), "uses": 0, "successes": 0, "corrections": 0}
         )
 
-    out = [
+    out = CandidateList(
         RecipeCandidate(
             category=cat,
             recipes=a["recipes"],
@@ -179,6 +242,7 @@ def load_recipe_candidates(roots: list[Path]) -> list[RecipeCandidate]:
             latest=latest_recipe[cat][1] if cat in latest_recipe else None,
         )
         for cat, a in agg.items()
-    ]
+    )
     out.sort(key=lambda c: (-c.uses, c.category))
+    out.skipped_v1 = skipped_v1
     return out
