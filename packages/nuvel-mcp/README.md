@@ -45,8 +45,8 @@ curl -s -u "$NUVEL_CLIENT_ID:$NUVEL_CLIENT_SECRET" \
 The [deployment guide](https://folken2.github.io/nuvel/how-to/deploy-skills-mcp/)
 covers scopes and the interactive flow.
 
-Over HTTP the default tools are the hub read tools plus `record_run_trace` and
-`check_skill_health`; `record_feedback`, `propose_improvement` and
+Over HTTP the default tools are the hub read tools plus `record_run_trace`,
+`check_skill_health`, `record_recipe_signal` and `share_recipe`; `record_feedback`, `propose_improvement` and
 `install_skill` are exposed only when named in `--tools`. The tenant of each
 run trace is the OAuth `client_id`.
 

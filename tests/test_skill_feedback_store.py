@@ -22,7 +22,7 @@ PROPOSAL = {"issue": "step 2 is stale", "suggested_fix": "update the link", "har
 ALL_TOOLS = {
     "search_skills", "list_skills", "list_themes", "get_skill", "install_skill",
     "fence_value", "propose_improvement", "record_feedback", "check_skill_health",
-    "record_run_trace",
+    "record_run_trace", "record_recipe_signal", "share_recipe",
 }
 
 

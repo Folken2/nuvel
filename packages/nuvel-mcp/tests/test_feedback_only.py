@@ -20,6 +20,7 @@ def test_no_hub_lists_only_feedback_tools(tmp_path):
     names = {t["name"] for t in s.handle_tools_list({})["tools"]}
     assert names == FEEDBACK_TOOLS == {
         "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+        "record_recipe_signal", "share_recipe",
     }
     assert s.handle_resources_list({})["resources"] == []
 
@@ -27,11 +28,12 @@ def test_no_hub_lists_only_feedback_tools(tmp_path):
 def test_constants():
     assert FEEDBACK_TOOLS == {
         "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+        "record_recipe_signal", "share_recipe",
     }
     assert "search_skills" in HUB_TOOLS and not (HUB_TOOLS & FEEDBACK_TOOLS)
     assert HTTP_DEFAULT_TOOLS == {
         "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
-        "record_run_trace", "check_skill_health",
+        "record_run_trace", "check_skill_health", "record_recipe_signal", "share_recipe",
     }
 
 

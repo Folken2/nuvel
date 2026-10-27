@@ -47,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "skill_run_example.json"
 FREE_TEXT = "zz-free-text-from-the-feedback-store-zz"
 PHASE5_TOOLS = {"search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
-                "record_run_trace", "check_skill_health"}
+                "record_run_trace", "check_skill_health", "record_recipe_signal", "share_recipe"}
 
 
 @pytest.fixture(autouse=True)
@@ -368,8 +368,8 @@ def test_healthz_feedback_only(launch):
     assert status == 200
     body = json.loads(data)
     assert body["skills"] == 0
-    # Feedback-only: the hub tools are gone, leaving record_run_trace + check_skill_health.
-    assert body["tools"] == 2
+    # Feedback-only: the hub tools are gone, leaving the run-trace, health and recipe tools.
+    assert body["tools"] == 4
 
 
 def test_storage_errors_are_not_leaked_to_the_http_caller(hub, tmp_path):

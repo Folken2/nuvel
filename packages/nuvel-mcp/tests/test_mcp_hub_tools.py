@@ -121,6 +121,7 @@ def test_tools_list_has_full_tool_set(server):
         "search_skills", "list_skills", "list_themes",
         "get_skill", "install_skill", "propose_improvement",
         "fence_value", "record_feedback", "check_skill_health", "record_run_trace",
+        "record_recipe_signal", "share_recipe",
     }
     assert "confirm=true" in tools["install_skill"]["description"]
     assert tools["propose_improvement"]["inputSchema"]["required"] == [

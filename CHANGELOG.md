@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
 - Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.
 - `--tools A,B` allow-list of tool names to expose.
+- `record_recipe_signal` and `share_recipe` tools: store content-free `nuvel.recipe_signal/1` events and anonymised `nuvel.recipe/1` recipes (server-side PII screen, tenant from the OAuth `client_id`); both are in the HTTP default tool set.
 - `record_run_trace` tool: stores content-free `nuvel.skill_run/1` run traces (see `docs/reference/skill-run-traces.md`).
 - `--trace-store local|MODULE:FACTORY` to choose where run traces are kept.
 - `check_skill_health(plugin=...)` adds a `runs` block (30-day outcome counts and errors by step) built from run traces.

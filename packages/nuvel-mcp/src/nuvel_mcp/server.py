@@ -21,10 +21,13 @@ Tools:
     record_feedback      Record the outcome of using a skill in the local feedback store.
     check_skill_health   Health report for a skill from the local feedback store.
     record_run_trace     Record one content-free ``nuvel.skill_run/1`` run trace.
+    record_recipe_signal Record one content-free ``nuvel.recipe_signal/1`` event.
+    share_recipe         Share one anonymised ``nuvel.recipe/1`` recipe.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import http.client
 import json
@@ -97,6 +100,7 @@ HUB_TOOLS = frozenset({
 })
 FEEDBACK_TOOLS = frozenset({
     "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+    "record_recipe_signal", "share_recipe",
 })
 # Tools the HTTP transport exposes when no explicit allow-list (--tools) is
 # given: the hub read tools plus run traces and their health summary. Off
@@ -104,7 +108,7 @@ FEEDBACK_TOOLS = frozenset({
 # install_skill (writes to the server's filesystem).
 HTTP_DEFAULT_TOOLS = frozenset({
     "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
-    "record_run_trace", "check_skill_health",
+    "record_run_trace", "check_skill_health", "record_recipe_signal", "share_recipe",
 })
 RUN_OUTCOMES = ("success", "partial", "failure", "blocked", "skipped")
 
@@ -511,6 +515,8 @@ class SkillsMCPServer:
             "record_feedback": self.tool_record_feedback,
             "check_skill_health": self.tool_check_skill_health,
             "record_run_trace": self.tool_record_run_trace,
+            "record_recipe_signal": self.tool_record_recipe_signal,
+            "share_recipe": self.tool_share_recipe,
         }
 
     @property
@@ -996,6 +1002,52 @@ class SkillsMCPServer:
                         "required": ["trace"],
                     },
                 },
+                {
+                    "name": "record_recipe_signal",
+                    "description": (
+                        "Record one content-free nuvel.recipe_signal/1 event each "
+                        "time a recipe is created, used, succeeded, corrected or "
+                        "retired, when the learn skill tells you to. Every field "
+                        "is an enum, a UUID, a version, a timestamp, a count or a "
+                        "short lowercase identifier; never put names, subjects, "
+                        "addresses, message text or any other user content in a "
+                        "signal. Do not send 'tenant' (the server sets it). A "
+                        "rejected signal returns the failing field paths only. "
+                        "Re-sending the same signal_id returns 'duplicate'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "signal": self._doc_input_schema(
+                                recipes.SIGNAL_RESOURCE, "One nuvel.recipe_signal/1 signal object."
+                            )
+                        },
+                        "required": ["signal"],
+                    },
+                },
+                {
+                    "name": "share_recipe",
+                    "description": (
+                        "Share one anonymised nuvel.recipe/1 recipe, when the learn "
+                        "skill tells you to. The recipe must be generic, rewritten "
+                        "from scratch: roles instead of names, and no names, "
+                        "companies, amounts, dates, places, contacts (emails, phone "
+                        "numbers), URLs, file names or quotes. The server screens "
+                        "every text field and rejects the whole recipe on a hit, "
+                        "returning the failing field paths only. Do not send "
+                        "'tenant' (the server sets it). Re-sending the same "
+                        "recipe_id and version returns 'duplicate'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "recipe": self._doc_input_schema(
+                                recipes.RECIPE_RESOURCE, "One nuvel.recipe/1 recipe object."
+                            )
+                        },
+                        "required": ["recipe"],
+                    },
+                },
             ]
         }
 
@@ -1003,6 +1055,12 @@ class SkillsMCPServer:
     def _trace_input_schema() -> dict:
         schema = {k: v for k, v in traces.load_schema().items() if k != "$schema"}
         schema["description"] = "One nuvel.skill_run/1 trace object."
+        return schema
+
+    @staticmethod
+    def _doc_input_schema(resource: str, description: str) -> dict:
+        schema = {k: v for k, v in traces.load_schema(resource).items() if k != "$schema"}
+        schema["description"] = description
         return schema
 
     def handle_tools_call(self, params):
@@ -1319,6 +1377,62 @@ class SkillsMCPServer:
             except Exception as exc:  # the local copy stands; never retried
                 log(f"Run trace relay failed (kept locally): {_describe_failure(exc)}")
         return {"status": "recorded", "run_id": record["run_id"]}
+
+    def tool_record_recipe_signal(self, args):
+        """Validate, screen, stamp, store and (optionally) relay one recipe signal."""
+        signal = args.get("signal")
+        errors = recipes.validate_signal(signal) or recipes.screen_signal(signal)
+        if errors:
+            raise ToolInputError(errors)
+
+        record = copy.deepcopy(signal)
+        parsed = traces._parse_started_at(record["at"])
+        record["at"] = parsed.replace(second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        tenant = current_principal.get()
+        if tenant is not None:
+            record["tenant"] = tenant
+        try:
+            stored = self._recipe_store().append_signal(record)
+        except OSError as exc:
+            log(f"Could not store the recipe signal: {exc}")  # detail stays server-side
+            raise McpError(INTERNAL_ERROR, "Could not store the recipe signal") from None
+        result = {"signal_id": record["signal_id"]}
+        if not stored:
+            return {"status": "duplicate", **result}
+        self._relay_record("recipe_signal", record)
+        return {"status": "recorded", **result}
+
+    def tool_share_recipe(self, args):
+        """Validate, screen, stamp, store and (optionally) relay one anonymised recipe."""
+        recipe = args.get("recipe")
+        errors = recipes.validate_recipe(recipe) or recipes.screen_recipe(recipe)
+        if errors:
+            raise ToolInputError(errors)
+
+        record = copy.deepcopy(recipe)
+        tenant = current_principal.get()
+        if tenant is not None:
+            record["tenant"] = tenant
+        try:
+            stored = self._recipe_store().put_recipe(record)
+        except OSError as exc:
+            log(f"Could not store the recipe: {exc}")  # detail stays server-side
+            raise McpError(INTERNAL_ERROR, "Could not store the recipe") from None
+        result = {"recipe_id": record["recipe_id"], "version": record["version"]}
+        if not stored:
+            return {"status": "duplicate", **result}
+        self._relay_record("recipe", record)
+        return {"status": "recorded", **result}
+
+    @staticmethod
+    def _relay_record(kind: str, record: dict) -> None:
+        """Relay a stored record to $NUVEL_FEEDBACK_URL; failures are logged, never raised."""
+        relay_url = os.environ.get("NUVEL_FEEDBACK_URL", "").strip()
+        if relay_url:
+            try:
+                _relay_feedback(relay_url, {"type": kind, "record": record})
+            except Exception as exc:  # the local copy stands; never retried
+                log(f"Relay of {kind} failed (kept locally): {_describe_failure(exc)}")
 
     def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
         """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.
