@@ -180,3 +180,13 @@ def test_non_list_steps_do_not_500(tmp_path: Path) -> None:
         _write_signals(tmp_path, [_sig(RID1, uses=1)])
         cands = load_recipe_candidates([tmp_path])
         assert cands[0].latest is None
+
+
+def test_cli_recipes_empty_title_reads_masked(tmp_path: Path, monkeypatch, capsys) -> None:
+    from nuvel.cli import main
+
+    monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(tmp_path / "empty"))
+    _write_signals(tmp_path / "src", [_sig(RID1, uses=2)])
+    _write_recipe(tmp_path / "src", RID1, 1, "triage", "")
+    main(["traces", "recipes", "--source", str(tmp_path / "src")])
+    assert "(title masked)" in capsys.readouterr().out

@@ -1,0 +1,28 @@
+# The recipe action catalogue in English, with common inflections. Exempt from
+# name, place and brand subtraction (I1 ruling).
+search searches searched searching
+read reads reading
+summarise summarises summarised summarising summarize summarizes summarized summarizing summary
+extract extracts extracted extracting
+compare compares compared comparing
+check checks checked checking
+calculate calculates calculated calculating
+list lists listed listing
+draft drafts drafted drafting
+edit edits edited editing
+translate translates translated translating
+create creates created creating
+update updates updated updating
+file files filed filing
+propose proposes proposed proposing slot slots
+schedule schedules scheduled scheduling
+send sends sent sending
+reply replies replied replying
+forward forwards forwarded forwarding
+share shares shared sharing
+remind reminds reminded reminding reminder
+follow follows followed following up
+ask asks asked asking
+decide decides decided deciding
+wait waits waited waiting
+other

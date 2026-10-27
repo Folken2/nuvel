@@ -1,0 +1,19 @@
+# English closed-class words (articles, prepositions, conjunctions, pronouns)
+# and common adverbs. Exempt from name, place and brand subtraction (I1 ruling);
+# a Capitalised form mid-sentence is still masked. Auxiliaries, modals and
+# contraction parts were dropped as a class: with them the holdout split leaked.
+# articles and conjunctions
+the an and or but nor so yet if because although though while whether that than as
+# prepositions
+of to in on at by for with from about into onto over under up down out off through during before after
+above below between among against without within along across behind beyond around near via per upon
+until till since toward towards
+# pronouns and determiners
+me my mine myself you your yours yourself yourselves we us our ours ourselves they them their theirs
+themselves he him his himself she her hers herself it its itself who whom whose which what whatever
+this these those each every any some all both either neither none no other another such
+someone something anyone anything everyone everything nobody nothing
+# common adverbs
+not very too also just only still even already again ever never always often sometimes soon now then
+today tomorrow yesterday tonight here there how why when where well more most less least much many few
+quite rather perhaps maybe next back away later early instead please thanks yes

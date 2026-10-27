@@ -3,7 +3,10 @@
 Not shipped. Run from ``packages/nuvel-mcp`` with an isolated interpreter,
 because the cache holds untrusted downloads::
 
-    python -I scripts/build_lexicon.py --lang es --size 20000 --cache <dir> [--fetch]
+    python -I scripts/build_lexicon.py --lang es --cache <dir> [--fetch]
+
+``--size`` and ``--protect-top`` default to the language's ``build`` entry in
+``sources.json``, so the plain command reproduces the shipped file.
 
 Steps (spec §4.2):
 
@@ -16,9 +19,13 @@ Steps (spec §4.2):
 3. entries are folded with ``nuvel_mcp.masking.fold`` and only alphabetic
    entries of two or more letters are kept;
 4. every entry of the language's given-name, surname, place and brand lists
-   (folded the same way) is subtracted;
+   (folded the same way) is subtracted, except the exempt classes (I1
+   ruling): ``function-{lang}.txt`` (closed-class words and common adverbs),
+   ``actions-{lang}.txt`` (the action catalogue with inflections), the
+   English ``dates`` section, the ``protect_top`` most frequent base words,
+   and, where ``exempt_business`` is set, ``business-{lang}.txt``;
 5. ``business-{lang}.txt`` is added, minus any entry found in a name list
-   (enforced here, and reported);
+   unless the language exempts it (reported either way);
 6. the elision letters the masker needs for that language are added, and the
    file is written with the deterministic version id from ``sources.json``.
 
@@ -421,7 +428,31 @@ def write_sources_md(config: dict, out_dir: Path, cache: Path, fetch: bool) -> N
     (out_dir / "SOURCES.md").write_text("\n".join(rows), encoding="utf-8")
 
 
-def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_dir: Path) -> dict:
+def _optional_list(name: str) -> list[str]:
+    return _read_list(name) if (SRC / name).is_file() else []
+
+
+def exempt_words(lang: str, sections: dict, exempt_business: bool = False) -> set[str]:
+    """Words exempt from name, place and brand subtraction (I1 ruling):
+    (a) the closed-class function words, (b) the action-catalogue verbs and
+    their inflections, (c) English months and weekdays, and, where
+    ``sources.json`` turns it on for the language, (e) the reviewed business
+    nouns. The top-N base words, (d), are exempted in ``build``. Rule 4.1.5 still masks a Capitalised form
+    of any of them mid-sentence."""
+    out = {fold(w) for w in _optional_list(f"function-{lang}.txt")}
+    out |= {fold(w) for w in _optional_list(f"actions-{lang}.txt")}
+    if exempt_business:
+        out |= {fold(w) for w in _read_list(f"business-{lang}.txt")}
+    if lang == "en":
+        out |= set(sections["dates"])
+    bad = [w for w in out if not _alpha(w)]
+    if bad:
+        sys.exit(f"function/actions-{lang}.txt: {len(bad)} entries are not alphabetic words of 2+ letters")
+    return out
+
+
+def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_dir: Path,
+          protect_top: int = 0, exempt_business: bool = False) -> dict:
     config = json.loads((SRC / "sources.json").read_text(encoding="utf-8"))
     version = config["versions"][lang]
     if not version.startswith(lang + "-"):
@@ -430,34 +461,41 @@ def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_
     order, base_ids = base_words(config, lang, cache, fetch)
     names, name_ids, sizes = name_set(config, lang, cache, fetch)
 
+    sections = {
+        "numbers": sorted({fold(w) for w in _read_list(f"numbers-{lang}.txt")}),
+        "dates": sorted({fold(w) for w in _read_list(f"dates-{lang}.txt")}),
+        "currency": sorted({fold(w) for w in _read_list(f"currency-{lang}.txt")}),
+    }
+    exempt = exempt_words(lang, sections, exempt_business)
+
     words: list[str] = []
     removed: list[str] = []
+    protected: list[str] = []
     seen: set[str] = set()
     for w in order:
         if not _alpha(w) or w in seen:
             continue
         if len(seen) >= size:
             break
+        rank = len(seen)
         seen.add(w)
-        if w in names:
+        if w in names and rank < protect_top:
+            protected.append(w)          # (d) a top-N base word is kept
+            words.append(w)
+        elif w in names and w not in exempt:
             removed.append(w)
         else:
             words.append(w)
 
     business = [fold(w) for w in _read_list(f"business-{lang}.txt")]
-    business_dropped = sorted({w for w in business if w in names})
+    business_dropped = sorted({w for w in business if w in names and w not in exempt})
     bad_business = [w for w in business if not _alpha(w)]
     if bad_business:
         sys.exit(f"business-{lang}.txt: {len(bad_business)} entries are not single alphabetic words")
-    sections = {
-        "numbers": sorted({fold(w) for w in _read_list(f"numbers-{lang}.txt")}),
-        "dates": sorted({fold(w) for w in _read_list(f"dates-{lang}.txt")}),
-        "currency": sorted({fold(w) for w in _read_list(f"currency-{lang}.txt")}),
-    }
-    wordset = set(words) | {w for w in business if w not in names}
+    wordset = set(words) | {w for w in business if w not in names} | exempt
     wordset -= set(sections["numbers"]) - NUMBER_WORDS_KEPT[lang]
     wordset |= set(SINGLE_LETTER_WORDS[lang])
-    assert not (wordset - set(SINGLE_LETTER_WORDS[lang])) & names
+    assert not (wordset - set(SINGLE_LETTER_WORDS[lang]) - exempt - set(protected)) & names
     for key, entries in sections.items():
         if any(not (e.isalpha() and len(e) >= 2) for e in entries):
             sys.exit(f"{key}-{lang}.txt: entries must be single alphabetic words of two letters or more")
@@ -487,6 +525,8 @@ def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_
     return {
         "lang": lang, "version": version, "size": size, "words": len(wordset),
         "base_considered": len(seen), "removed": len(removed), "names": len(names),
+        "protect_top": protect_top, "exempt_business": exempt_business, "kept_top_n": len(protected),
+        "kept_exempt": sorted(exempt & names & wordset),
         "name_sources": sizes, "business_dropped": business_dropped,
     }
 
@@ -494,7 +534,9 @@ def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     ap.add_argument("--lang", required=True, choices=("es", "en", "ca"))
-    ap.add_argument("--size", type=int, required=True, help="base entries to consider (top N)")
+    ap.add_argument("--size", type=int, help="base entries to consider (default: sources.json)")
+    ap.add_argument("--protect-top", type=int,
+                    help="base words of this rank or better are never subtracted (default: sources.json)")
     ap.add_argument("--cache", type=Path, required=True, help="download cache, outside the repo")
     ap.add_argument("--fetch", action="store_true", help="download missing sources")
     ap.add_argument("--out", type=Path, default=OUT)
@@ -503,7 +545,13 @@ def main(argv: list[str] | None = None) -> int:
     cache = args.cache.resolve()
     if PKG.parents[1] in cache.parents or cache == PKG.parents[1]:
         sys.exit("the cache must be outside the repository")
-    report = build(args.lang, args.size, cache, args.fetch, args.out, args.sample_dir)
+    defaults = json.loads((SRC / "sources.json").read_text(encoding="utf-8"))["build"].get(args.lang, {})
+    size = args.size if args.size is not None else defaults.get("size")
+    protect = args.protect_top if args.protect_top is not None else defaults.get("protect_top", 0)
+    if not size:
+        sys.exit("no --size given and none in sources.json")
+    report = build(args.lang, size, cache, args.fetch, args.out, args.sample_dir, protect,
+                   bool(defaults.get("exempt_business", False)))
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0
 

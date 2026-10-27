@@ -328,7 +328,7 @@ def _relay_feedback(url: str, payload: dict) -> dict:
         raw = resp.read().decode("utf-8", "replace")
     try:
         data = json.loads(raw) if raw.strip() else {}
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -1721,7 +1721,7 @@ class SkillsMCPServer:
                 continue
             try:
                 message = json.loads(line)
-            except ValueError as exc:  # JSONDecodeError, or e.g. an int over the digit limit
+            except (ValueError, RecursionError) as exc:  # bad JSON, an int over the digit limit, nesting too deep
                 log(f"Parse error: {type(exc).__name__}")  # never the line's content
                 _write_message(stdout, error_response(None, PARSE_ERROR, "Parse error"))
                 continue

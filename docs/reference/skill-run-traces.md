@@ -169,9 +169,12 @@ stamps, stores and relays the masked copy:
 - Emails, URLs, phone numbers, ids, amounts, numbers and dates are replaced by their
   type, as `{email}`, `{amount}`, `{date}` and so on. Number words ("dos mil euros")
   are replaced too. The placeholders a client writes itself are kept.
-- A word that is also in a list of given names, surnames, places or brands is never in
-  a lexicon, even when it is a common word ("rosa", "vega"). Zero leaks wins over
-  readability.
+- A word that is also in a list of given names, surnames, places or brands is left out
+  of the lexicon, even when it is a common word ("rosa", "vega"). Zero leaks wins over
+  readability. A few closed classes are kept anyway: function words ("sin", "pero"),
+  the action verbs ("send", "read"), English months and weekdays, the most frequent
+  Spanish words, and the reviewed Spanish business nouns ("reunión"). They pass only in
+  lowercase, so a capitalised one mid-sentence ("met May", "con Rosa") is still masked.
 - A field with more than 40 % of its words masked is dropped whole: `title` and
   `when_to_use` become `""`, `note`, `pitfalls` and `narrative` are removed. A field with
   no words is never dropped.
@@ -189,8 +192,8 @@ MPL sources are not used. Each source's URL, licence and check date are in
 **Catalan and other languages.** A language with no lexicon (`ca` today, `pt` or any
 other) is shared as **structure only**: the recipe is recorded, every free-text field
 is dropped and listed in `dropped`. Catalan has no lexicon because, with permissive
-sources only, the tuning corpus still leaked a name that is also a common Catalan
-word. Clients should still send these recipes.
+sources only, the tuning corpus still leaked a brand name that is also a common
+Catalan word. Clients should still send these recipes.
 
 **Response.** All of these carry the recipe's `recipe_id` and `version`:
 

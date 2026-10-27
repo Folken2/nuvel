@@ -397,3 +397,13 @@ def test_storage_errors_are_not_leaked_to_the_http_caller(hub, tmp_path):
         thread.join(TIMEOUT)
     assert status == 200
     assert "secret-path" not in (data.decode() if isinstance(data, bytes) else data)
+
+
+def test_deeply_nested_body_is_a_parse_error(launch, hub, capsys):
+    client = Client(launch(hub, no_auth=True))
+    session = client.initialize()
+    depth = 100_000
+    status, _, data = client.post("[" * depth + "]" * depth, session)
+    assert status == 400
+    assert json.loads(data)["error"] == {"code": -32700, "message": "Parse error"}
+    assert "Traceback" not in capsys.readouterr().err

@@ -713,7 +713,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         """Decode a JSON-RPC payload -> (messages, is_batch)."""
         try:
             payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, or nested too deep
+            log(f"Parse error: {type(exc).__name__}")  # never the body
             raise _Reject(HTTPStatus.BAD_REQUEST, "Parse error", PARSE_ERROR)
         if isinstance(payload, list):
             if not payload:
@@ -1069,7 +1070,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             metadata = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError):  # bad JSON or UTF-8, or nested too deep
             raise OAuthError("invalid_client_metadata", "Body must be JSON")
         response = self.server.oauth.register_client(metadata, self.client_address[0])
         self._send_json(HTTPStatus.CREATED, response, _NO_STORE)

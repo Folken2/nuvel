@@ -144,6 +144,18 @@ def test_no_name_list_word_in_lexicon(lang):
     assert not {masking.fold(w) for w in removed} & lexicon.words
 
 
+
+@pytest.mark.parametrize("lang, text", [
+    ("es", "sin pero mañana reunión"),
+    ("en", "send read list forward wait"),
+])
+def test_exempt_classes_pass(lang, text):
+    """I1: function words, action verbs, months/weekdays and (es) business
+    nouns stay readable even when a name, place or brand list carries them."""
+    lexicon = load_lexicon(lang)
+    assert mask_text(text, lexicon).text == text
+
+
 def _build_script():
     import importlib.util
     spec = importlib.util.spec_from_file_location("build_lexicon", PKG / "scripts" / "build_lexicon.py")

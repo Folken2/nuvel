@@ -82,3 +82,22 @@ def test_dashboard_zero_words_and_malformed(tmp_path: Path) -> None:
     doc["steps"] = "nope"
     f.write_text(json.dumps(doc))
     assert client.get("/recipes").status_code == 200
+
+
+def test_dashboard_marks_placeholders_in_title_when_to_use_and_pitfalls(tmp_path: Path) -> None:
+    _setup(tmp_path, "Propuesta para {company}")
+    f = next((tmp_path / "_recipes" / "recipes").rglob("v1.json"))
+    doc = json.loads(f.read_text())
+    doc["when_to_use"] = "Tras una reunión con {person}"
+    doc["pitfalls"] = ["No {?} antes de confirmar"]
+    f.write_text(json.dumps(doc))
+    html = TestClient(build_app(TraceLoader([], skill_roots=[tmp_path]))).get("/recipes").text
+    assert 'Propuesta para <span class="chip chip-slot">{company}</span>' in html
+    assert 'con <span class="chip chip-slot">{person}</span>' in html
+    assert 'No <span class="chip chip-masked" title="masked by the server">{?}</span> antes' in html
+
+
+def test_dashboard_empty_title_reads_masked(tmp_path: Path) -> None:
+    _setup(tmp_path, "")
+    html = TestClient(build_app(TraceLoader([], skill_roots=[tmp_path]))).get("/recipes").text
+    assert "(title masked)" in html

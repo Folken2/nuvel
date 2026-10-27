@@ -1,0 +1,31 @@
+# The recipe action catalogue in Spanish (search read summarise extract compare
+# check calculate list draft edit translate create update file propose_slot
+# schedule send reply forward share remind follow_up ask decide wait), with
+# common inflections. Exempt from name, place and brand subtraction (I1 ruling).
+buscar busca busco buscamos buscó buscado buscando
+leer lee leo leemos leyó leído leyendo
+resumir resume resumo resumimos resumió resumido resumen
+extraer extrae extraigo extrajo extraído
+comparar compara comparo comparamos comparó comparado
+comprobar comprueba compruebo comprobamos comprobó comprobado revisar revisa reviso revisó revisado
+calcular calcula calculo calculamos calculó calculado
+listar lista listo listamos listó listado enumerar enumera
+redactar redacta redacto redactamos redactó redactado
+editar edita edito editamos editó editado corregir corrige corrijo corrigió corregí corregido
+traducir traduce traduzco tradujo traducido
+crear crea creo creamos creó creado
+actualizar actualiza actualizo actualizamos actualizó actualizado
+archivar archiva archivo archivamos archivó archivado
+proponer propone propongo propuso propuesto hueco huecos
+programar programa programo programamos programó programado agendar agenda
+enviar envía envío enviamos envió enviado mandar manda mando mandó mandado
+responder responde respondo respondimos respondió respondido contestar contesta
+reenviar reenvía reenvío reenvió reenviado
+compartir comparte comparto compartimos compartió compartido
+recordar recuerda recuerdo recordamos recordó recordado
+seguimiento seguir sigue sigo seguimos siguió seguido
+preguntar pregunta pregunto preguntamos preguntó preguntado pedir pide pido pidió pedido
+decidir decide decido decidimos decidió decidido
+esperar espera espero esperamos esperó esperado
+otro otra
+cerrar cierra cierro cerramos cerró cerrado cerré

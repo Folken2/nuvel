@@ -463,3 +463,16 @@ def test_stdio_serve_survives_any_parse_error(capsys):
     assert len(responses) == 3 and responses[2]["id"] == 2
     err = capsys.readouterr().err
     assert "pedro" not in err and "999" not in err
+
+
+def test_stdio_serve_survives_deep_nesting(capsys):
+    s = SkillsMCPServer(None)
+    deep = '{"pedro":' * 200_000 + "1" + "}" * 200_000
+    lines = [deep, json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})]
+    out = io.StringIO()
+    s.serve(io.StringIO("\n".join(lines) + "\n"), out)
+    responses = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert responses[0]["error"]["message"] == "Parse error" and responses[0]["id"] is None
+    assert len(responses) == 2 and responses[1]["id"] == 2
+    err = capsys.readouterr().err
+    assert "pedro" not in err and "RecursionError" in err

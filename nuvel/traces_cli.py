@@ -862,7 +862,7 @@ def _cmd_recipes(args: argparse.Namespace) -> int:
             str(c.uses),
             f"{c.success_rate * 100:.0f}%",
             str(c.corrections),
-            _short(str(c.latest.get("title", "")), 50) if c.latest else "-",
+            _short(str(c.latest.get("title") or "").strip() or "(title masked)", 50) if c.latest else "-",
         )
         for c in cands
     ]

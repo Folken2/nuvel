@@ -28,8 +28,8 @@
       <td>{{ c.corrections }}</td>
       <td>
         {% if c.latest %}
-          <strong>{{ c.latest.get('title', '') }}</strong>
-          <div>{{ c.latest.get('when_to_use', '') }}</div>
+          <strong>{% if (c.latest.get('title') or '') | trim %}{{ c.latest.get('title') | chips }}{% else %}(title masked){% endif %}</strong>
+          <div>{{ c.latest.get('when_to_use', '') | chips }}</div>
           {% if c.latest.actions %}
           <div class="recipe-actions"><code>{{ c.latest.actions | join(' → ') }}</code></div>
           {% endif %}
@@ -43,7 +43,7 @@
           </ol>
           {% if c.latest.pitfalls %}
           <div>Pitfalls:</div>
-          <ul>{% for p in c.latest.pitfalls %}<li>{{ p }}</li>{% endfor %}</ul>
+          <ul>{% for p in c.latest.pitfalls %}<li>{{ p | chips }}</li>{% endfor %}</ul>
           {% endif %}
           <div>Masked: {% if c.latest.mask_ratio is none %}—{% else %}{{ '%.0f' % (c.latest.mask_ratio * 100) }}%{% endif %}</div>
           {% if c.latest.narrative %}
