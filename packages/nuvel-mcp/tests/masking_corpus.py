@@ -68,25 +68,34 @@ def load_corpus(split: str, lang: str) -> list[Case]:
 def evaluate(cases, mask_fn) -> Report:
     """Run ``mask_fn`` over every case.
 
-    A leak is (case index, secret token) whose folded form equals a folded word
-    token of the output. ``kept`` counts non-secret word tokens of the input whose
-    folded form appears among the output's folded word tokens, as a multiset;
-    ``total`` is the number of non-secret word tokens.
+    Leaks are multiset-based. For each folded secret token ``f``:
+    ``min(secret count, max(0, output count - non-secret input count))``
+    entries ``(case index, token)`` are recorded, so a secret that shares its
+    spelling with a non-secret word (a ``com`` in an email and a Catalan "com")
+    is a leak only when more copies survive than the non-secret text explains.
+
+    ``kept`` is independent of the leaks: it counts non-secret word tokens of the
+    input whose folded form appears among the output's folded word tokens, as a
+    multiset; ``total`` is the number of non-secret word tokens.
     """
     report = Report()
     for i, case in enumerate(cases):
         out = Counter(fold(t) for t in tokens(mask_fn(case.text)))
+        secret_count = Counter(fold(t) for t in case.secrets)
+        nonsecret = Counter(fold(t) for t in tokens(case.text))
+        nonsecret.subtract(secret_count)
+        nonsecret = +nonsecret  # drop zero and negative counts
+        # leaks
+        first_form: dict[str, str] = {}
         for secret in case.secrets:
-            if fold(secret) in out:
-                report.leaks.append((i, secret))
-        rest = Counter(fold(t) for t in case.secrets)
-        for tok in tokens(case.text):
-            f = fold(tok)
-            if rest[f] > 0:  # this occurrence is the secret one
-                rest[f] -= 1
-                continue
-            report.total += 1
-            if out[f] > 0:
-                out[f] -= 1
-                report.kept += 1
+            first_form.setdefault(fold(secret), secret)
+        for f, n in secret_count.items():
+            for _ in range(min(n, max(0, out[f] - nonsecret[f]))):
+                report.leaks.append((i, first_form[f]))
+        # kept (own copy of the output counts)
+        avail = Counter(out)
+        for f, n in nonsecret.items():
+            report.total += n
+            take = min(n, avail[f])
+            report.kept += take
     return report

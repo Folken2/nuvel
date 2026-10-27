@@ -86,3 +86,51 @@ def test_kept_is_multiset_of_non_secret_tokens():
     report = evaluate(cases, lambda t: "la factura {?}")
     assert (report.kept, report.total) == (2, 4)
     assert evaluate(cases, lambda t: "LA la De FACTURA").kept == 4
+
+
+def test_secret_sharing_spelling_with_non_secret_word():
+    # Catalan "com" (how) next to an email ending in .com
+    case = Case(text="com envio a ana@acme.com", secrets=["ana", "acme", "com"], category="other")
+    assert evaluate([case], lambda t: "com envio a {?}").leaks == []   # only the non-secret "com" survives
+    assert evaluate([case], lambda t: t).leaks == [(0, "ana"), (0, "acme"), (0, "com")]
+    assert evaluate([case], lambda t: "com envio a x.com").leaks == [(0, "com")]  # an extra copy survived
+
+
+def test_real_surviving_secret_is_a_leak():
+    case = Case(text="Hablé con Pedro Martínez", secrets=["Pedro", "Martínez"], category="other")
+    assert evaluate([case], lambda t: "Hablé con pedro {?}").leaks == [(0, "Pedro")]
+
+
+def test_kept_independent_of_leaks():
+    case = Case(text="de la factura de 30 de junio", secrets=["de", "junio"], category="other")
+    # non-secret tokens: de, la, factura, de (secrets take one "de" and "junio").
+    assert evaluate([case], lambda t: "de la factura").kept == 3  # de, la, factura
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_secrets_are_tokens_of_text(lang):
+    from collections import Counter
+    for case in load_corpus("tune", lang):
+        have = Counter(fold(t) for t in tokens(case.text))
+        need = Counter(fold(t) for t in case.secrets)
+        assert not (need - have)
+
+
+def _oracle(lang):
+    import re
+    raw = [json.loads(l)["text"] for l in mc.corpus_path("tune", lang).read_text(encoding="utf-8").splitlines() if l.strip()]
+    return {c.text: re.sub(r"\[\[.*?\]\]", "{?}", r) for c, r in zip(load_corpus("tune", lang), raw)}
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_oracle_masker_scores_zero_leaks(lang):
+    oracle = _oracle(lang)
+    report = evaluate(load_corpus("tune", lang), lambda text: oracle[text])
+    assert report.leaks == []
+    assert report.kept > 0.5 * report.total
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_fullwidth_at_emails(lang):
+    n = sum("\uff20" in l for l in mc.corpus_path("tune", lang).read_text(encoding="utf-8").splitlines())
+    assert n >= 3
