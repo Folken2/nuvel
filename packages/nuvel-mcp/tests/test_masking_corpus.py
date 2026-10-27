@@ -144,12 +144,30 @@ def test_no_name_list_word_in_lexicon(lang):
     assert not {masking.fold(w) for w in removed} & lexicon.words
 
 
+def _build_script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_lexicon", PKG / "scripts" / "build_lexicon.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_single_letter_words_are_the_reviewed_set():
+    expected = {
+        "ca": set("ldsnmt") | set("aioe"),   # elision prefixes + standalone words (no numeral "u")
+        "en": set("stmdi") | {"a"},           # contraction suffixes and I + the article
+        "es": set("ayoeu"),                   # no elisions; standalone words
+    }
+    assert {k: set(v) for k, v in _build_script().SINGLE_LETTER_WORDS.items()} == expected
+
+
 @pytest.mark.parametrize("lang", LANGUAGES)
-def test_single_letter_entries_are_elisions_only(lang):
+def test_single_letter_entries_are_single_letter_words_only(lang):
     lexicon = load_lexicon(lang)
     if lexicon is None:
         pytest.skip(f"{lang} ships structure only (no lexicon)")
-    allowed = {"ca": set("ldsnmt"), "en": set("stmdi"), "es": set()}[lang]
+    allowed = set(_build_script().SINGLE_LETTER_WORDS[lang])
     singles = {w for section in (lexicon.words, lexicon.numbers, lexicon.dates, lexicon.currency)
                for w in section if len(w) == 1}
     assert singles <= allowed
+    assert set(w for w in lexicon.words if len(w) == 1) == allowed

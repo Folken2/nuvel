@@ -589,7 +589,7 @@ def test_idn_domains():
     lx = lex({"visita", "rosa", "com", "e", "g"})
     assert masked("visita rosá.com", lx) == "visita {url}"
     assert masked("visita rosá.com.", lx) == "visita {url}."
-    assert masked("visita e.g. rosa", lx) == "visita e.g. rosa"
+    assert masked("visita e.g. rosa", lx) == "visita {?} rosa"   # one-letter word + ".": initials rule
 
 
 @pytest.mark.parametrize("language, text, expected", [
@@ -820,7 +820,8 @@ def test_letter_prefixed_ids_are_one_token(text, expected):
     assert invariant_hits({"narrative": masked(text, lx)}) == []
 
 
-def test_letter_prefixed_id_regex_is_linear():
+def test_letter_prefixed_id_regex_is_bounded():
+    # quadratic in the hyphen-part starts at worst; the 8000-character cap bounds it
     import time
     start = time.perf_counter()
     for text in ("a-" * 3999 + "a", "ab-" * 2600 + "x", ("a-" * 1000 + " ") * 3):
@@ -835,3 +836,37 @@ def test_lone_number_word_outside_words_is_a_number():
     assert (r.text, r.masked, r.words) == ("para {number} meses", 0, 3)
     assert masked("una carta con dos", lx) == "una carta con {number}"   # "una" is in [words]
     assert masked("veinte mil euros", lx) == "{amount}"
+
+
+# --- Task 4 fix round 1: name initials ---------------------------------------
+
+@pytest.mark.parametrize("language, text, expected", [
+    ("en", "M. Smith reviews it", "{?} reviews it"),
+    ("en", "send it to m. jones", "send it to {?}"),
+    ("en", "D. Jones will call", "{?} will call"),
+    ("en", "ask m.jones today", "ask {url} today"),             # a domain shape, typed first
+    ("en", "ask m. {person} today", "ask {?} {person} today"),
+    ("es", "J. García revisa", "{?} revisa"),
+    ("es", "habla con j. garcía", "habla con {?}"),
+    ("en", "the plan a. Then send it", "the plan {?} send it"),
+    ("en", "plan a.", "plan a."),                          # nothing after the dot: not an initial
+    ("en", "send it to a jones", "send it to a {?}"),
+    ("es", "rosa y pedro o juan", "rosa y {?} o {?}"),
+])
+def test_name_initials_masked(language, text, expected):
+    lx = lex({"m", "d", "j", "a", "y", "o", "send", "it", "to", "reviews", "will", "call", "ask",
+              "today", "revisa", "habla", "con", "the", "plan", "then", "rosa"}, language=language)
+    assert masked(text, lx) == expected
+    assert invariant_hits({"narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("text", [
+    "M. {?} reviews it", "send it to m. jones", "ask j. {person}", "con J.García", "plan a.\nNext",
+])
+def test_invariant_flags_initials(text):
+    assert invariant_hits({"narrative": text}) == ["/narrative"]
+
+
+@pytest.mark.parametrize("text", ["plan a.", "it is a. ", "con {?}. Hola", "I. "])
+def test_invariant_allows_single_letter_without_following_word(text):
+    assert invariant_hits({"narrative": text}) == []

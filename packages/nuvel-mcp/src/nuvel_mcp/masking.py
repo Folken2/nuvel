@@ -240,8 +240,9 @@ _AMOUNT_RE = re.compile(
 # Any remaining alphanumeric run containing a digit (``15th``, ``v2``, ``14:30``),
 # together with a hyphen-joined letter prefix and any joined tail
 # (``PO-55102``, ``F-2026-0412``, ``55102/a``): an id is one token. The prefix
-# group is possessive, so a long hyphenated word without digits fails in
-# linear time.
+# group is possessive, so each start fails without backtracking into it; over
+# all the hyphen-part starts the worst case is quadratic, which the
+# ``_MAX_CHARS`` cap bounds (about 0.1 s at 8000 characters).
 _DIGITS_RE = re.compile(r"(?<![^\W_])(?:[^\W\d_]+-)*+[^\W_]*\d(?:[^\W_]|[.,:/\-](?=[^\W_]))*")
 # The same shape with at least one letter prefix is an id (``PO-55102``,
 # ``F-2026-0412``); it runs before phones so the prefix is not left behind.
@@ -615,6 +616,31 @@ def _single_letter_runs(tokens: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return out
 
 
+_INITIAL_GAP_RE = re.compile(r"\.\s*")
+
+
+def _initials(tokens: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """A one-letter word directly followed by ``.`` and then another word or a
+    placeholder is a name initial (``M. Smith``, ``j. garcía``): the letter
+    and its dot become one ``initial`` token, masked in every language."""
+    out: list[tuple[str, str]] = []
+    i, n = 0, len(tokens)
+    while i < n:
+        kind, value = tokens[i]
+        if (kind == "word" and len(value) == 1 and i + 2 < n and tokens[i + 1][0] == "gap"
+                and _INITIAL_GAP_RE.fullmatch(tokens[i + 1][1])
+                and tokens[i + 2][0] in ("word", "srv", "cli")):
+            out.append(("initial", value))
+            rest = tokens[i + 1][1][1:]
+            if rest:
+                out.append(("gap", rest))
+            i += 2
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
 def _case_ok(word: str, at_start: bool) -> bool:
     """Rule 6, second half: no capital letter except a sentence-initial one or ``I``."""
     for k, part in enumerate(_PART_SPLIT.split(word)):
@@ -637,6 +663,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
     tokens = _number_words(tokens, lx)
     tokens = _dates(tokens, lx)
     tokens = _single_letter_runs(tokens)
+    tokens = _initials(tokens)
     elisions = _ELISIONS.get(_language(lx), _NO_ELISIONS)
 
     out: list[str] = []
@@ -678,6 +705,10 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
                 masked += 1
                 emit_mask()
         elif kind == "bad":  # characters outside the gap allowlist
+            words += 1
+            masked += 1
+            emit_mask()
+        elif kind == "initial":  # a name initial and its dot
             words += 1
             masked += 1
             emit_mask()
@@ -968,14 +999,17 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str]) -> bool:
         return True
     previous_end = 0
     first = True
+    previous = ""
     for m in _INV_TOKEN_RE.finditer(text):
         gap = text[previous_end:m.start()]
         if any(not (c.isspace() or c in _INV_ALLOWED) for c in gap) or _inv_too_much_punctuation(gap):
             return True
+        if len(previous) == 1 and previous.isalpha() and gap[:1] == "." and not gap[1:].strip():
+            return True  # a name initial: one letter, ".", then a word or placeholder
         start = first or _inv_sentence_break(gap)
         first = False
         previous_end = m.end()
-        token = m.group(0)
+        token = previous = m.group(0)
         if not token.startswith("{") and _inv_capitalised(token, start, abbreviations):
             return True
     tail = text[previous_end:]

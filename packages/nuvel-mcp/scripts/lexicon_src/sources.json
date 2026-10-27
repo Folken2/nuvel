@@ -13,6 +13,10 @@
     "Ajuntament de Barcelona, Open Data BCN (https://opendata-ajuntament.barcelona.cat), CC BY 4.0.",
     "Changes: the lexicons hold only folded single words derived from these sources (frequency ranks, minus name, place and brand entries); no source text is reproduced."
   ],
+  "tuning_decisions": [
+    "Name-list thresholds (ratified by the controller): single-token entries only, and inside a hyphenated or apostrophised name only capitalised parts of 3+ letters, because multi-word labels ('De la Fuente', 'La Coruna', 'The ... Company') and their particles would remove function words. Wikidata names count when borne by at least ceil(region people / 70,000) notable people (es 5, en 16, ca 3; region sizes counted on the check date), so the share is the same in each region and one-off labels such as 'De', 'Para' or 'He' do not remove common words. US Census surnames count from 20,000 bearers (about the top 1,700): lower tiers include 'EL', 'PARA', 'DE' and 'THE'. SCOWL proper names up to level 80: level 95 is SCOWL's catch-all tier and lists 'The' and 'If'. GeoNames: 1000+ inhabitants strictly (cities1000 also lists admin seats with fewer) and no PPLX neighbourhoods. These are rules over whole lists, chosen while measuring the tune split; no single entry was added or removed.",
+    "Abbreviations: 'PO' was taken out of the reviewed list after a tune leak ('PO-55102' marked as an id). It is excluded by class, as an identifier prefix; the masker also treats a letter-prefixed id as one {id} token."
+  ],
   "shipped": {
     "es": "ships (base size 25000).",
     "en": "ships (base size 25000).",
@@ -27,7 +31,7 @@
       "licence_url": "https://github.com/UniversalDependencies/UD_Spanish-AnCora/blob/r2.18/LICENSE.txt",
       "checked": "2026-10-27",
       "what": "Spanish base: frequency of lowercase, non-PROPN surface forms (UD Spanish-AnCora r2.18).",
-      "notes": "README: 'License: CC BY 4.0' (relicensed from GNU, zenodo 10.5281/zenodo.4762030).",
+      "notes": "LICENSE.txt and README metadata 'License: CC BY 4.0' (the README's older 'GNU license' paragraph is superseded; changelog v2.8: 'The license changed to CC BY 4.0'). Original data: AnCora 3.0.1 Spanish, https://doi.org/10.5281/zenodo.4710748, CC BY 4.0.",
       "files": [
         {
           "name": "es_ancora-ud-train.conllu",
@@ -57,7 +61,7 @@
       "licence_url": "https://github.com/UniversalDependencies/UD_Catalan-AnCora/blob/r2.18/LICENSE.txt",
       "checked": "2026-10-27",
       "what": "Catalan base: frequency of lowercase, non-PROPN surface forms (UD Catalan-AnCora r2.18).",
-      "notes": "README: 'License: CC BY 4.0' (relicensed from GNU, zenodo 10.5281/zenodo.4762030).",
+      "notes": "LICENSE.txt and README metadata 'License: CC BY 4.0' (the README's older 'GNU license' paragraph is superseded; changelog v2.8: 'The license changed to CC BY 4.0'). Original data: AnCora Catalan 2.0.0, https://doi.org/10.5281/zenodo.4762030, CC BY 4.0.",
       "files": [
         {
           "name": "ca_ancora-ud-train.conllu",

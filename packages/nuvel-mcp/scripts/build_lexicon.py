@@ -56,9 +56,13 @@ def fold(s: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
 
 
-# Single letters the masker's elision rules need (masking._ELISIONS), plus the
-# ``i`` of ``I``/``I'm``/``I'd`` in English. No other one-letter entries.
-ELISION_LETTERS = {"ca": "ldsnmt", "en": "stmdi", "es": ""}
+# The only one-letter [words] entries: the letters the masker's elision rules
+# need (masking._ELISIONS: ca prefixes l d s n m t; en suffixes s t m d and the
+# i of I/I'm/I'd), plus the standalone one-letter words of the language
+# (es a y o e u; en a; ca a i o e). Catalan "u" is the numeral one and is left
+# out. Runs of three or more single letters, one-letter hyphen parts and name
+# initials ("M. Smith") are masked by the masker whatever the lexicon holds.
+SINGLE_LETTER_WORDS = {"ca": "ldsnmt" + "aioe", "en": "stmdi" + "a", "es": "ayoeu"}
 
 # Number words are typed (spec §4.1 step 2): a lone one outside [words]
 # becomes {number}. Only the indefinite articles stay in [words].
@@ -364,7 +368,17 @@ def write_abbreviations(out_dir: Path) -> None:
         + "\n".join(sorted(set(entries))) + "\n", encoding="utf-8")
 
 
-def write_sources_md(config: dict, out_dir: Path) -> None:
+def scowl_copyright(config: dict, cache: Path, fetch: bool) -> str:
+    """SCOWL's full ``Copyright`` file (Atkinson, Moby, Kelk, 12Dicts, WordNet,
+    ENABLE, UKACD, VarCon, Ispell…), reproduced as its notices require."""
+    source = next(s for s in config["sources"] if s["format"] == "scowl")
+    with tarfile.open(cached(cache, source, source["files"][0], fetch), "r:gz") as tar:
+        member = next(m for m in tar.getmembers() if m.isfile() and m.name.endswith("/Copyright")
+                      and m.name.count("/") == 1)
+        return tar.extractfile(member).read().decode("latin-1")
+
+
+def write_sources_md(config: dict, out_dir: Path, cache: Path, fetch: bool) -> None:
     """Attribution for the packaged lexicons, generated from sources.json."""
     rows = [
         "# Lexicon sources",
@@ -392,11 +406,18 @@ def write_sources_md(config: dict, out_dir: Path) -> None:
             rows.append(f"  - {s['notes']}")
     rows += ["", "## Attribution", ""]
     rows += [f"- {line}" for line in config.get("attribution", [])]
+    rows += ["", "## Tuning decisions", ""]
+    rows += [f"- {line}" for line in config.get("tuning_decisions", [])]
     rows += ["", "## Languages", ""]
     for lang, status in sorted(config["shipped"].items()):
         rows.append(f"- `{lang}`: {status}")
     rows += ["", "Hand-written inputs (`business-*`, `numbers-*`, `dates-*`, `currency-*`,",
              "`abbreviations.txt`) are part of this repository, under its MIT licence.", ""]
+    rows += ["## SCOWL copyright and permission notices", "",
+             "The English lexicon is derived from SCOWL word lists (levels 10-50) and",
+             "subtracts its proper-names lists (up to level 80). SCOWL's `Copyright`",
+             "file, reproduced in full as its notices require:", "", "```",
+             scowl_copyright(config, cache, fetch).rstrip("\n"), "```", ""]
     (out_dir / "SOURCES.md").write_text("\n".join(rows), encoding="utf-8")
 
 
@@ -435,8 +456,8 @@ def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_
     }
     wordset = set(words) | {w for w in business if w not in names}
     wordset -= set(sections["numbers"]) - NUMBER_WORDS_KEPT[lang]
-    wordset |= set(ELISION_LETTERS[lang])
-    assert not (wordset - set(ELISION_LETTERS[lang])) & names
+    wordset |= set(SINGLE_LETTER_WORDS[lang])
+    assert not (wordset - set(SINGLE_LETTER_WORDS[lang])) & names
     for key, entries in sections.items():
         if any(not (e.isalpha() and len(e) >= 2) for e in entries):
             sys.exit(f"{key}-{lang}.txt: entries must be single alphabetic words of two letters or more")
@@ -457,7 +478,7 @@ def build(lang: str, size: int, cache: Path, fetch: bool, out_dir: Path, sample_
     ]
     out_dir.mkdir(parents=True, exist_ok=True)
     write_abbreviations(out_dir)
-    write_sources_md(config, out_dir)
+    write_sources_md(config, out_dir, cache, fetch)
     (out_dir / f"{lang}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     sample = removed[:REMOVED_SAMPLE]
     (sample_dir / f"removed-sample-{lang}.txt").write_text(
