@@ -47,3 +47,5 @@ copies survive in the output than the non-secret input explains, so a perfect
 masker (one that replaces exactly the marked spans) scores zero leaks.
 
 `holdout/` is written blind (without looking at the masker, its lexicon or `tune/`) and must never be used for tuning.
+
+Spoken clock times ("a las diez", "before five") are not secrets, because a single number word passes the masker; clock times in digits (`16:30`) stay marked. Percent: mark only the number word (`[[quince]] por ciento`, `[[fifteen]] percent`). Titles (Don, Sir, senyor, DJ) are never marked; only the name is.
