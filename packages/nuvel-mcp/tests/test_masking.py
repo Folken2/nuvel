@@ -664,6 +664,7 @@ from nuvel_mcp import recipes  # noqa: E402
     ("/plugin/name", lambda r: r["plugin"].update(name="pedro.garcia:6:1:2:3:4:5:6:7:8")),
     ("/plugin/version", lambda r: r["plugin"].update(version="6123.45.678")),
     ("/plugin/version", lambda r: r["plugin"].update(version="0.4")),
+    ("/plugin/version", lambda r: r["plugin"].update(version="612.345.678")),
     ("/recipe_id", lambda r: r.update(recipe_id=RID.upper())),
     ("/install_id", lambda r: r.update(install_id="{" + IID + "}")),
     ("/version", lambda r: r.update(version=1001)),

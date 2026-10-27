@@ -688,7 +688,7 @@ def mask_text(text: str, lexicon: Lexicon, abbreviations: frozenset[str] | None 
 # Structured (non-free-text) fields are copied only from this allowlist, and
 # only when their value is in a closed set or has a fixed, digit-bounded shape.
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-_SEMVER_RE = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}")
+_SEMVER_RE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{1,2}")  # ≤ 6 digits: no room for a phone number
 _LANGUAGE_RE = re.compile(r"[a-z]{2}")
 SCHEMA_ID = "nuvel.recipe/2"
 _TOOL_KINDS = frozenset({"email", "calendar", "chat", "docs", "storage", "tasks", "web", "none"})
