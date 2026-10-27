@@ -11,6 +11,7 @@ like they carry customer detail. False positives are acceptable.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from . import traces
 
@@ -31,15 +32,26 @@ def validate_recipe(doc: object) -> list[str]:
 
 
 
+_EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+_DIGIT_RUN_RE = re.compile(r"\d(?:[\s.-]?\d){5,}")
+_CURRENCY_WORDS = r"(?:eur|euros?|usd|gbp|d[oó]lares?|libras?)\b"
 _PII_PATTERNS = (
-    re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+"),                       # email
+    _EMAIL_RE,
     re.compile(r"(?:https?://|www\.)", re.IGNORECASE),             # URL
+    re.compile(r"(?<![\w.-])[a-z0-9][a-z0-9-]*\.[a-z]{2,24}\b", re.IGNORECASE),  # bare domain
     re.compile(r"\+?\d[\d\s().-]{7,}\d"),                          # phone
     re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9 ]{10,}"),                  # IBAN-like
-    re.compile(r"\d(?:[\s.-]?\d){5,}"),                            # long digit run
-    re.compile(r"[€$£]\s?\d|\d[\d.,]*\s?(?:€|EUR\b|USD\b|\$|£)"),  # currency
+    _DIGIT_RUN_RE,                                                 # long digit run
+    re.compile(r"[€$£¥]\s?\d|\d[\d.,]*\s?(?:[€$£¥]|" + _CURRENCY_WORDS + ")"
+               r"|\b(?:eur|usd|gbp)\s?\d", re.IGNORECASE),      # currency
 )
 _BREAK_CHARS = ".,;:!?()[]{}\"'“”«»"
+
+
+def _is_capitalised_word(word: str) -> bool:
+    """Uppercase first letter; letters joined by ``-``, ``'`` or ``’`` (García-López, O'Brien)."""
+    parts = re.split(r"[-'’]", word)
+    return bool(word) and word[0].isupper() and all(p.isalpha() for p in parts)
 
 
 def _capitalised_run(text: str) -> bool:
@@ -47,7 +59,7 @@ def _capitalised_run(text: str) -> bool:
     run = 0
     for index, token in enumerate(text.split()):
         word = token.strip(_BREAK_CHARS)
-        if index > 0 and word.isalpha() and word[0].isupper():
+        if index > 0 and _is_capitalised_word(word):
             run += 1
             if run >= 2:
                 return True
@@ -59,24 +71,35 @@ def _capitalised_run(text: str) -> bool:
 
 
 def _text_matches(text: str) -> bool:
+    text = unicodedata.normalize("NFKC", text)  # fullwidth '＠' etc. -> ASCII
     return any(p.search(text) for p in _PII_PATTERNS) or _capitalised_run(text)
 
 
+def _id_matches(text: str) -> bool:
+    """Identifier-shaped fields (step action, signal category): emails and digit runs only."""
+    text = unicodedata.normalize("NFKC", text)
+    return _EMAIL_RE.search(text) is not None or _DIGIT_RUN_RE.search(text) is not None
+
+
 def _text_fields(recipe: dict):
-    """Yield ``(pointer, text)`` for every screened text field, in document order."""
+    """Yield ``(pointer, text, matcher)`` for every screened field, in document order."""
     for key in ("title", "when_to_use"):
         if isinstance(recipe.get(key), str):
-            yield f"/{key}", recipe[key]
+            yield f"/{key}", recipe[key], _text_matches
     steps = recipe.get("steps")
     if isinstance(steps, list):
         for i, step in enumerate(steps):
-            if isinstance(step, dict) and isinstance(step.get("text"), str):
-                yield f"/steps/{i}/text", step["text"]
+            if not isinstance(step, dict):
+                continue
+            if isinstance(step.get("action"), str):
+                yield f"/steps/{i}/action", step["action"], _id_matches
+            if isinstance(step.get("text"), str):
+                yield f"/steps/{i}/text", step["text"], _text_matches
     pitfalls = recipe.get("pitfalls")
     if isinstance(pitfalls, list):
         for i, item in enumerate(pitfalls):
             if isinstance(item, str):
-                yield f"/pitfalls/{i}", item
+                yield f"/pitfalls/{i}", item, _text_matches
 
 
 def screen_recipe(recipe: dict) -> list[str]:
@@ -84,4 +107,13 @@ def screen_recipe(recipe: dict) -> list[str]:
     document order). Matched text is never returned."""
     if not isinstance(recipe, dict):
         return []
-    return list(dict.fromkeys(path for path, text in _text_fields(recipe) if _text_matches(text)))
+    return list(dict.fromkeys(path for path, text, matches in _text_fields(recipe) if matches(text)))
+
+
+def screen_signal(signal: dict) -> list[str]:
+    """JSON-pointer paths of signal fields (``/category``) that look like an email
+    or a long digit run. Paths only; matched text is never returned."""
+    if not isinstance(signal, dict):
+        return []
+    category = signal.get("category")
+    return ["/category"] if isinstance(category, str) and _id_matches(category) else []

@@ -128,3 +128,34 @@ def test_screen_covers_all_text_fields_in_order_without_values():
 def test_screen_allows_capitalised_word_at_start():
     assert recipes.screen_recipe(_with_text("Revisar. Cliente Importante")) == ["/steps/0/text"]
     assert recipes.screen_recipe(_with_text("Cliente Importante pide algo")) == []
+
+
+@pytest.mark.parametrize("text", [
+    "Enviar a Ana García-López el resumen", "Enviar a Juan O'Brien", "Enviar a Juan O’Brien",
+    "Pagar EUR 1250", "Pagar USD 300", "Pagar GBP 20", "Pagar 300 eur", "Pagar 300 euros",
+    "Pagar 20 dólares", "Pagar ¥300", "Abrir acme.com/precios", "Mirar acme.es",
+    "Escribir a marta＠acme.com",
+])
+def test_screen_blocks_round1(text):
+    assert recipes.screen_recipe(_with_text(text)) == ["/steps/0/text"]
+
+
+@pytest.mark.parametrize("text", [
+    "p. ej. revisar el acta", "e.g. check the agenda", "versión 2.1", "Revisar el acta, etc.",
+    "Calcular 3,5 de media",
+])
+def test_screen_allows_round1(text):
+    assert recipes.screen_recipe(_with_text(text)) == []
+
+
+def test_screen_action_field():
+    step = {"action": "llamar_600123456", "tool_kind": "none", "text": "Revisar"}
+    assert recipes.screen_recipe(RECIPE | {"steps": [step]}) == ["/steps/0/action"]
+    step = {"action": "a@b.co", "tool_kind": "none", "text": "Revisar"}
+    assert recipes.screen_recipe(RECIPE | {"steps": [step]}) == ["/steps/0/action"]
+
+
+def test_screen_signal():
+    assert recipes.screen_signal(SIGNAL) == []
+    assert recipes.screen_signal(SIGNAL | {"category": "ventas-600123456"}) == ["/category"]
+    assert recipes.screen_signal(SIGNAL | {"category": "x@acme.com"}) == ["/category"]
