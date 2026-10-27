@@ -160,8 +160,9 @@ _recipes/recipes/{tenant_key}/{recipe_id}/v{version}.json   one file per recipe 
 ```
 
 Records carry the server-set `tenant` when there is one, and `at` is truncated to the
-UTC minute. Writers in different processes can leave duplicate signal lines, so
-readers dedupe by `(tenant, signal_id)`.
+UTC minute. Writers in different processes can leave duplicate signal lines; readers
+take the latest signal per `(tenant, recipe_id)` (below), which makes duplicate
+lines harmless.
 
 Because counters are cumulative, `nuvel traces recipes` and the dashboard's
 `/recipes` page take, per `(tenant, recipe_id)`, the signal with the latest `at` (the
