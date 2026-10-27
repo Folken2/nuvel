@@ -6,7 +6,7 @@
 <h1 class="ed-h1">
   {% if candidates %}Recipe candidates. <span class="accent">{{ total_uses }}</span> uses.{% else %}No recipe signals yet.{% endif %}
 </h1>
-<div class="ed-sub">By category · counters from each recipe's latest signal · anonymised, shared copies only</div>
+<div class="ed-sub">By category · counters from each recipe's latest signal · masked, shared copies only</div>
 
 {% if skipped_v1 %}<div class="ed-sub">{{ skipped_v1 }} older recipe file{{ '' if skipped_v1 == 1 else 's' }} (pre-masking format) not shown</div>{% endif %}
 {% if candidates %}
@@ -16,7 +16,7 @@
 .chip-masked{background:#fdecc8;color:#8a5a00}
 </style>
 <table class="ed-steps">
-  <thead><tr><th>Category</th><th>Recipes</th><th>Tenants</th><th>Uses</th><th>Success</th><th>Corrections</th><th>Latest anonymised version</th></tr></thead>
+  <thead><tr><th>Category</th><th>Recipes</th><th>Tenants</th><th>Uses</th><th>Success</th><th>Corrections</th><th>Latest masked version</th></tr></thead>
   <tbody>
   {% for c in candidates %}
     <tr>

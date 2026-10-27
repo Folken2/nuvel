@@ -1,6 +1,8 @@
 """nuvel.recipe_signal/1 and nuvel.recipe/2 schemas, validator keywords and the signal screen."""
 
 import json
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -95,6 +97,20 @@ def test_action_enum_exact():
 
 def test_placeholder_enum_exact():
     assert _step_schema()["slots"]["items"]["enum"] == PLACEHOLDERS == list(masking.PLACEHOLDER_TYPES)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("NUVEL_PLUGINS_DIR"),
+    reason="set NUVEL_PLUGINS_DIR to a nuvel-plugins checkout to compare with its recipe-actions.md",
+)
+def test_actions_match_plugin_catalogue():
+    ref = Path(os.environ["NUVEL_PLUGINS_DIR"]) / "plugins/chief-of-staff/references/recipe-actions.md"
+    text = ref.read_text(encoding="utf-8")
+    actions_part, placeholders_part = text.split("## Placeholders")
+    actions = re.findall(r"^- `([a-z_]+)` — ", actions_part.split("## Actions")[1], flags=re.M)
+    placeholders = re.findall(r"^- `\{([a-z]+)\}` — ", placeholders_part, flags=re.M)
+    assert actions == _step_schema()["action"]["enum"] == list(recipes.ACTIONS)
+    assert placeholders == _step_schema()["slots"]["items"]["enum"] == list(masking.PLACEHOLDER_TYPES)
 
 
 def test_schema_enums_match_code_constants():

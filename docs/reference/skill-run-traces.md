@@ -138,17 +138,69 @@ set, both tenant-stamped by the server from the OAuth `client_id` (a client-sent
   `signal_id`, `recipe_id`, `install_id` (UUIDs), `plugin` (`name`, `version`),
   `category` (identifier), `event` (`created`, `used`, `succeeded`, `corrected`,
   `retired`), `at`, and the cumulative counters `uses`, `successes`, `corrections`.
-- **`share_recipe`** stores an anonymised `nuvel.recipe/1`: `recipe_id`,
-  `install_id`, `plugin`, `version`, `category`, `language`, `title` (80 characters
-  at most), `when_to_use` (200), `steps` (1 to 15 of `{action, tool_kind, text}` with
-  `tool_kind` one of `email`, `calendar`, `chat`, `docs`, `storage`, `tasks`, `web`,
-  `none` and `text` 160 at most) and `pitfalls` (5 at most, 160 each). The schema is
-  closed. The server also screens every text field for emails, phone numbers, URLs,
-  long digit runs, currency amounts and capitalised multi-word sequences, and rejects
-  the whole recipe on a match, naming field paths only.
+- **`share_recipe`** stores a `nuvel.recipe/2`: the structure of a recipe plus free
+  text that the server masks before anything is kept. See
+  [Shared recipes (`nuvel.recipe/2`)](#shared-recipes-nuvelrecipe2) below.
 
-The JSON Schemas are `recipe_signal.v1.schema.json` and `recipe.v1.schema.json` in
-`nuvel_mcp/schemas/`.
+The JSON Schemas are `recipe_signal.v1.schema.json` and `recipe.v2.schema.json` in
+`nuvel_mcp/schemas/`. `nuvel.recipe/1` and its schema were removed (never released);
+a `/1` call is rejected as `/schema`.
+
+### Shared recipes (`nuvel.recipe/2`)
+
+A shared recipe has a closed **structure** and a few **free-text** fields. The schema is
+closed at every level: a key it does not list is rejected, and `tenant` and `masking`
+are stamped by the server and rejected from clients.
+
+| field | content |
+|---|---|
+| `schema`, `recipe_id`, `install_id`, `plugin`, `version`, `category`, `language` | identifiers. `plugin.name` and `category` come from closed lists; `plugin.version` matches `^\d{1,2}\.\d{1,2}\.\d{1,2}$`; `version` is 1 to 1000; `language` is two lowercase letters. |
+| `steps` | 1 to 15 of `{action, tool_kind, slots, note?}`. `action` is one of 26 verbs (`search`, `read`, `summarise`, ... `other`); `tool_kind` one of `email`, `calendar`, `chat`, `docs`, `storage`, `tasks`, `web`, `none`; `slots` 0 to 4 different placeholder types (`person`, `company`, `team`, `product`, `project`, `document`, `file`, `folder`, `amount`, `number`, `date`, `time`, `period`, `place`, `email`, `phone`, `url`, `id`, `topic`, `other`). |
+| free text | `title` (80), `when_to_use` (200), each `note` (160), `pitfalls` (5 of 160) and `narrative` (2000), the user's own wording of what was asked and how it was solved. |
+
+**Masking.** Raw free text never reaches disk, the relay, a log line, an exception
+message or a response. `share_recipe` validates the shape, then masks every free-text
+field with a per-language allowlist, checks the result once more, and only then
+stamps, stores and relays the masked copy:
+
+- Each word is kept only if it is in the language's lexicon of common words. Anything
+  else, including names written in lowercase, becomes `{?}`; neighbouring `{?}` collapse
+  into one.
+- Emails, URLs, phone numbers, ids, amounts, numbers and dates are replaced by their
+  type, as `{email}`, `{amount}`, `{date}` and so on. Number words ("dos mil euros")
+  are replaced too. The placeholders a client writes itself are kept.
+- A word that is also in a list of given names, surnames, places or brands is never in
+  a lexicon, even when it is a common word ("rosa", "vega"). Zero leaks wins over
+  readability.
+- A field with more than 40 % of its words masked is dropped whole: `title` and
+  `when_to_use` become `""`, `note`, `pitfalls` and `narrative` are removed. A field with
+  no words is never dropped.
+- The masker never raises on text. If anything inside it fails, the free text is
+  dropped and the structure is kept.
+
+**Lexicons.** Lexicons ship in the package for Spanish (`es`) and English (`en`),
+built by `scripts/build_lexicon.py` from word-frequency sources, minus the name, place
+and brand lists, plus a short reviewed business vocabulary. **Licence rule:** every
+source is public domain or CC0, or a permissive licence (MIT, BSD, ISC, Apache-2.0,
+HPND), or CC-BY without share-alike or non-commercial terms. CC-BY-SA, GPL, LGPL and
+MPL sources are not used. Each source's URL, licence and check date are in
+`nuvel_mcp/lexicon/SOURCES.md`.
+
+**Catalan and other languages.** A language with no lexicon (`ca` today, `pt` or any
+other) is shared as **structure only**: the recipe is recorded, every free-text field
+is dropped and listed in `dropped`. Catalan has no lexicon because, with permissive
+sources only, the tuning corpus still leaked a name that is also a common Catalan
+word. Clients should still send these recipes.
+
+**Response.** All of these carry the recipe's `recipe_id` and `version`:
+
+- `{"status": "recorded", "recipe_id", "version", "masked", "words", "dropped"}`:
+  `masked` of `words` words in the kept free text were replaced; `dropped` lists the
+  JSON pointers of the fields that were dropped (a key the server cannot vouch for
+  appears as `{?}`).
+- `{"status": "duplicate", "recipe_id", "version"}`: that version is already stored.
+- `{"status": "rejected", "errors": [...]}`: field paths only, never values. A key the
+  client chose appears as `*`.
 
 ### Recipe store layout
 
@@ -163,6 +215,9 @@ Records carry the server-set `tenant` when there is one, and `at` is truncated t
 UTC minute. Writers in different processes can leave duplicate signal lines; readers
 take the latest signal per `(tenant, recipe_id)` (below), which makes duplicate
 lines harmless.
+
+The stored recipe is the masked copy, with the server-set `tenant` and a `masking`
+block (`lexicon` version, `masked`, `words`, `dropped`).
 
 Because counters are cumulative, `nuvel traces recipes` and the dashboard's
 `/recipes` page take, per `(tenant, recipe_id)`, the signal with the latest `at` (the

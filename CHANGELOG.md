@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
 - Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.
 - `--tools A,B` allow-list of tool names to expose.
-- `record_recipe_signal` and `share_recipe` tools: store content-free `nuvel.recipe_signal/1` events and anonymised `nuvel.recipe/1` recipes (server-side PII screen, tenant from the OAuth `client_id`); both are in the HTTP default tool set.
-- `nuvel traces recipes` and a **Recipe candidates** page in `nuvel dashboard` (`/recipes`): recipe signals and shared recipes grouped by category (recipes, tenants, uses, success rate, corrections, latest anonymised version). Tenant values are never shown.
+- `record_recipe_signal` and `share_recipe` tools: store content-free `nuvel.recipe_signal/1` events and server-masked `nuvel.recipe/2` recipes (see Changed; tenant from the OAuth `client_id`); both are in the HTTP default tool set.
+- `nuvel traces recipes` and a **Recipe candidates** page in `nuvel dashboard` (`/recipes`): recipe signals and shared recipes grouped by category (recipes, tenants, uses, success rate, corrections, latest masked version). Tenant values are never shown.
 - `record_run_trace` tool: stores content-free `nuvel.skill_run/1` run traces (see `docs/reference/skill-run-traces.md`).
 - `--trace-store local|MODULE:FACTORY` to choose where run traces are kept.
 - `check_skill_health(plugin=...)` adds a `runs` block (30-day outcome counts and errors by step) built from run traces.
@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `share_recipe` takes `nuvel.recipe/2` and `nuvel.recipe/1` is removed (it was never released). A recipe is now structure (26 closed `action` values, `tool_kind`, up to four placeholder `slots`, optional `note`) plus free text (`title`, `when_to_use`, notes, `pitfalls` and a new `narrative` of up to 2000 characters). The v1 `steps[].text` field and the PII-screen rejection of free text are gone: the server masks every free-text field with a per-language allowlist before anything is stored, relayed or logged (unknown words become `{?}`; emails, numbers, amounts, dates and similar become `{type}`), and drops a field more than 40 % masked. Spanish and English ship lexicons built only from permissive sources (no CC-BY-SA, GPL, LGPL or MPL; see `nuvel_mcp/lexicon/SOURCES.md`); Catalan and other languages are shared as structure only, with their free text dropped. The response is `{status: "recorded", recipe_id, version, masked, words, dropped}`, `duplicate`, or `rejected` with paths only (client-chosen keys appear as `*`). The schema is `recipe.v2.schema.json`; `tenant` and `masking` are server-only fields. `nuvel traces recipes` and `/recipes` show the action sequence, slots and masked narrative, and skip any `/1` file with a note.
 - `nuvel mcp serve` without `--skills-dir` used to serve the current directory; it now starts in feedback-only mode. Migrate with `--skills-dir .`.
 - The MCP `initialize` response's `serverInfo.version` is now the installed `nuvel-mcp` version instead of a fixed `1.0.0`.
 - Relay failures (`propose_improvement`, `record_run_trace`) are logged as the exception class plus HTTP status only, never the message or URL, so credentials in `NUVEL_FEEDBACK_URL` cannot reach the logs.

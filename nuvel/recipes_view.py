@@ -5,6 +5,11 @@ Layout (written by ``nuvel_mcp.recipes.LocalRecipeStore``)::
     {root}/_recipes/signals/{YYYY-MM-DD}.jsonl            nuvel.recipe_signal/1
     {root}/_recipes/recipes/{tenant_key}/{recipe_id}/v{N}.json   nuvel.recipe/2
 
+Recipes are ``nuvel.recipe/2``: the closed structure (action sequence, slots) and
+the free text the server already masked (``narrative`` with ``{?}`` and
+``{type}`` placeholders). A recipe file of any other schema (an old ``/1``) is
+skipped and counted, never shown.
+
 Signal counters are cumulative, so per ``(tenant, recipe_id)`` only the signal
 with the greatest ``at`` counts (ties: the later line wins). Unreadable or
 malformed lines and files are skipped. Tenant values are used for grouping only
