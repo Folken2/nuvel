@@ -545,6 +545,9 @@ def main(argv: list[str] | None = None) -> int:
     cache = args.cache.resolve()
     if PKG.parents[1] in cache.parents or cache == PKG.parents[1]:
         sys.exit("the cache must be outside the repository")
+    if args.lang == "ca" and args.out.resolve() == OUT.resolve():
+        # ca fails the zero-leak gate and ships structure-only; never into the package.
+        sys.exit("ca has no shipped lexicon; pass --out to build it elsewhere")
     defaults = json.loads((SRC / "sources.json").read_text(encoding="utf-8"))["build"].get(args.lang, {})
     size = args.size if args.size is not None else defaults.get("size")
     protect = args.protect_top if args.protect_top is not None else defaults.get("protect_top", 0)
