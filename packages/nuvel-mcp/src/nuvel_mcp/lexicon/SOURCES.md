@@ -15,7 +15,7 @@ base lists; none of their entries ships.
 | `tatoeba-cat` | base | CC-BY-2.0-FR | 2026-10-27 | ca | https://tatoeba.org/en/downloads | Catalan base: frequency of lowercase words in Tatoeba sentences (everyday and imperative forms). |
 | `tatoeba-eng` | base | CC-BY-2.0-FR | 2026-10-27 | en | https://tatoeba.org/en/downloads | English base: frequency of lowercase words in Tatoeba sentences (everyday and imperative forms). |
 | `scowl-2020` | base | HPND | 2026-10-27 | en | https://github.com/en-wl/wordlist/blob/master/scowl/Copyright | English base: SCOWL word lists in size-level order (10 = most common). |
-| `scowl-2020-names` | names | HPND | 2026-10-27 | en | https://github.com/en-wl/wordlist/blob/master/scowl/Copyright | English proper names (people, places, brands) from SCOWL's proper-names lists up to level 80 (95 is SCOWL's catch-all tier, with entries such as 'The' and 'If'). |
+| `scowl-2020-names` | names | HPND | 2026-10-27 | en | https://github.com/en-wl/wordlist/blob/master/scowl/Copyright | English proper names (people, places, brands) from all of SCOWL's proper-names lists (levels up to 95). |
 | `wikidata-given-es` | names | CC0-1.0 | 2026-10-27 | es | https://www.wikidata.org/wiki/Wikidata:Licensing | Given names (P735) of Wikidata people citizens of the es region, via the QLever endpoint. |
 | `wikidata-given-en` | names | CC0-1.0 | 2026-10-27 | en | https://www.wikidata.org/wiki/Wikidata:Licensing | Given names (P735) of Wikidata people citizens of the en region, via the QLever endpoint. |
 | `wikidata-given-ca` | names | CC0-1.0 | 2026-10-27 | ca | https://www.wikidata.org/wiki/Wikidata:Licensing | Given names (P735) of Wikidata people citizens of the ca region, via the QLever endpoint. |
@@ -23,6 +23,7 @@ base lists; none of their entries ships.
 | `wikidata-family-en` | names | CC0-1.0 | 2026-10-27 | en | https://www.wikidata.org/wiki/Wikidata:Licensing | Family names (P734) of Wikidata people citizens of the en region, via the QLever endpoint. |
 | `wikidata-family-ca` | names | CC0-1.0 | 2026-10-27 | ca | https://www.wikidata.org/wiki/Wikidata:Licensing | Family names (P734) of Wikidata people citizens of the ca region, via the QLever endpoint. |
 | `wikidata-brands` | brands | CC0-1.0 | 2026-10-27 | ca, en, es | https://www.wikidata.org/wiki/Wikidata:Licensing | Brands and companies with 10+ Wikipedia sitelinks (Wikidata via QLever). |
+| `wikidata-orgs-catalan` | brands | CC0-1.0 | 2026-10-28 | ca, es | https://www.wikidata.org/wiki/Wikidata:Licensing | Companies, businesses, brands and organisations (P31/P279* of Q4830453, Q783794, Q431289 or Q43229) headquartered (P159) or located (P131) in Catalonia, the Valencian Community, the Balearic Islands, Andorra or Pyrenees-Orientales, or with country Andorra; every sitelink count; single-token ca, es, en and mul labels (Wikidata via QLever). |
 | `geonames-cities1000` | places | CC-BY-4.0 | 2026-10-27 | ca, en, es | https://download.geonames.org/export/dump/readme.txt | Populated places with 1000+ inhabitants (not neighbourhoods, PPLX) in the language's countries; name and ASCII name. |
 | `geonames-countries` | places | CC-BY-4.0 | 2026-10-27 | ca, en, es | https://download.geonames.org/export/dump/readme.txt | Country and capital names. |
 | `census-2010-surnames` | names | public-domain | 2026-10-27 | en | https://www.census.gov/topics/population/genealogy/data/2010_surnames.html | US 2010 Census surnames borne by 20,000+ people (about the top 1,700). |
@@ -57,6 +58,8 @@ Long query URLs are shortened here; `sources.json` has them in full.
 - `wikidata-family-en`: <https://qlever.dev/api/wikidata?query=PREFIX+wd%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2F%3E+PREFIX+wdt%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fdirec…> (sha256 `ad96e99350cd8628efc8427008357d6e905c5d2488362f6d21453382855698b0`)
 - `wikidata-family-ca`: <https://qlever.dev/api/wikidata?query=PREFIX+wd%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2F%3E+PREFIX+wdt%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fdirec…> (sha256 `76bc51a63f05d295ae49093958b424f5947fa3d84bf98404852a4e549a0509d8`)
 - `wikidata-brands`: <https://qlever.dev/api/wikidata?query=PREFIX+wd%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2F%3E+PREFIX+wdt%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fdirec…> (sha256 `b1729f5e25b544f71562a559eaf126c4a7b241bcaccd71b2a92aecac2be43437`)
+- `wikidata-orgs-catalan`: <https://qlever.dev/api/wikidata?query=PREFIX+wd%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2F%3E+PREFIX+wdt%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fdirec…> (sha256 `832cdac0a3dea5d6186a61e25e8e27c533acb9a968d11fd0995b28e7a2c78aae`)
+  - Licensing page: 'All data in Wikidata has a CC0 license'. QLever results follow Wikidata, so the pinned sha256 is the copy downloaded on the check date.
 - `geonames-cities1000`: <https://download.geonames.org/export/dump/cities1000.zip> (sha256 `da28572d617c58a98636a561476c5d850f89f2b36996fef3395357bec7ff1f7a`)
 - `geonames-countries`: <https://download.geonames.org/export/dump/countryInfo.txt> (sha256 `c55f638cfaafb4fe45a9aa15120a0f1f78e8a34a8e1847d7b9320cf740fbc9ab`)
 - `census-2010-surnames`: <https://www2.census.gov/topics/genealogy/2010surnames/names.zip> (sha256 `117c41cb4668727b7627b2845b6df3f83eb2a22a1813f42c0ff4bdcab86de135`)
@@ -80,12 +83,15 @@ Long query URLs are shortened here; `sources.json` has them in full.
 - Exemptions (I1 ruling): words in function-<lang>.txt (closed-class words and common adverbs), actions-<lang>.txt (the recipe action catalogue with inflections; es and en) and, for en, the [dates] section (months and weekdays) are kept even when a name, place or brand list carries them. They pass only in lowercase, so a capitalised form mid-sentence is still masked. With every such class kept, the holdout split leaked one marked token in en; dropping the class of auxiliaries, modals and contraction parts from function-en.txt brought it back to zero. The class went as a whole; no single entry was edited.
 - Business nouns (I1 follow-up): in es the reviewed business-es.txt list is exempt too, so words such as 'reunion' (also a place) and 'manana' pass; tune and holdout both stayed at zero leaks. In en the same exemption leaked one marked token on the tune split, so en keeps subtracting business words that a name list carries ('send', 'list', 'forward' and 'wait' still pass through actions-en.txt).
 - Protected top-N (I1 ruling): the N most frequent base words are kept even when a name list carries them. N was chosen on the tune split (1000 gave the best readability with zero tune leaks) and then lowered because the holdout split leaked: es to 300 (0 holdout leaks at 300, 1 at 600), en to 0 (any N from 50 up leaked 1 on holdout). Holdout results were read as counts only.
+- Catalan (addendum 2026-10-28): the ca tune split leaked one lowercase regional brand that is also a common word. The fix is a source class, never an entry: wikidata-orgs-catalan, every company, business, brand or organisation headquartered or located in Catalonia, the Valencian Community, the Balearic Islands, Andorra or Pyrenees-Orientales, at any sitelink count, single-token labels only. It is subtracted from ca and from es (es tune and holdout readability unchanged, zero leaks). Idescat name statistics were not added: their API terms of use are not an allowed licence (no modification, attribution in Idescat's own form), so they are rejected as INE was.
+- Catalan protections (same mechanism as es): business-ca.txt is exempt (tune 0.918 -> 0.931, zero leaks on tune and holdout). Protected top-N was scanned on the tune split over 0, 100, 300, 600, 1000 and 2000: 600 and more leaked one marked given name on tune, so N=300 was chosen first. The blind holdout2 split then leaked one top-300 word that a given-name and surname list carries, so ca uses no top-N protection (N=0; tune 0.933 -> 0.931): the class went as a whole, no entry was edited. The same holdout2 run leaked two Catalan date words; the masker now joins a weekday to its date across a comma or 'dia', reads the numeral 'u' (vint-i-u, l'u) and elided numbers (l'onze), and treats l'octubre like d'octubre.
+- SCOWL proper names (addendum 2026-10-28): the level-80 cap was set before the I1 exemptions, because level 95 lists 'The' and 'If'. Those are now kept as function words, so the cap no longer protects anything and en subtracts every SCOWL proper-names level (up to 95). This followed an en leak on the blind holdout2 split (a capitalised surname that is also a common word, at a sentence start); the change is the whole tier, no entry was edited. en tune 0.865 -> 0.851, holdout 0.839 -> 0.824, zero leaks on both.
 
 ## Languages
 
-- `ca`: structure only. With every permissive source above, the tune split still leaks one marked token: a lowercase brand that is also a common Catalan word, which no permissive name, place or brand list contains; adding it by hand is not allowed. Inputs are kept so the language can be switched on when a source is found.
+- `ca`: ships (base size 25000). Suffix clitics ('l, -ho...) are read by the masker: at most one apostrophe clitic and two hyphen clitics after a one-word stem that is itself in the lexicon.
 - `en`: ships (base size 25000).
-- `es`: ships (base size 25000).
+- `es`: ships (base size 25000). The blind holdout2 split has one known leak: a lowercase common Spanish word used as a client's brand or name, which no permissive name, place, brand or organisation list carries (recorded in the corpus gate).
 
 Hand-written inputs (`business-*`, `numbers-*`, `dates-*`, `currency-*`,
 `abbreviations.txt`) are part of this repository, under its MIT licence.
@@ -93,7 +99,7 @@ Hand-written inputs (`business-*`, `numbers-*`, `dates-*`, `currency-*`,
 ## SCOWL copyright and permission notices
 
 The English lexicon is derived from SCOWL word lists (levels 10-50) and
-subtracts its proper-names lists (up to level 80). SCOWL's `Copyright`
+subtracts its proper-names lists (all levels, up to 95). SCOWL's `Copyright`
 file, reproduced in full as its notices require:
 
 ```

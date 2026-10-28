@@ -103,6 +103,8 @@ def test_wheel_carries_the_lexicons(tmp_path):
                 if p.suffix in (".txt", ".md")}
     assert "nuvel_mcp/lexicon/SOURCES.md" in expected
     assert "nuvel_mcp/lexicon/abbreviations.txt" in expected
+    for lang in ("es", "en", "ca"):  # every shipped language, Catalan included
+        assert f"nuvel_mcp/lexicon/{lang}.txt" in expected
     _build_wheel(pkg, tmp_path)
     names = set(zipfile.ZipFile(next(tmp_path.glob("nuvel_mcp-*.whl"))).namelist())
     assert expected <= names, sorted(expected - names)

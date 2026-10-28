@@ -26,6 +26,7 @@ cama
 verano
 sociedad
 domingo
+frio
 sol
 victoria
 duro
@@ -83,6 +84,7 @@ azul
 pese
 real
 julio
+interior
 verde
 barco
 vale
@@ -155,6 +157,7 @@ proteccion
 salido
 dura
 pajaros
+venga
 corona
 reina
 salto
@@ -222,6 +225,7 @@ blancas
 canal
 amarillo
 das
+tales
 quito
 gordo
 viva
@@ -243,6 +247,7 @@ guardia
 carreras
 forman
 linda
+famosa
 palacio
 escala
 milagro
@@ -252,6 +257,7 @@ granja
 pura
 muro
 regla
+disfrutar
 lobo
 maiz
 torre
@@ -259,6 +265,7 @@ continente
 seco
 castillo
 grados
+areas
 revelo
 hierro
 lindo
@@ -279,6 +286,7 @@ estable
 china
 patria
 barba
+ideal
 tercero
 rojas
 resistencia
@@ -313,6 +321,7 @@ niebla
 paredes
 argentina
 vela
+ensayo
 comas
 comes
 pilotos
@@ -326,6 +335,7 @@ conejo
 pego
 federacion
 amar
+emperador
 frutos
 oi
 sabian
@@ -342,6 +352,8 @@ bienvenida
 carino
 bote
 norma
+textos
+princesa
 dios
 justa
 pesa
@@ -366,6 +378,7 @@ mate
 presidio
 apartado
 vera
+provisional
 aman
 santo
 informa
@@ -436,6 +449,7 @@ corredor
 roca
 iran
 heredero
+estaras
 generoso
 presa
 castellano
@@ -485,17 +499,3 @@ marino
 viera
 encarna
 arco
-inocencia
-lino
-camina
-selva
-barrera
-mascota
-telefonica
-pizarra
-armada
-rota
-reyes
-aguila
-leia
-tijeras

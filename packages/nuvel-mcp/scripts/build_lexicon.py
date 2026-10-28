@@ -19,7 +19,9 @@ Steps (spec §4.2):
 3. entries are folded with ``nuvel_mcp.masking.fold`` and only alphabetic
    entries of two or more letters are kept;
 4. every entry of the language's given-name, surname, place and brand lists
-   (folded the same way) is subtracted, except the exempt classes (I1
+   (folded the same way; for ca and es this includes the companies, brands
+   and organisations located in the Catalan-speaking regions) is
+   subtracted, except the exempt classes (I1
    ruling): ``function-{lang}.txt`` (closed-class words and common adverbs),
    ``actions-{lang}.txt`` (the action catalogue with inflections), the
    English ``dates`` section, the ``protect_top`` most frequent base words,
@@ -77,7 +79,8 @@ NUMBER_WORDS_KEPT = {"ca": {"un", "una"}, "en": set(), "es": {"un", "una"}}
 
 _WORD = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*")
 _PARTS = re.compile(r"['’\-]")
-USER_AGENT = "nuvel-lexicon-build/1 (+https://github.com/Folken2/nuvel)"
+# No email or name: the only identification sent to any source.
+USER_AGENT = "nuvel-lexicon-build (+https://github.com/Folken2/nuvel)"
 REMOVED_SAMPLE = 500
 
 
@@ -422,7 +425,7 @@ def write_sources_md(config: dict, out_dir: Path, cache: Path, fetch: bool) -> N
              "`abbreviations.txt`) are part of this repository, under its MIT licence.", ""]
     rows += ["## SCOWL copyright and permission notices", "",
              "The English lexicon is derived from SCOWL word lists (levels 10-50) and",
-             "subtracts its proper-names lists (up to level 80). SCOWL's `Copyright`",
+             "subtracts its proper-names lists (all levels, up to 95). SCOWL's `Copyright`",
              "file, reproduced in full as its notices require:", "", "```",
              scowl_copyright(config, cache, fetch).rstrip("\n"), "```", ""]
     (out_dir / "SOURCES.md").write_text("\n".join(rows), encoding="utf-8")
@@ -545,9 +548,6 @@ def main(argv: list[str] | None = None) -> int:
     cache = args.cache.resolve()
     if PKG.parents[1] in cache.parents or cache == PKG.parents[1]:
         sys.exit("the cache must be outside the repository")
-    if args.lang == "ca" and args.out.resolve() == OUT.resolve():
-        # ca fails the zero-leak gate and ships structure-only; never into the package.
-        sys.exit("ca has no shipped lexicon; pass --out to build it elsewhere")
     defaults = json.loads((SRC / "sources.json").read_text(encoding="utf-8"))["build"].get(args.lang, {})
     size = args.size if args.size is not None else defaults.get("size")
     protect = args.protect_top if args.protect_top is not None else defaults.get("protect_top", 0)

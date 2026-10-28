@@ -751,7 +751,6 @@ def test_invariant_checks_dropped(dropped, hits):
 @pytest.mark.parametrize("text", [
     "con t'i'm", "con s'i'd", "con d'l's", "con t’i’m", "con s’i’d", "con d’l’s",
     "con d's",           # no part of two letters
-    "con informe'l",     # a prefix elision on the last part
     "con l'informe's",   # a prefix and a suffix elision: no language allows both
 ])
 def test_chained_elisions_masked_in_every_language(language, text):
@@ -760,11 +759,18 @@ def test_chained_elisions_masked_in_every_language(language, text):
     assert invariant_hits({"narrative": masked(text, lx)}) == []
 
 
+@pytest.mark.parametrize("language", ["en", "es", "xx"])
+def test_prefix_elision_on_the_last_part_masked(language):
+    # In Catalan "informe'l" is a verb with a suffix clitic (test_ca_clitics_pass).
+    lx = lex({"con", "l", "informe"}, language=language)
+    assert masked("con informe'l", lx) == "con {?}"
+
+
 @pytest.mark.parametrize("language, text, expected", [
     ("ca", "con l'informe", "con l'informe"),
     ("ca", "con l’informe d'avui", "con l’informe d'avui"),
     ("ca", "con s'am i n'an, m'an t'an", "con s'am i n'an, m'an t'an"),
-    ("ca", "con it's", "con {?}"),               # English suffixes are not Catalan
+    ("ca", "con it'd", "con {?}"),               # English suffixes are not Catalan ('s is a Catalan clitic)
     ("ca", "con I'm", "con {?}"),
     ("en", "con s'am", "con {?}"),               # prefix elisions are Catalan only
     ("en", "con d'an", "con {?}"),
@@ -910,3 +916,106 @@ def test_standalone_single_letters(language, text, expected):
 def test_invariant_flags_lone_letters_outside_the_standalone_set(language, text):
     rec = {"narrative": text} if language is None else {"language": language, "narrative": text}
     assert "/narrative" in invariant_hits(rec)
+
+
+# --- Catalan clitics (spec addendum 2026-10-28) --------------------------------
+
+CA_CLITIC_LEXICON = {"envia", "fes", "recorda", "dona", "porta", "compara", "con", "informe", "me", "li",
+                     "ho", "ne", "la", "a"}
+
+
+@pytest.mark.parametrize("text", [
+    "envia'l", "fes-ho", "recorda'm", "dona-li",
+    "envia'ls", "envia'ns", "envia'n", "porta-ho", "dona-me-la", "porta-me'l", "compara'ls-hi",
+    "fes-hi", "fes-ne", "fes-te", "fes-se", "fes-nos", "fes-vos", "fes-los", "fes-les", "fes-lo",
+    "Envia'l a la porta",                   # sentence start
+    "envia’l", "recorda’m",                 # typographic apostrophe
+])
+def test_ca_clitics_pass(text):
+    lx = lex(CA_CLITIC_LEXICON | {"porta"}, language="ca")
+    assert masked(text, lx) == text
+    assert invariant_hits({"language": "ca", "narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("text", [
+    "envia'l'm'n",         # three apostrophe clitics: a chain spelling a name
+    "envia'l'm",           # at most one apostrophe-suffix group
+    "fes-me-li-ho-ne",     # four hyphen clitics
+    "fes-me-li-ho",        # at most two
+    "pere-li",             # the stem is not a lexicon word
+    "pere'l",
+    "a-li", "a'l",         # a stem of one letter
+    "l'envia'l",           # a prefix elision and a suffix clitic together
+    "envia'L",             # a capitalised clitic mid-sentence
+    "envia'x", "fes-xo",   # not clitics: the generic rule applies
+])
+def test_ca_clitic_chains(text):
+    lx = lex(CA_CLITIC_LEXICON | {"l", "m", "n", "x"}, language="ca")
+    assert masked("con " + text, lx) == "con {?}"
+
+
+@pytest.mark.parametrize("language", ["en", "es", "xx"])
+def test_ca_clitics_are_catalan_only(language):
+    lx = lex(CA_CLITIC_LEXICON | {"l"}, language=language)
+    assert masked("con envia'l", lx) == "con {?}"   # en has 's 't 'm 'd only; es and xx none
+    assert masked("con envia'ls", lx) == "con {?}"
+
+
+@pytest.mark.parametrize("text", [
+    "envia'l'm'n", "envia'l'm", "fes-me-li-ho-ne", "fes-me-li-ho", "l'envia'l", "a-li", "a'l",
+    "con envia'ls'hi i tot",
+])
+def test_invariant_flags_ca_clitic_chains(text):
+    assert "/narrative" in invariant_hits({"language": "ca", "narrative": text})
+
+
+@pytest.mark.parametrize("text", ["envia'l", "fes-ho", "dona-me-la", "porta-me'l", "pere-li"])
+def test_invariant_allows_ca_clitics(text):
+    # The invariant checks shape only: "pere-li" is caught by the masker's lexicon.
+    assert invariant_hits({"language": "ca", "narrative": text}) == []
+
+
+# --- Dates: weekdays joined by a comma or "dia", Catalan "u" and elided numbers --
+
+DATE_LEXICON = dict(
+    words={"el", "la", "de", "dia", "ens", "veiem", "paga", "nos", "vemos", "entrega", "a", "i", "y",
+           "see", "you", "on", "the", "un", "una", "maig", "dilluns", "lunes", "mayo"},
+    numbers={"vint", "trenta", "onze", "cinc", "cinco", "un", "una", "five"},
+    dates={"maig", "dilluns", "dimecres", "octubre", "lunes", "mayo", "monday", "may"},
+)
+
+
+@pytest.mark.parametrize("language, text, expected", [
+    ("ca", "ens veiem dilluns, 5 de maig", "ens veiem {date}"),
+    ("ca", "ens veiem el dilluns dia 5 de maig", "ens veiem el {date}"),
+    ("ca", "ens veiem dimecres dia 12", "ens veiem {date}"),
+    ("ca", "ens veiem el 5 de maig, dilluns", "ens veiem el {date}"),
+    ("ca", "ens veiem dilluns, a la tarda", "ens veiem dilluns, a la {?}"),   # a bare weekday passes
+    ("es", "nos vemos el lunes, 5 de mayo", "nos vemos el {date}"),
+    ("es", "nos vemos el lunes día 5", "nos vemos el {date}"),
+    ("en", "see you on monday, may 5", "see you on {date}"),
+])
+def test_weekday_joined_to_a_date_by_comma_or_day_word(language, text, expected):
+    lx = lex(language=language, **DATE_LEXICON)
+    assert masked(text, lx) == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("ens veiem el vint-i-u de maig", "ens veiem el {date}"),
+    ("ens veiem el trenta-u de maig", "ens veiem el {date}"),
+    ("ens veiem l'u de maig", "ens veiem {date}"),
+    ("ens veiem l'onze de maig", "ens veiem {date}"),
+    ("ens veiem l’onze de maig", "ens veiem {date}"),
+    ("paga el dia u", "paga el dia {number}"),
+    ("entrega l'octubre de 2027", "entrega {date}"),
+])
+def test_catalan_numeral_u_and_elided_numbers(text, expected):
+    lx = lex(language="ca", **DATE_LEXICON)
+    assert masked(text, lx) == expected
+
+
+@pytest.mark.parametrize("language", ["es", "en", "xx"])
+def test_numeral_u_and_number_elisions_are_catalan_only(language):
+    lx = lex(language=language, **DATE_LEXICON)
+    assert masked("el dia u", lx) == "el dia {?}"
+    assert masked("de l'onze", lx) == "de {?}"

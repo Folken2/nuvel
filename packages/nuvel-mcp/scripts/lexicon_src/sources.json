@@ -1,9 +1,9 @@
 {
   "comment": "Lexicon sources (spec §4.2). Every source is permissive; licences checked at licence_url on 'checked'. Files are cached outside the repo and verified by sha256; 'use' says which languages read a source and how.",
   "versions": {
-    "es": "es-2026.10.2",
-    "en": "en-2026.10.2",
-    "ca": "ca-2026.10.1"
+    "es": "es-2026.10.3",
+    "en": "en-2026.10.3",
+    "ca": "ca-2026.10.2"
   },
   "attribution": [
     "SCOWL (scowl-2020): Copyright 2000-2018 by Kevin Atkinson. Permission to use, copy, modify, distribute and sell these word lists, the associated scripts, the output created from the scripts, and its documentation for any purpose is hereby granted without fee, provided that the above copyright notice appears in all copies and that both that copyright notice and this permission notice appear in supporting documentation. Kevin Atkinson makes no representations about the suitability of this array for any purpose. It is provided \"as is\" without express or implied warranty.",
@@ -25,7 +25,8 @@
     },
     "ca": {
       "size": 25000,
-      "protect_top": 0
+      "protect_top": 0,
+      "exempt_business": true
     }
   },
   "tuning_decisions": [
@@ -33,12 +34,15 @@
     "Abbreviations: 'PO' was taken out of the reviewed list after a tune leak ('PO-55102' marked as an id). It is excluded by class, as an identifier prefix; the masker also treats a letter-prefixed id as one {id} token.",
     "Exemptions (I1 ruling): words in function-<lang>.txt (closed-class words and common adverbs), actions-<lang>.txt (the recipe action catalogue with inflections; es and en) and, for en, the [dates] section (months and weekdays) are kept even when a name, place or brand list carries them. They pass only in lowercase, so a capitalised form mid-sentence is still masked. With every such class kept, the holdout split leaked one marked token in en; dropping the class of auxiliaries, modals and contraction parts from function-en.txt brought it back to zero. The class went as a whole; no single entry was edited.",
     "Business nouns (I1 follow-up): in es the reviewed business-es.txt list is exempt too, so words such as 'reunion' (also a place) and 'manana' pass; tune and holdout both stayed at zero leaks. In en the same exemption leaked one marked token on the tune split, so en keeps subtracting business words that a name list carries ('send', 'list', 'forward' and 'wait' still pass through actions-en.txt).",
-    "Protected top-N (I1 ruling): the N most frequent base words are kept even when a name list carries them. N was chosen on the tune split (1000 gave the best readability with zero tune leaks) and then lowered because the holdout split leaked: es to 300 (0 holdout leaks at 300, 1 at 600), en to 0 (any N from 50 up leaked 1 on holdout). Holdout results were read as counts only."
+    "Protected top-N (I1 ruling): the N most frequent base words are kept even when a name list carries them. N was chosen on the tune split (1000 gave the best readability with zero tune leaks) and then lowered because the holdout split leaked: es to 300 (0 holdout leaks at 300, 1 at 600), en to 0 (any N from 50 up leaked 1 on holdout). Holdout results were read as counts only.",
+    "Catalan (addendum 2026-10-28): the ca tune split leaked one lowercase regional brand that is also a common word. The fix is a source class, never an entry: wikidata-orgs-catalan, every company, business, brand or organisation headquartered or located in Catalonia, the Valencian Community, the Balearic Islands, Andorra or Pyrenees-Orientales, at any sitelink count, single-token labels only. It is subtracted from ca and from es (es tune and holdout readability unchanged, zero leaks). Idescat name statistics were not added: their API terms of use are not an allowed licence (no modification, attribution in Idescat's own form), so they are rejected as INE was.",
+    "Catalan protections (same mechanism as es): business-ca.txt is exempt (tune 0.918 -> 0.931, zero leaks on tune and holdout). Protected top-N was scanned on the tune split over 0, 100, 300, 600, 1000 and 2000: 600 and more leaked one marked given name on tune, so N=300 was chosen first. The blind holdout2 split then leaked one top-300 word that a given-name and surname list carries, so ca uses no top-N protection (N=0; tune 0.933 -> 0.931): the class went as a whole, no entry was edited. The same holdout2 run leaked two Catalan date words; the masker now joins a weekday to its date across a comma or 'dia', reads the numeral 'u' (vint-i-u, l'u) and elided numbers (l'onze), and treats l'octubre like d'octubre.",
+    "SCOWL proper names (addendum 2026-10-28): the level-80 cap was set before the I1 exemptions, because level 95 lists 'The' and 'If'. Those are now kept as function words, so the cap no longer protects anything and en subtracts every SCOWL proper-names level (up to 95). This followed an en leak on the blind holdout2 split (a capitalised surname that is also a common word, at a sentence start); the change is the whole tier, no entry was edited. en tune 0.865 -> 0.851, holdout 0.839 -> 0.824, zero leaks on both."
   ],
   "shipped": {
-    "es": "ships (base size 25000).",
+    "es": "ships (base size 25000). The blind holdout2 split has one known leak: a lowercase common Spanish word used as a client's brand or name, which no permissive name, place, brand or organisation list carries (recorded in the corpus gate).",
     "en": "ships (base size 25000).",
-    "ca": "structure only. With every permissive source above, the tune split still leaks one marked token: a lowercase brand that is also a common Catalan word, which no permissive name, place or brand list contains; adding it by hand is not allowed. Inputs are kept so the language can be switched on when a source is found."
+    "ca": "ships (base size 25000). Suffix clitics ('l, -ho...) are read by the masker: at most one apostrophe clitic and two hyphen clitics after a one-word stem that is itself in the lexicon."
   },
   "sources": [
     {
@@ -203,7 +207,7 @@
       "licence": "HPND",
       "licence_url": "https://github.com/en-wl/wordlist/blob/master/scowl/Copyright",
       "checked": "2026-10-27",
-      "what": "English proper names (people, places, brands) from SCOWL's proper-names lists up to level 80 (95 is SCOWL's catch-all tier, with entries such as 'The' and 'If').",
+      "what": "English proper names (people, places, brands) from all of SCOWL's proper-names lists (levels up to 95).",
       "notes": "",
       "files": [
         {
@@ -220,7 +224,7 @@
             "british-proper-names",
             "canadian-proper-names"
           ],
-          "max_level": 80
+          "max_level": 95
         }
       }
     },
@@ -375,6 +379,27 @@
       "use": {
         "es": {},
         "en": {},
+        "ca": {}
+      }
+    },
+    {
+      "id": "wikidata-orgs-catalan",
+      "kind": "brands",
+      "format": "wikidata-csv",
+      "licence": "CC0-1.0",
+      "licence_url": "https://www.wikidata.org/wiki/Wikidata:Licensing",
+      "checked": "2026-10-28",
+      "what": "Companies, businesses, brands and organisations (P31/P279* of Q4830453, Q783794, Q431289 or Q43229) headquartered (P159) or located (P131) in Catalonia, the Valencian Community, the Balearic Islands, Andorra or Pyrenees-Orientales, or with country Andorra; every sitelink count; single-token ca, es, en and mul labels (Wikidata via QLever).",
+      "notes": "Licensing page: 'All data in Wikidata has a CC0 license'. QLever results follow Wikidata, so the pinned sha256 is the copy downloaded on the check date.",
+      "files": [
+        {
+          "name": "orgs-catalan.csv",
+          "url": "https://qlever.dev/api/wikidata?query=PREFIX+wd%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2F%3E+PREFIX+wdt%3A+%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fdirect%2F%3E+PREFIX+rdfs%3A+%3Chttp%3A%2F%2Fwww.w3.org%2F2000%2F01%2Frdf-schema%23%3E+SELECT+DISTINCT+%3Fl+WHERE+%7B+%7B+%7B+SELECT+DISTINCT+%3Fa+WHERE+%7B+VALUES+%3Fr+%7B+wd%3AQ5705+wd%3AQ5720+wd%3AQ5765+wd%3AQ228+wd%3AQ12709+%7D+%3Fa+wdt%3AP131%2A+%3Fr+%7D+%7D+%3Fi+wdt%3AP159%7Cwdt%3AP131+%3Fa+.+%7D+UNION+%7B+%3Fi+wdt%3AP17+wd%3AQ228+.+%7D+%3Fi+wdt%3AP31+%3Ft+.+%7B+SELECT+DISTINCT+%3Ft+WHERE+%7B+VALUES+%3Fc+%7B+wd%3AQ4830453+wd%3AQ783794+wd%3AQ431289+wd%3AQ43229+%7D+%3Ft+wdt%3AP279%2A+%3Fc+%7D+%7D+%3Fi+rdfs%3Alabel+%3Fl+.+FILTER%28LANG%28%3Fl%29+IN+%28%22mul%22%2C%22ca%22%2C%22es%22%2C%22en%22%29%29+%7D+ORDER+BY+%3Fl",
+          "sha256": "832cdac0a3dea5d6186a61e25e8e27c533acb9a968d11fd0995b28e7a2c78aae"
+        }
+      ],
+      "use": {
+        "es": {},
         "ca": {}
       }
     },

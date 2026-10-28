@@ -334,6 +334,18 @@ _BREAK_RE = re.compile(r"\n|[.!?:][\"'”’»)\]]*\s")
 # ("15 de marzo", "mil de euros", "fifteenth of march", "15 d'abril").
 _NUM_JOIN = frozenset({"y", "i", "and"})
 _LINK_JOIN = frozenset({"de", "del", "d", "of", "the"})
+# A day word between a weekday or month and its number ("dilluns dia 5", "el
+# lunes día 5"); a weekday may also be joined to its date by a comma
+# ("dilluns, 5 de maig", "5 de maig, dilluns").
+_DAY_JOIN = frozenset({"dia", "day"})
+_COMMA_LINK = re.compile(r"[ \t]*,?[ \t]*")
+# Elided articles in front of a month (``l'octubre``, ``d'abril``).
+_DATE_ELISION = frozenset({"d", "l"})
+# Catalan number words the lexicon cannot hold: the one-letter numeral one
+# (``vint-i-u``, ``trenta-u``, ``l'u``), and the article elided in front of a
+# number (``l'onze``, ``l'u de maig``).
+_NUMBER_LETTERS = {"ca": frozenset({"u"})}
+_NUMBER_ELISIONS = {"ca": frozenset({"l", "d"})}
 
 
 # Characters allowed between tokens. Everything else (symbols, emoji, flags,
@@ -410,18 +422,25 @@ def _number_count(tok: tuple[str, str], lx: Lexicon) -> int:
         return 1 if value == "number" else 0
     if kind != "word":
         return 0
-    ps = _parts(value)
-    if ps[0] in lx.numbers and ps[-1] in lx.numbers and all(p in lx.numbers or p in _NUM_JOIN for p in ps):
-        return sum(p in lx.numbers for p in ps)
+    language = _language(lx)
+    pieces = _SEP_SPLIT.split(value)
+    if (len(pieces) > 2 and pieces[1] in ("'", "’")
+            and fold(pieces[0]) in _NUMBER_ELISIONS.get(language, ())):
+        pieces = pieces[2:]  # l'onze, l'u
+    ps = [fold(p) for p in pieces[0::2]]
+    numbers = lx.numbers | _NUMBER_LETTERS.get(language, frozenset())
+    if ps[0] in numbers and ps[-1] in numbers and all(p in numbers or p in _NUM_JOIN for p in ps):
+        return sum(p in numbers for p in ps)
     return 0
 
 
 def _ends_in(tok: tuple[str, str], vocab: frozenset[str]) -> bool:
-    """A word whose last part is in *vocab* and whose other parts are link joiners (``d'abril``)."""
+    """A word whose last part is in *vocab* and whose other parts are link
+    joiners or elided articles (``d'abril``, ``l'octubre``)."""
     if tok[0] != "word":
         return False
     ps = _parts(tok[1])
-    return ps[-1] in vocab and all(p in _LINK_JOIN for p in ps[:-1])
+    return ps[-1] in vocab and all(p in _LINK_JOIN or p in _DATE_ELISION for p in ps[:-1])
 
 
 def _is_word_in(tok: tuple[str, str], vocab: frozenset[str]) -> bool:
@@ -435,9 +454,11 @@ class _Elements:
         self.tokens = tokens
         self.idx = [i for i, t in enumerate(tokens) if t[0] != "gap"]
         self.link = []
+        self.soft = []  # joined by spaces and at most one comma
         for a, b in zip(self.idx, self.idx[1:]):
             between = "".join(t[1] for t in tokens[a + 1:b])
             self.link.append(_HSPACE.fullmatch(between) is not None)
+            self.soft.append(_COMMA_LINK.fullmatch(between) is not None)
 
     def __len__(self):
         return len(self.idx)
@@ -448,6 +469,10 @@ class _Elements:
     def linked(self, k: int, j: int) -> bool:
         """Elements k..j (k < j) are all joined by spaces only."""
         return all(self.link[m] for m in range(k, j))
+
+    def soft_linked(self, k: int, j: int) -> bool:
+        """Elements k..j (k < j) are joined by spaces, each gap with at most one comma."""
+        return all(self.soft[m] for m in range(k, j))
 
     def collapse(self, spans: list[tuple[int, int, str]]) -> list[tuple[str, str]]:
         """Replace each element span ``(lo, hi, type)`` (and the gaps inside it) by one placeholder."""
@@ -534,8 +559,38 @@ def _dates(tokens: list[tuple[str, str]], lx: Lexicon) -> list[tuple[str, str]]:
         elif (k + 2 < n and els.linked(k, k + 2) and _is_word_in(els.tok(k + 1), _LINK_JOIN)
               and _number_count(els.tok(k + 2), lx)):
             hi = k + 2
+        if lo == k and hi == k:
+            # Looser joins: a comma ("dilluns, 5 de maig") or a day word
+            # ("dimecres dia 12") between the date word and its number.
+            if k + 1 < n and els.soft_linked(k, k + 1) and _number_count(els.tok(k + 1), lx):
+                hi = k + 1
+            elif (k + 2 < n and els.soft_linked(k, k + 2) and _is_word_in(els.tok(k + 1), _DAY_JOIN)
+                  and _number_count(els.tok(k + 2), lx)):
+                hi = k + 2
+            elif k >= 1 and els.soft_linked(k - 1, k) and _number_count(els.tok(k - 1), lx):
+                lo = k - 1
         if lo < k or hi > k:
             spans.append((lo, hi, "date"))
+    # A date word next to a date found above joins it, by a comma or a day
+    # word ("dilluns, 5 de maig", "el dilluns dia 5 de maig", "5 de maig, dilluns").
+    changed = bool(spans)
+    while changed:
+        changed = False
+        covered = {m for lo, hi, _ in spans for m in range(lo, hi + 1)}
+        for k in range(n):
+            if k in covered or not _ends_in(els.tok(k), lx.dates):
+                continue
+            if k + 1 < n and k + 1 in covered and els.soft_linked(k, k + 1):
+                spans.append((k, k + 1, "date"))
+            elif (k + 2 < n and k + 2 in covered and els.soft_linked(k, k + 2)
+                  and _is_word_in(els.tok(k + 1), _DAY_JOIN)):
+                spans.append((k, k + 2, "date"))
+            elif k >= 1 and k - 1 in covered and els.soft_linked(k - 1, k):
+                spans.append((k - 1, k, "date"))
+            else:
+                continue
+            changed = True
+            break
     return els.collapse(_merge(spans, "date")) if spans else tokens
 
 
@@ -555,15 +610,29 @@ def _is_abbreviation(word: str, abbreviations: frozenset[str]) -> bool:
 #   en: a contraction suffix on the last part (``'s``, ``'t``, ``'m``, ``'d``),
 #       and ``I'm`` / ``I'd``, the only words exempt from the two-letter part;
 #   es and every other language: none.
+# Catalan also has suffix clitics (spec addendum 2026-10-28): after a stem that
+# is one lexicon word of two letters or more, with no prefix elision, at most
+# ``max_apostrophe`` apostrophe clitics (``envia'l``) and at most ``max_hyphen``
+# hyphen clitics (``fes-ho``, ``dona-me-la``, ``porta-me'l``). A longer chain
+# (``envia'l'm'n``, ``fes-me-li-ho-ne``) is masked whatever the lexicon holds.
 @dataclass(frozen=True)
 class _Elisions:
     prefix: frozenset[str] = frozenset()
     suffix: frozenset[str] = frozenset()
     exempt: frozenset[str] = frozenset()
+    apostrophe_clitics: frozenset[str] = frozenset()
+    hyphen_clitics: frozenset[str] = frozenset()
+    max_apostrophe: int = 1
+    max_hyphen: int = 2
 
 
 _ELISIONS = {
-    "ca": _Elisions(prefix=frozenset("ldsnmt")),
+    "ca": _Elisions(
+        prefix=frozenset("ldsnmt"),
+        apostrophe_clitics=frozenset({"l", "m", "n", "s", "t", "ls", "ns", "ho", "hi"}),
+        hyphen_clitics=frozenset({"li", "lo", "la", "los", "les", "ho", "hi", "ne", "me", "te", "se",
+                                  "nos", "vos"}),
+    ),
     "en": _Elisions(suffix=frozenset("stmd"), exempt=frozenset({"I'm", "I’m", "I'd", "I’d"})),
 }
 _NO_ELISIONS = _Elisions()
@@ -602,6 +671,35 @@ def _shape_ok(word: str, elisions: _Elisions) -> bool:
             continue
         return False
     return True
+
+
+def _clitic_split(word: str, elisions: _Elisions) -> tuple[str, int, int] | None:
+    """``(stem, apostrophe clitics, hyphen clitics)`` when *word* ends in the
+    language's suffix clitics (matched in lowercase), else ``None``."""
+    if not (elisions.apostrophe_clitics or elisions.hyphen_clitics):
+        return None
+    pieces = _SEP_SPLIT.split(word)
+    parts, seps = pieces[0::2], pieces[1::2]
+    j, apostrophes, hyphens = len(parts) - 1, 0, 0
+    while j >= 1:
+        if seps[j - 1] == "-" and parts[j] in elisions.hyphen_clitics:
+            hyphens += 1
+        elif seps[j - 1] != "-" and parts[j] in elisions.apostrophe_clitics:
+            apostrophes += 1
+        else:
+            break
+        j -= 1
+    if not (apostrophes or hyphens):
+        return None
+    return "".join(pieces[:2 * j + 1]), apostrophes, hyphens
+
+
+def _clitic_word_ok(word: str, split: tuple[str, int, int], lx: Lexicon, elisions: _Elisions,
+                    at_start: bool) -> bool:
+    stem, apostrophes, hyphens = split
+    return (apostrophes <= elisions.max_apostrophe and hyphens <= elisions.max_hyphen
+            and len(stem) >= 2 and stem.isalpha() and fold(stem) in lx.words
+            and _case_ok(word, at_start))
 
 
 def _single_letter_runs(tokens: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -730,11 +828,16 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
             emit_mask()
         else:
             words += 1
-            if _is_abbreviation(value, abbreviations) or (
-                (len(value) > 1 or fold(value) in standalone)
-                and _shape_ok(value, elisions) and all(p in lx.words for p in _parts(value))
-                and _case_ok(value, at_start)
-            ):
+            split = _clitic_split(value, elisions)
+            if split is not None:
+                ok = _clitic_word_ok(value, split, lx, elisions, at_start)
+            else:
+                ok = _is_abbreviation(value, abbreviations) or (
+                    (len(value) > 1 or fold(value) in standalone)
+                    and _shape_ok(value, elisions) and all(p in lx.words for p in _parts(value))
+                    and _case_ok(value, at_start)
+                )
+            if ok:
                 out.append(value)
                 last_mask, pending_gap = False, None
             else:
@@ -956,6 +1059,33 @@ _INV_DOMAIN_RE = re.compile(r"[^\W\d_]\.[^\W\d_]{2}")
 # Lone one-letter words allowed per recipe language (its own copy of the
 # masker's table); any other lone letter, or any with no known language, is a hit.
 _INV_LONE_LETTERS = {"es": "ayoeu", "en": "ai", "ca": "aioe"}
+# Catalan suffix clitics (its own copy): a token ending in them must be one
+# part of two letters or more followed by at most one apostrophe clitic and at
+# most two hyphen clitics; anything longer is a hit (a chain spelling a name).
+_INV_CA_APOSTROPHE = ("l", "m", "n", "s", "t", "ls", "ns", "ho", "hi")
+_INV_CA_HYPHEN = ("li", "lo", "la", "los", "les", "ho", "hi", "ne", "me", "te", "se", "nos", "vos")
+_INV_SEPARATED = re.compile(r"(['’\-])")
+
+
+def _inv_clitic_chain(token: str) -> bool:
+    pieces = _INV_SEPARATED.split(token)
+    parts, seps = pieces[0::2], pieces[1::2]
+    apostrophes = hyphens = 0
+    k = len(parts) - 1
+    while k > 0:
+        part = parts[k].casefold()
+        if seps[k - 1] == "-":
+            if part not in _INV_CA_HYPHEN:
+                break
+            hyphens += 1
+        else:
+            if part not in _INV_CA_APOSTROPHE:
+                break
+            apostrophes += 1
+        k -= 1
+    if apostrophes == 0 and hyphens == 0:
+        return False
+    return apostrophes > 1 or hyphens > 2 or k != 0 or len(parts[0]) < 2
 
 
 def _inv_too_much_punctuation(gap: str) -> bool:
@@ -1005,7 +1135,8 @@ def _inv_capitalised(token: str, start: bool, abbreviations: frozenset[str]) -> 
     return False
 
 
-def _inv_text_hit(text: object, abbreviations: frozenset[str], lone_letters: str = "") -> bool:
+def _inv_text_hit(text: object, abbreviations: frozenset[str], lone_letters: str = "",
+                  clitics: bool = False) -> bool:
     if not isinstance(text, str) or len(text) > _MAX_CHARS:
         return True
     if any(c.isdigit() for c in text):
@@ -1030,6 +1161,8 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str], lone_letters: str
             return True
         if len(token) == 1 and token.casefold() not in lone_letters:
             return True
+        if clitics and not token.startswith("{") and _inv_clitic_chain(token):
+            return True
     tail = text[previous_end:]
     return any(not (c.isspace() or c in _INV_ALLOWED) for c in tail) or _inv_too_much_punctuation(tail)
 
@@ -1037,10 +1170,11 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str], lone_letters: str
 def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
     language = recipe.get("language")
     lone = _INV_LONE_LETTERS.get(language, "") if isinstance(language, str) else ""
+    clitics = language == "ca"
     for key, value in recipe.items():
         path = "/" + _key(key)
         if key in ("title", "when_to_use", "narrative"):
-            if _inv_text_hit(value, abbreviations, lone):
+            if _inv_text_hit(value, abbreviations, lone, clitics):
                 yield path
         elif key in _TOP_FIELDS:
             if not _TOP_FIELDS[key](value):
@@ -1073,7 +1207,7 @@ def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
                                 if not _slot(slot):
                                     yield f"{sub}/{j}"
                     elif k == "note":
-                        if _inv_text_hit(v, abbreviations, lone):
+                        if _inv_text_hit(v, abbreviations, lone, clitics):
                             yield sub
                     else:
                         yield sub
@@ -1082,7 +1216,7 @@ def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
                 yield path
                 continue
             for i, item in enumerate(value):
-                if _inv_text_hit(item, abbreviations, lone):
+                if _inv_text_hit(item, abbreviations, lone, clitics):
                     yield f"/pitfalls/{i}"
         else:
             yield path
