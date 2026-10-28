@@ -195,9 +195,10 @@ listed in `dropped`. Clients should still send these recipes.
 
 **What masking does not catch.** The masker keeps every word in its everyday vocabulary, so it can
 miss a name that is also one of those words: a lowercase common word used as a brand, or
-a surname that is also a common word (for example Baker). Such a name can pass through.
-Do not put personal names in free text; use the placeholders. Measured on held-out
-corpora: Catalan 0 leaks on all three corpora (readability 0.93 tune, 0.89
+a name spelled exactly like an everyday word (for example March, or Sala in Catalan).
+Such a name can pass through.
+Do not put personal names in free text; use the placeholders. Measured on the tune and
+held-out corpora: Catalan 0 leaks on all three corpora (readability 0.93 tune, 0.89
 holdout, 0.92 holdout2); Spanish and English have one such leak each on holdout2.
 
 **Response.** All of these carry the recipe's `recipe_id` and `version`:

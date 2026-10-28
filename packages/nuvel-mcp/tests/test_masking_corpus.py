@@ -23,8 +23,9 @@ from nuvel_mcp import masking
 from nuvel_mcp.masking import READABILITY_FLOOR, READABILITY_TARGET, load_lexicon, mask_recipe, mask_text
 
 LANGUAGES = ("es", "en", "ca")
-# holdout2 is the blind acceptance split (spec addendum 2026-10-28): run as
-# counts only, never opened for tuning.
+# holdout2 is the second held-out split (spec addendum 2026-10-28): run as
+# counts only, never opened for tuning. It has been run several times, so it is
+# a regression test, not a blind gate.
 SPLITS = ("tune", "holdout", "holdout2")
 
 PKG = Path(__file__).parents[1]
@@ -54,7 +55,7 @@ def _mask_fn(lang: str):
     return lexicon, lambda text: mask_text(text, lexicon).text
 
 
-# Leaks found by the blind holdout2 acceptance run that no permissive source or
+# Leaks found by the holdout2 acceptance runs that no permissive source or
 # general rule covers yet. Counts and classes only (never the tokens). The test
 # fails if the count grows, and fails if the leak is fixed and the entry stays.
 KNOWN_LEAKS = {
