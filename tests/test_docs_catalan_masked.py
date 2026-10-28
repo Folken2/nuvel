@@ -14,7 +14,7 @@ def test_no_catalan_structure_only():
     files = list((ROOT / "docs").rglob("*.md"))
     files += list((ROOT / "packages/nuvel-mcp/src").rglob("*.py"))
     files += list((ROOT / "packages/nuvel-mcp/src").rglob("*.md"))
-    files += [ROOT / "README.md", ROOT / "packages/nuvel-mcp/README.md"]
+    files += [ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "packages/nuvel-mcp/README.md"]
     bad = []
     for path in files:
         if not path.exists():
