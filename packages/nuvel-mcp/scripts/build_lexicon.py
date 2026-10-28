@@ -361,10 +361,27 @@ def name_set(config: dict, lang: str, cache: Path, fetch: bool) -> tuple[set[str
         got: set[str] = set()
         for entry in source["files"]:
             got |= reader(cached(cache, source, entry, fetch), use)
+        if "frequent_exempt" in use:
+            got = _frequent_exempt(config, source, use, got, cache, fetch)
         ids.append(source["id"])
         sizes[source["id"]] = len(got)
         names |= got
     return names, ids, sizes
+
+
+def _frequent_exempt(config: dict, source: dict, use: dict, got: set[str], cache: Path,
+                     fetch: bool) -> set[str]:
+    """Names from the tiers above ``above_level`` that are frequent lowercase
+    words of the base source ``base`` (at least ``min_count`` lowercase
+    occurrences) are not subtracted; every name up to ``above_level`` still is."""
+    rule = use["frequent_exempt"]
+    low: set[str] = set()
+    for entry in source["files"]:
+        low |= NAME_READERS[source["format"]](cached(cache, source, entry, fetch),
+                                              {**use, "max_level": rule["above_level"]})
+    base = next(s for s in config["sources"] if s["id"] == rule["base"])
+    counts = read_tatoeba(cached(cache, base, base["files"][0], fetch))
+    return low | {w for w in got - low if counts[w] < rule["min_count"]}
 
 
 def write_abbreviations(out_dir: Path) -> None:
@@ -425,7 +442,7 @@ def write_sources_md(config: dict, out_dir: Path, cache: Path, fetch: bool) -> N
              "`abbreviations.txt`) are part of this repository, under its MIT licence.", ""]
     rows += ["## SCOWL copyright and permission notices", "",
              "The English lexicon is derived from SCOWL word lists (levels 10-50) and",
-             "subtracts its proper-names lists (all levels, up to 95). SCOWL's `Copyright`",
+             "subtracts its proper-names lists (all levels; above level 80, frequent lowercase words are kept). SCOWL's `Copyright`",
              "file, reproduced in full as its notices require:", "", "```",
              scowl_copyright(config, cache, fetch).rstrip("\n"), "```", ""]
     (out_dir / "SOURCES.md").write_text("\n".join(rows), encoding="utf-8")

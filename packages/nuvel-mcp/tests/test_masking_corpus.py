@@ -61,6 +61,9 @@ KNOWN_LEAKS = {
     ("es", "holdout2"): (1, "a lowercase common Spanish word used as a client's brand or name, "
                             "mid-sentence; no permissive name, place, brand or organisation list "
                             "carries it (task 2, 2026-10-28)"),
+    ("en", "holdout2"): (1, "a frequent lowercase English word used as a surname, capitalised at a "
+                            "sentence start; kept by the SCOWL frequent-word exemption (task 2 fix "
+                            "round 1, 2026-10-28)"),
 }
 
 

@@ -1019,3 +1019,51 @@ def test_numeral_u_and_number_elisions_are_catalan_only(language):
     lx = lex(language=language, **DATE_LEXICON)
     assert masked("el dia u", lx) == "el dia {?}"
     assert masked("de l'onze", lx) == "de {?}"
+
+
+# --- Fix round 1: fixed Catalan pronoun combinations, separators, other languages ---
+
+CA_FIXED = ["n'hi", "s'hi", "m'hi", "t'hi", "l'hi", "s'ho", "m'ho", "t'ho", "l'ho", "li'n", "li'l",
+            "li'ls", "n'he", "se'n", "me'n", "te'n"]
+
+
+@pytest.mark.parametrize("word", CA_FIXED + [w.replace("'", "’") for w in CA_FIXED])
+def test_ca_fixed_pronoun_combinations_pass(word):
+    lx = lex({"ha", "molts", "va"}, language="ca")
+    assert masked(f"{word} ha molts", lx) == f"{word} ha molts"
+    assert invariant_hits({"language": "ca", "narrative": f"{word} ha molts"}) == []
+
+
+def test_ca_fixed_combinations_case_and_scope():
+    lx = lex({"ha", "molts", "ara"}, language="ca")
+    assert masked("N'hi ha molts", lx) == "N'hi ha molts"          # sentence start
+    assert masked("ara N'hi ha", lx) == "ara {?} ha"                 # capital mid-sentence
+    assert masked("ara x'hi ha", lx) == "ara {?} ha"                 # not a fixed combination
+    for language in ("es", "en"):
+        assert masked("ara n'hi ha", lex({"ha", "ara", "hi"}, language=language)) == "ara {?} ha"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("envia’l", "envia’l"),            # U+2019 is an apostrophe
+    ("enviaʼl", "{?}"),                # U+02BC is a letter: one unknown word
+    ("envia′l", "envia{?}"),           # U+2032 prime: not an apostrophe
+    ("fes‑ho", "fes{?}ho"),            # U+2011 non-breaking hyphen: not a word joiner
+])
+def test_ca_clitic_separators(text, expected):
+    lx = lex(CA_CLITIC_LEXICON, language="ca")
+    assert masked(text, lx) == expected
+    assert invariant_hits({"language": "ca", "narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("language", ["es", "en"])
+@pytest.mark.parametrize("text", ["envia'l'm'n", "fes-me-li-ho-ne", "a-li"])
+def test_invariant_clitic_rule_is_off_outside_catalan(language, text):
+    assert invariant_hits({"language": language, "narrative": text}) == []
+    assert "/narrative" in invariant_hits({"language": "ca", "narrative": text})
+
+
+@pytest.mark.parametrize("language", ["es", "en"])
+def test_masker_clitic_rule_is_off_outside_catalan(language):
+    # Outside ca a hyphenated word passes when every part is a lexicon word.
+    lx = lex({"fes", "me", "li", "ho", "ne"}, language=language)
+    assert masked("fes-me-li-ho-ne", lx) == "fes-me-li-ho-ne"

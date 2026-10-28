@@ -637,6 +637,14 @@ _ELISIONS = {
 }
 _NO_ELISIONS = _Elisions()
 
+# Fixed pronoun combinations, passed as whole-token function words (matched in
+# lowercase, either apostrophe): "n'hi ha", "s'ho", "li'n". Without them the
+# clitic rule would read the elided letter as a one-letter stem.
+_FIXED_WORDS = {
+    "ca": frozenset({"n'hi", "s'hi", "m'hi", "t'hi", "l'hi", "s'ho", "m'ho", "t'ho", "l'ho", "li'n",
+                     "li'l", "li'ls", "n'he", "se'n", "me'n", "te'n"}),
+}
+
 # One-letter words that may stand alone, per language. Elision letters (en
 # ``s t m d``, ca ``l d s n m t``) pass only inside an apostrophised word, so a
 # lone ``m`` (a name initial) is masked. Unknown languages: none.
@@ -775,6 +783,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
     tokens = _initials(tokens)
     elisions = _ELISIONS.get(_language(lx), _NO_ELISIONS)
     standalone = _STANDALONE.get(_language(lx), frozenset())
+    fixed = _FIXED_WORDS.get(_language(lx), frozenset())
 
     out: list[str] = []
     last_mask = False        # the last non-gap output is {?}
@@ -829,7 +838,9 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
         else:
             words += 1
             split = _clitic_split(value, elisions)
-            if split is not None:
+            if value.lower().replace("’", "'") in fixed:
+                ok = _case_ok(value, at_start)
+            elif split is not None:
                 ok = _clitic_word_ok(value, split, lx, elisions, at_start)
             else:
                 ok = _is_abbreviation(value, abbreviations) or (
@@ -1067,7 +1078,14 @@ _INV_CA_HYPHEN = ("li", "lo", "la", "los", "les", "ho", "hi", "ne", "me", "te", 
 _INV_SEPARATED = re.compile(r"(['’\-])")
 
 
+# Fixed Catalan pronoun combinations that are whole words (its own copy).
+_INV_CA_FIXED = ("n'hi", "s'hi", "m'hi", "t'hi", "l'hi", "s'ho", "m'ho", "t'ho", "l'ho", "li'n",
+                 "li'l", "li'ls", "n'he", "se'n", "me'n", "te'n")
+
+
 def _inv_clitic_chain(token: str) -> bool:
+    if token.casefold().replace("’", "'") in _INV_CA_FIXED:
+        return False
     pieces = _INV_SEPARATED.split(token)
     parts, seps = pieces[0::2], pieces[1::2]
     apostrophes = hyphens = 0
