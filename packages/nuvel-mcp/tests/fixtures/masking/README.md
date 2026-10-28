@@ -49,3 +49,5 @@ masker (one that replaces exactly the marked spans) scores zero leaks.
 `holdout/` is written blind (without looking at the masker, its lexicon or `tune/`) and must never be used for tuning.
 
 Spoken clock times ("a las diez", "before five") are not secrets, because a single number word passes the masker; clock times in digits (`16:30`) stay marked. Percent: mark only the number word (`[[quince]] por ciento`, `[[fifteen]] percent`). Titles (Don, Sir, senyor, DJ) are never marked; only the name is.
+
+`holdout2/` is a second, fresh blind corpus (new names, companies, places and phrasing; written without looking at the masker, its lexicon, `tune/` or `holdout/`). It is the final acceptance gate for the masker, including Catalan hard cases (lowercase local brands that are common words, clitics, elisions, saint names), and must never be used for tuning. An elision attached to a name or number word is part of the marked token (`[[d'octubre]]`, `[[l'Anna]]`).
