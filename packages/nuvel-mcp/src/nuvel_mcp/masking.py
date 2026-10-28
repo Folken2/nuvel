@@ -611,10 +611,13 @@ def _is_abbreviation(word: str, abbreviations: frozenset[str]) -> bool:
 #       and ``I'm`` / ``I'd``, the only words exempt from the two-letter part;
 #   es and every other language: none.
 # Catalan also has suffix clitics (spec addendum 2026-10-28): after a stem that
-# is one lexicon word of two letters or more, with no prefix elision, at most
-# ``max_apostrophe`` apostrophe clitics (``envia'l``) and at most ``max_hyphen``
-# hyphen clitics (``fes-ho``, ``dona-me-la``, ``porta-me'l``). A longer chain
-# (``envia'l'm'n``, ``fes-me-li-ho-ne``) is masked whatever the lexicon holds.
+# is one lexicon word of two letters or more, at most ``max_apostrophe``
+# apostrophe clitics (``envia'l``) and at most ``max_hyphen`` hyphen clitics
+# (``fes-ho``, ``dona-me-la``, ``porta-me'l``). The stem may carry one prefix
+# elision (``d'enviar-lo``, ``d'escriure'l``): one letter of ``prefix``, an
+# apostrophe, then the lexicon word. A fixed pronoun combination after a hyphen
+# (``posar-s'hi``) counts as one hyphen and one apostrophe clitic. A longer
+# chain (``envia'l'm'n``, ``fes-me-li-ho-ne``) is masked whatever the lexicon holds.
 @dataclass(frozen=True)
 class _Elisions:
     prefix: frozenset[str] = frozenset()
@@ -681,15 +684,23 @@ def _shape_ok(word: str, elisions: _Elisions) -> bool:
     return True
 
 
-def _clitic_split(word: str, elisions: _Elisions) -> tuple[str, int, int] | None:
+def _clitic_split(word: str, elisions: _Elisions,
+                  fixed: frozenset[str] = frozenset()) -> tuple[str, int, int] | None:
     """``(stem, apostrophe clitics, hyphen clitics)`` when *word* ends in the
-    language's suffix clitics (matched in lowercase), else ``None``."""
+    language's suffix clitics (matched in lowercase), else ``None``. A *fixed*
+    combination after a hyphen (``-s'hi``) counts as one of each."""
     if not (elisions.apostrophe_clitics or elisions.hyphen_clitics):
         return None
     pieces = _SEP_SPLIT.split(word)
     parts, seps = pieces[0::2], pieces[1::2]
     j, apostrophes, hyphens = len(parts) - 1, 0, 0
     while j >= 1:
+        if (j >= 2 and seps[j - 1] != "-" and seps[j - 2] == "-"
+                and parts[j - 1] + "'" + parts[j] in fixed):
+            hyphens += 1
+            apostrophes += 1
+            j -= 2
+            continue
         if seps[j - 1] == "-" and parts[j] in elisions.hyphen_clitics:
             hyphens += 1
         elif seps[j - 1] != "-" and parts[j] in elisions.apostrophe_clitics:
@@ -705,6 +716,9 @@ def _clitic_split(word: str, elisions: _Elisions) -> tuple[str, int, int] | None
 def _clitic_word_ok(word: str, split: tuple[str, int, int], lx: Lexicon, elisions: _Elisions,
                     at_start: bool) -> bool:
     stem, apostrophes, hyphens = split
+    pieces = _SEP_SPLIT.split(stem)
+    if len(pieces) == 3 and pieces[1] != "-" and len(pieces[0]) == 1 and fold(pieces[0]) in elisions.prefix:
+        stem = pieces[2]  # one prefix elision: d'enviar-lo
     return (apostrophes <= elisions.max_apostrophe and hyphens <= elisions.max_hyphen
             and len(stem) >= 2 and stem.isalpha() and fold(stem) in lx.words
             and _case_ok(word, at_start))
@@ -837,7 +851,7 @@ def _mask(text: str, lx: Lexicon, abbreviations: frozenset[str]) -> MaskResult:
             emit_mask()
         else:
             words += 1
-            split = _clitic_split(value, elisions)
+            split = _clitic_split(value, elisions, fixed)
             if value.lower().replace("’", "'") in fixed:
                 ok = _case_ok(value, at_start)
             elif split is not None:
@@ -1071,10 +1085,13 @@ _INV_DOMAIN_RE = re.compile(r"[^\W\d_]\.[^\W\d_]{2}")
 # masker's table); any other lone letter, or any with no known language, is a hit.
 _INV_LONE_LETTERS = {"es": "ayoeu", "en": "ai", "ca": "aioe"}
 # Catalan suffix clitics (its own copy): a token ending in them must be one
-# part of two letters or more followed by at most one apostrophe clitic and at
-# most two hyphen clitics; anything longer is a hit (a chain spelling a name).
+# part of two letters or more, optionally after one prefix elision (one letter
+# of _INV_CA_PREFIX and an apostrophe), followed by at most one apostrophe
+# clitic and at most two hyphen clitics; a fixed combination after a hyphen
+# (``-s'hi``) counts as one of each. Anything longer is a hit (a chain spelling a name).
 _INV_CA_APOSTROPHE = ("l", "m", "n", "s", "t", "ls", "ns", "ho", "hi")
 _INV_CA_HYPHEN = ("li", "lo", "la", "los", "les", "ho", "hi", "ne", "me", "te", "se", "nos", "vos")
+_INV_CA_PREFIX = "ldsnmt"
 _INV_SEPARATED = re.compile(r"(['’\-])")
 
 
@@ -1092,6 +1109,12 @@ def _inv_clitic_chain(token: str) -> bool:
     k = len(parts) - 1
     while k > 0:
         part = parts[k].casefold()
+        if (k >= 2 and seps[k - 1] != "-" and seps[k - 2] == "-"
+                and parts[k - 1].casefold() + "'" + part in _INV_CA_FIXED):
+            apostrophes += 1
+            hyphens += 1
+            k -= 2
+            continue
         if seps[k - 1] == "-":
             if part not in _INV_CA_HYPHEN:
                 break
@@ -1103,7 +1126,12 @@ def _inv_clitic_chain(token: str) -> bool:
         k -= 1
     if apostrophes == 0 and hyphens == 0:
         return False
-    return apostrophes > 1 or hyphens > 2 or k != 0 or len(parts[0]) < 2
+    if apostrophes > 1 or hyphens > 2:
+        return True
+    plain = k == 0 and len(parts[0]) >= 2
+    prefixed = (k == 1 and seps[0] != "-" and len(parts[0]) == 1
+                and parts[0].casefold() in _INV_CA_PREFIX and len(parts[1]) >= 2)
+    return not (plain or prefixed)
 
 
 def _inv_too_much_punctuation(gap: str) -> bool:

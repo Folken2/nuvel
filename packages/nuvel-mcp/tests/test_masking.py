@@ -751,12 +751,18 @@ def test_invariant_checks_dropped(dropped, hits):
 @pytest.mark.parametrize("text", [
     "con t'i'm", "con s'i'd", "con d'l's", "con t’i’m", "con s’i’d", "con d’l’s",
     "con d's",           # no part of two letters
-    "con l'informe's",   # a prefix and a suffix elision: no language allows both
 ])
 def test_chained_elisions_masked_in_every_language(language, text):
     lx = lex({"con", "t", "i", "m", "s", "d", "l", "informe"}, language=language)
     assert masked(text, lx) == "con {?}"
     assert invariant_hits({"narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("language", ["en", "es", "xx"])
+def test_prefix_and_suffix_elision_masked_outside_catalan(language):
+    # In Catalan "l'informe's" is a prefix elision, a stem and a clitic (test_ca_prefix_clitics_pass).
+    lx = lex({"con", "s", "l", "informe"}, language=language)
+    assert masked("con l'informe's", lx) == "con {?}"
 
 
 @pytest.mark.parametrize("language", ["en", "es", "xx"])
@@ -945,7 +951,6 @@ def test_ca_clitics_pass(text):
     "pere-li",             # the stem is not a lexicon word
     "pere'l",
     "a-li", "a'l",         # a stem of one letter
-    "l'envia'l",           # a prefix elision and a suffix clitic together
     "envia'L",             # a capitalised clitic mid-sentence
     "envia'x", "fes-xo",   # not clitics: the generic rule applies
 ])
@@ -962,7 +967,7 @@ def test_ca_clitics_are_catalan_only(language):
 
 
 @pytest.mark.parametrize("text", [
-    "envia'l'm'n", "envia'l'm", "fes-me-li-ho-ne", "fes-me-li-ho", "l'envia'l", "a-li", "a'l",
+    "envia'l'm'n", "envia'l'm", "fes-me-li-ho-ne", "fes-me-li-ho", "a-li", "a'l",
     "con envia'ls'hi i tot",
 ])
 def test_invariant_flags_ca_clitic_chains(text):
@@ -1067,3 +1072,60 @@ def test_masker_clitic_rule_is_off_outside_catalan(language):
     # Outside ca a hyphenated word passes when every part is a lexicon word.
     lx = lex({"fes", "me", "li", "ho", "ne"}, language=language)
     assert masked("fes-me-li-ho-ne", lx) == "fes-me-li-ho-ne"
+
+
+# --- Final fix batch: prefix elision + stem + clitics, hyphen + fixed combination --
+
+CA_PREFIX_LEXICON = {"abans", "enviar", "escriure", "anar", "endur", "envia", "informe", "con", "posar",
+                     "acostumar", "cal", "ara", "a", "la", "porta", "pere", "x", "l", "d", "s", "m"}
+
+
+@pytest.mark.parametrize("text", [
+    "abans d'enviar-lo", "d'escriure'l", "d'anar-hi", "d'endur-se'n", "d'enviar-la",
+    "l'envia'l", "con l'informe's",
+    "D'enviar-lo a la porta",                 # sentence start
+    "d’enviar-lo", "d’escriure’l",            # typographic apostrophe
+    "cal posar-s'hi", "cal acostumar-s'hi", "cal posar-s’hi", "d'acostumar-s'hi",
+])
+def test_ca_prefix_clitics_pass(text):
+    lx = lex(CA_PREFIX_LEXICON, language="ca")
+    assert masked(text, lx) == text
+    assert invariant_hits({"language": "ca", "narrative": masked(text, lx)}) == []
+
+
+@pytest.mark.parametrize("text", [
+    "d'x-li",                  # a one-letter stem after the prefix
+    "d'a-li",
+    "l'l'envia-li",            # two prefix elisions
+    "d'envia'l'm",             # two apostrophe clitics
+    "d'enviar-me-li-ho",       # three hyphen clitics
+    "dd'enviar-lo",            # a prefix of two letters
+    "x'enviar-lo",             # not a prefix elision letter
+    "d-enviar-lo",             # the prefix needs an apostrophe
+    "posar-x'hi",              # not a fixed combination
+    "fes-me-li-s'hi",          # three hyphen groups
+    "posar-s'hi'l",            # a clitic after the fixed combination
+])
+def test_ca_prefix_clitic_chains_masked_and_flagged(text):
+    lx = lex(CA_PREFIX_LEXICON | {"fes", "me", "li", "hi"}, language="ca")
+    assert masked("con " + text, lx) == "con {?}"
+    assert "/narrative" in invariant_hits({"language": "ca", "narrative": text})
+
+
+@pytest.mark.parametrize("text", [
+    "d'pere-li", "d'Pere-li",          # the stem is not a lexicon word / a capitalised name
+    "ara D'enviar-lo",                 # a capital mid-sentence
+    "ara d'Enviar-lo", "ara posar-S'hi",
+])
+def test_ca_prefix_clitics_masked(text):
+    lx = lex(CA_PREFIX_LEXICON - {"pere"}, language="ca")
+    first, _, word = text.rpartition(" ")
+    prefix = (first + " ") if first else "con "
+    assert masked(prefix + word, lx) == prefix + "{?}"
+
+
+@pytest.mark.parametrize("language", ["en", "es", "xx"])
+@pytest.mark.parametrize("text", ["d'enviar-lo", "d'escriure'l", "posar-s'hi", "l'envia'l"])
+def test_ca_prefix_clitics_are_catalan_only(language, text):
+    lx = lex(CA_PREFIX_LEXICON | {"lo", "hi"}, language=language)
+    assert masked("con " + text, lx) == "con {?}"
