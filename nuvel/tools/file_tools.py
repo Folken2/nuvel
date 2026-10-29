@@ -37,11 +37,21 @@ _resolve_safe_path = resolve_safe_path
 # ── Impl functions (no ToolContext dependency) ─────────────────────────
 
 
+def _is_git_metadata(path: str) -> bool:
+    """True if any component of *path* is ``.git`` (any case — macOS and
+    Windows filesystems are case-insensitive). Writing there would let the
+    model plant git config that runs commands (fsmonitor, filters, hooks)."""
+    parts = os.path.normpath(path).replace("\\", "/").split("/")
+    return any(part.lower() == ".git" for part in parts)
+
+
 def _write_file_impl(path: str, content: str, base_dir: str) -> dict:
     try:
         full = resolve_safe_path(path, base_dir)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
+    if _is_git_metadata(path):
+        return {"status": "error", "message": f"Writing to .git is not allowed: {path}"}
 
     Path(full).parent.mkdir(parents=True, exist_ok=True)
     encoded = content.encode("utf-8")
