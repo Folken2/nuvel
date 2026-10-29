@@ -1,0 +1,7 @@
+{
+  "name": "nuvel-railway-iac",
+  "private": true,
+  "dependencies": {
+    "railway": "^3.16.0"
+  }
+}
