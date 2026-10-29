@@ -117,6 +117,7 @@ def test_key_session_is_bound_to_its_key(httpd):
                           headers={"Mcp-Session-Id": session})[0] == 204
 
 
+@pytest.mark.file_store
 def test_store_keeps_only_the_hash(httpd, store_path):
     client_id, key = issue(httpd)
     raw = store_path.read_text()
@@ -174,6 +175,7 @@ def test_key_plus_authorization_header_is_401(httpd):
     assert status == 401
 
 
+@pytest.mark.file_store
 @pytest.mark.parametrize("how", ["client_id", "key", "url", "delete"])
 def test_revoked_key_is_401(httpd, store_path, monkeypatch, capsys, how):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))

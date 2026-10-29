@@ -166,8 +166,9 @@ Indexes `(at)`, `(tenant, at)`. `method` is a method the server implements or
 `unknown`.
 
 **Views**: `usage_daily` (day, tenant, method, tool, calls, errors, p50/p95
-duration) and `skill_runs_daily` (day, tenant, plugin, skill, runs, ok /
-non-ok counts, corrected).
+duration) and `skill_runs_daily` (day, tenant, plugin, skill, runs, counts
+per outcome — `success`, `partial`, `failure`, and `blocked`/`skipped` as
+`not_run` — and corrected runs).
 
 ### Stores
 
@@ -187,8 +188,9 @@ non-ok counts, corrected).
     tokens are already purged by the provider, so it stays small (clients ×
     live tokens); a per-row design is the follow-up if that stops holding.
 - Usage: `UsageStore` protocol with `record_batch(events)`. `UsageRecorder`
-  wraps it with a bounded queue (10 000) and one daemon thread that flushes
-  every second or every 200 events with one multi-row insert. Full queue or a
+  wraps it with a bounded queue (10 000) and one daemon thread that writes
+  events as they arrive, up to 200 per batched insert (under load, batches
+  form while the previous one is being written). Full queue or a
   failed flush drops events, counts them, and logs at most once a minute. It
   flushes on shutdown. With no database there is no recorder.
 
