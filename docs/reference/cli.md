@@ -127,7 +127,7 @@ Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total
 nuvel traces recipes [-s <dir>]
 ```
 
-Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest masked version. The feedback directory is always searched; `--source` adds more roots. Counters come from each recipe's latest signal per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
+Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest shared version (`(structure only)` when the user did not share text). The feedback directory is always searched; `--source` adds more roots. Counters come from each recipe's latest weekly snapshot (`nuvel.recipe_signal/2`) per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
 
 ### `nuvel traces errors`
 
@@ -191,7 +191,7 @@ nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-op
 | `--demo` | off | Load bundled demo fixtures instead of real traces. |
 | `--no-open` | off | Don't open the browser automatically. |
 
-Three pages: a home view (hero + headline stats + recent activity), a per-run detail with the thinking timeline, and `/recipes`, the **Recipe candidates** view (the same data as `nuvel traces recipes`, plus the latest recipe per category: its action sequence, slots and masked narrative). Live updates push new runs as the watcher sees them.
+Three pages: a home view (hero + headline stats + recent activity), a per-run detail with the thinking timeline, and `/recipes`, the **Recipe candidates** view (the same data as `nuvel traces recipes`, plus recipe status and the latest recipe per category: its action sequence and slots, and the masked narrative only when the user shared text). Live updates push new runs as the watcher sees them.
 
 ## `nuvel eval`
 

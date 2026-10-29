@@ -1,6 +1,6 @@
-"""Recipe signals (``nuvel.recipe_signal/1``) and shared recipes (``nuvel.recipe/3``).
+"""Recipe signals (``nuvel.recipe_signal/2``) and shared recipes (``nuvel.recipe/3``).
 
-Stdlib-only. Shapes live in the packaged schemas ``recipe_signal.v1.schema.json``
+Stdlib-only. Shapes live in the packaged schemas ``recipe_signal.v2.schema.json``
 and ``recipe.v3.schema.json``; validation reuses :mod:`nuvel_mcp.traces`, plus
 the cross-field rules the schema keywords cannot express. Errors are
 JSON-pointer paths only, never values.
@@ -25,9 +25,9 @@ from typing import Protocol, runtime_checkable
 
 from . import traces
 
-SIGNAL_SCHEMA_ID = "nuvel.recipe_signal/1"
+SIGNAL_SCHEMA_ID = "nuvel.recipe_signal/2"
 RECIPE_SCHEMA_ID = "nuvel.recipe/3"
-SIGNAL_RESOURCE = "schemas/recipe_signal.v1.schema.json"
+SIGNAL_RESOURCE = "schemas/recipe_signal.v2.schema.json"
 RECIPE_RESOURCE = "schemas/recipe.v3.schema.json"
 
 
@@ -69,16 +69,23 @@ def _validate_known_keys(doc: object, resource: str) -> list[str]:
     return list(dict.fromkeys(_schema_path(p, schema) for p in traces.validate(doc, resource)))
 
 
+# Counters that can never exceed ``uses`` (``stats.uses`` in a recipe).
+_BOUNDED_BY_USES = ("successes", "corrections", "days_used")
+
+
 def validate_signal(doc: object) -> list[str]:
-    """Paths of fields failing ``nuvel.recipe_signal/1`` (empty list = valid).
-    Keys that are not in the schema are reported as ``*``."""
-    return _validate_known_keys(doc, SIGNAL_RESOURCE)
+    """Paths of fields failing ``nuvel.recipe_signal/2`` (empty list = valid).
+    Keys that are not in the schema are reported as ``*``. A schema-valid
+    snapshot is then held to ``successes``, ``corrections`` and ``days_used``
+    not above ``uses``."""
+    errors = _validate_known_keys(doc, SIGNAL_RESOURCE)
+    if errors:
+        return errors
+    return [f"/{k}" for k in _BOUNDED_BY_USES if doc[k] > doc["uses"]]
 
 
 # Free-text fields of ``text``; it must hold at least one besides ``language``.
 TEXT_FIELDS = ("title", "when_to_use", "step_notes", "pitfalls", "narrative")
-# Counters that can never exceed ``stats.uses``.
-_BOUNDED_BY_USES = ("successes", "corrections", "days_used")
 
 
 def _cross_field_errors(doc: dict) -> list[str]:

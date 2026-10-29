@@ -146,8 +146,8 @@ do. They apply to every HTTP server, whether or not you use `--no-auth`.
 | `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value` | The hub read tools: serving the hub is what a remote server is for. |
 | `record_run_trace` | Takes a closed-schema `nuvel.skill_run/1` trace with no free-text fields; anything else is rejected without being echoed. |
 | `check_skill_health` | Read-only; see remote mode below. |
-| `record_recipe_signal` | Takes a closed-schema `nuvel.recipe_signal/1` event with identifiers and counters only, no free text. See [Skill run traces](../reference/skill-run-traces.md#recipe-signals-and-shared-recipes). |
-| `share_recipe` | Takes a `nuvel.recipe/2` recipe: closed structure (actions, tool kinds, placeholder slots) plus free text that the server masks with a per-language allowlist before anything is stored, relayed or logged. Spanish, English and Catalan are masked; other languages are shared as structure only. A format problem is rejected with field paths only. See [Skill run traces](../reference/skill-run-traces.md#shared-recipes-nuvelrecipe2). |
+| `record_recipe_signal` | Takes a closed-schema `nuvel.recipe_signal/2` weekly snapshot (status and usage counters) with identifiers and counters only, no free text. See [Skill run traces](../reference/skill-run-traces.md#recipe-signals-and-shared-recipes). |
+| `share_recipe` | Takes a `nuvel.recipe/3` recipe: closed structure (actions, tool kinds, placeholder slots, usage stats) and, only when the user opted in, free text under `text` that the server masks with a per-language allowlist before anything is stored, relayed or logged. Spanish, English and Catalan are masked; other languages are shared as structure only. A format problem is rejected with field paths only. See [Skill run traces](../reference/skill-run-traces.md#shared-recipes-nuvelrecipe3). |
 
 Off unless you name them in `--tools`:
 

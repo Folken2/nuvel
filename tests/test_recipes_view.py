@@ -14,11 +14,11 @@ RID2 = "22222222-2222-4222-8222-222222222222"
 
 
 def _sig(rid="x", at="2026-10-27T10:00:00Z", uses=1, successes=0, corrections=0,
-         category="triage", tenant="t1", **extra) -> dict:
+         category="triage", tenant="t1", status="active", days_used=1, **extra) -> dict:
     d = {
-        "schema": "nuvel.recipe_signal/1", "signal_id": f"s-{rid}-{at}-{uses}",
-        "recipe_id": rid, "category": category, "event": "used", "at": at,
-        "uses": uses, "successes": successes, "corrections": corrections,
+        "schema": "nuvel.recipe_signal/2", "signal_id": f"s-{rid}-{at}-{uses}",
+        "recipe_id": rid, "category": category, "status": status, "at": at,
+        "uses": uses, "successes": successes, "corrections": corrections, "days_used": days_used,
     }
     if tenant is not None:
         d["tenant"] = tenant
@@ -34,23 +34,34 @@ def _write_signals(root: Path, lines: list, day="2026-10-27") -> None:
             f.write((ln if isinstance(ln, str) else json.dumps(ln)) + "\n")
 
 
-def _write_recipe(root: Path, rid: str, version: int, category: str, title: str,
-                  mtime: int | None = None, tenant_key="t1") -> Path:
-    d = root / "_recipes" / "recipes" / tenant_key / rid
-    d.mkdir(parents=True, exist_ok=True)
-    f = d / f"v{version}.json"
-    f.write_text(json.dumps({
-        "schema": "nuvel.recipe/2", "recipe_id": rid, "version": version,
-        "category": category, "title": title, "when_to_use": "when asked",
+def _recipe_doc(rid: str, version: int, category: str, title: str, with_text: bool = True) -> dict:
+    doc = {
+        "schema": "nuvel.recipe/3", "recipe_id": rid, "version": version, "category": category,
         "steps": [
-            {"action": "search", "tool_kind": "email", "slots": ["person"], "note": "Find {person}"},
+            {"action": "search", "tool_kind": "email", "slots": ["person"]},
             {"action": "summarise", "tool_kind": "docs", "slots": ["person", "document"]},
             {"action": "draft", "tool_kind": "none", "slots": []},
         ],
-        "narrative": "Asked {company}, then {?} replied.",
-        "masking": {"lexicon": "en", "masked": 1, "words": 4, "dropped": 0},
+        "stats": {"uses": 4, "successes": 3, "corrections": 1, "days_used": 2},
         "tenant": "secret-tenant",
-    }))
+    }
+    if with_text:
+        doc["text"] = {
+            "language": "en", "title": title, "when_to_use": "when asked",
+            "step_notes": ["Find {person}"], "narrative": "Asked {company}, then {?} replied.",
+        }
+        doc["masking"] = {"lexicon": "en-test.1", "masked": 1, "words": 4, "dropped": []}
+    else:
+        doc["masking"] = {"lexicon": None, "masked": 0, "words": 0, "dropped": []}
+    return doc
+
+
+def _write_recipe(root: Path, rid: str, version: int, category: str, title: str,
+                  mtime: int | None = None, tenant_key="t1", with_text: bool = True) -> Path:
+    d = root / "_recipes" / "recipes" / tenant_key / rid
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"v{version}.json"
+    f.write_text(json.dumps(_recipe_doc(rid, version, category, title, with_text)))
     if mtime is not None:
         os.utime(f, (mtime, mtime))
     return f
@@ -63,7 +74,60 @@ def test_counters_use_latest_signal_per_recipe(tmp_path: Path) -> None:
     ])
     [c] = load_recipe_candidates([tmp_path])
     assert (c.uses, c.successes, c.corrections, c.recipes, c.tenants) == (3, 2, 1, 1, 1)
+    assert c.days_used == 1
     assert abs(c.success_rate - 2 / 3) < 1e-9
+
+
+def test_recipes_view_latest_snapshot_wins(tmp_path: Path) -> None:
+    _write_signals(tmp_path, [
+        _sig(RID1, "2026-10-20T10:00:00Z", uses=2, successes=1, status="draft"),
+        _sig(RID1, "2026-10-27T10:00:00Z", uses=5, successes=4, status="active", days_used=3),
+    ])
+    [c] = load_recipe_candidates([tmp_path])
+    assert (c.uses, c.successes, c.days_used, c.recipes) == (5, 4, 3, 1)
+    assert c.statuses == {"active": 1}
+    # the order of the lines does not matter: the greatest `at` wins
+    other = tmp_path / "o"
+    _write_signals(other, [_sig(RID1, "2026-10-27T10:00:00Z", uses=5, status="retired"),
+                           _sig(RID1, "2026-10-20T10:00:00Z", uses=2, status="draft")])
+    [c] = load_recipe_candidates([other])
+    assert (c.uses, c.statuses) == (5, {"retired": 1})
+
+
+def test_recipes_view_ignores_non_v2_signals(tmp_path: Path) -> None:
+    old = _sig(RID1, uses=9) | {"schema": "nuvel.recipe_signal/1", "event": "used"}
+    del old["status"], old["days_used"]
+    _write_signals(tmp_path, [old, _sig(RID2, uses=2), _sig(RID2, "2026-10-28T10:00:00Z", uses=1, status="paused")])
+    [c] = load_recipe_candidates([tmp_path])
+    assert (c.uses, c.recipes) == (2, 1)
+
+
+def test_recipes_view_structure_only_recipe(tmp_path: Path) -> None:
+    _write_signals(tmp_path, [_sig(RID1, uses=3)])
+    _write_recipe(tmp_path, RID1, 1, "triage", "", with_text=False)
+    [c] = load_recipe_candidates([tmp_path])
+    latest = c.latest
+    assert latest["has_text"] is False and latest["narrative"] == "" and latest["title"] == ""
+    assert latest["mask_ratio"] is None
+    assert [(s["action"], s["tool_kind"], s["slots"]) for s in latest["steps"]] == [
+        ("search", "email", ["person"]), ("summarise", "docs", ["person", "document"]), ("draft", "none", [])]
+    assert all(s["note"] == "" for s in latest["steps"])
+
+
+def test_recipes_view_shows_text_when_present(tmp_path: Path) -> None:
+    _write_signals(tmp_path, [_sig(RID1, uses=3)])
+    _write_recipe(tmp_path, RID1, 1, "triage", "Triage")
+    [c] = load_recipe_candidates([tmp_path])
+    assert c.latest["has_text"] is True and c.latest["narrative"] == "Asked {company}, then {?} replied."
+
+
+def test_recipes_view_fully_dropped_text(tmp_path: Path) -> None:
+    f = _write_recipe(tmp_path, RID1, 1, "triage", "", with_text=False)
+    doc = json.loads(f.read_text())
+    doc["masking"] = {"lexicon": "es-test.1", "masked": 0, "words": 0, "dropped": ["/text/title"]}
+    f.write_text(json.dumps(doc))
+    [c] = load_recipe_candidates([tmp_path])
+    assert c.latest["has_text"] is False and c.latest["mask_ratio"] is None
 
 
 def test_tie_on_at_last_line_wins_and_sums_across_recipes_and_tenants(tmp_path: Path) -> None:
@@ -146,6 +210,7 @@ def test_latest_has_structure_and_narrative(tmp_path: Path) -> None:
     assert c.latest["actions"] == ["search", "summarise", "draft"]
     assert c.latest["slots"] == ["person", "document"]
     assert c.latest["steps"][0]["note"] == "Find {person}"
+    assert c.latest["steps"][1]["note"] == ""
     assert c.latest["narrative"] == "Asked {company}, then {?} replied."
     assert c.latest["mask_ratio"] == 0.25
     assert "install_id" not in c.latest
@@ -154,20 +219,20 @@ def test_latest_has_structure_and_narrative(tmp_path: Path) -> None:
 def test_mask_ratio_none_when_no_words(tmp_path: Path) -> None:
     f = _write_recipe(tmp_path, RID1, 1, "triage", "T")
     doc = json.loads(f.read_text())
-    doc["masking"] = {"lexicon": "en", "masked": 0, "words": 0, "dropped": 0}
+    doc["masking"] = {"lexicon": "en", "masked": 0, "words": 0, "dropped": []}
     f.write_text(json.dumps(doc))
     [c] = load_recipe_candidates([tmp_path])
     assert c.latest["mask_ratio"] is None
 
 
-def test_v1_files_skipped(tmp_path: Path) -> None:
+def test_old_schema_files_skipped(tmp_path: Path) -> None:
     f = _write_recipe(tmp_path, RID1, 1, "triage", "Old")
     doc = json.loads(f.read_text())
-    doc["schema"] = "nuvel.recipe/1"
+    doc["schema"] = "nuvel.recipe/2"
     f.write_text(json.dumps(doc))
     _write_signals(tmp_path, [_sig(RID1, uses=2)])
     cands = load_recipe_candidates([tmp_path])
-    assert cands.skipped_v1 == 1
+    assert cands.skipped_old == 1
     assert cands[0].latest is None and cands[0].uses == 2
 
 
@@ -190,3 +255,14 @@ def test_cli_recipes_empty_title_reads_masked(tmp_path: Path, monkeypatch, capsy
     _write_recipe(tmp_path / "src", RID1, 1, "triage", "")
     main(["traces", "recipes", "--source", str(tmp_path / "src")])
     assert "(title masked)" in capsys.readouterr().out
+
+
+def test_cli_recipes_structure_only_label(tmp_path: Path, monkeypatch, capsys) -> None:
+    from nuvel.cli import main
+
+    monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(tmp_path / "empty"))
+    _write_signals(tmp_path / "src", [_sig(RID1, uses=2)])
+    _write_recipe(tmp_path / "src", RID1, 1, "triage", "", with_text=False)
+    main(["traces", "recipes", "--source", str(tmp_path / "src")])
+    out = capsys.readouterr().out
+    assert "(structure only)" in out and "None" not in out

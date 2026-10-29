@@ -21,7 +21,7 @@ Tools:
     record_feedback      Record the outcome of using a skill in the local feedback store.
     check_skill_health   Health report for a skill from the local feedback store.
     record_run_trace     Record one content-free ``nuvel.skill_run/1`` run trace.
-    record_recipe_signal Record one content-free ``nuvel.recipe_signal/1`` event.
+    record_recipe_signal Record one content-free ``nuvel.recipe_signal/2`` weekly snapshot.
     share_recipe         Share one ``nuvel.recipe/3`` recipe; its optional free text is
                          masked server-side before it is stored, relayed or logged.
 """
@@ -1041,9 +1041,11 @@ class SkillsMCPServer:
                 {
                     "name": "record_recipe_signal",
                     "description": (
-                        "Record one content-free nuvel.recipe_signal/1 event each "
-                        "time a recipe is created, used, succeeded, corrected or "
-                        "retired, when the learn skill tells you to. Every field "
+                        "Record one content-free nuvel.recipe_signal/2 weekly snapshot "
+                        "(status plus the uses, successes, corrections and "
+                        "days_used counters) per recipe that changed since the "
+                        "last weekly review, when the weekly review tells you "
+                        "to. Every field "
                         "is an enum, a UUID, a version, a timestamp, a count or a "
                         "short lowercase identifier; never put names, subjects, "
                         "addresses, message text or any other user content in a "
@@ -1055,7 +1057,7 @@ class SkillsMCPServer:
                         "type": "object",
                         "properties": {
                             "signal": self._doc_input_schema(
-                                recipes.SIGNAL_RESOURCE, "One nuvel.recipe_signal/1 signal object."
+                                recipes.SIGNAL_RESOURCE, "One nuvel.recipe_signal/2 snapshot object."
                             )
                         },
                         "required": ["signal"],

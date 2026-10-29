@@ -1,4 +1,4 @@
-"""nuvel.recipe_signal/1 and nuvel.recipe/3 schemas, validator keywords and the signal screen."""
+"""nuvel.recipe_signal/2 and nuvel.recipe/3 schemas, validator keywords and the signal screen."""
 
 import json
 import os
@@ -16,9 +16,9 @@ PLUGIN = {"name": "chief-of-staff", "version": "0.3.0"}
 FIXTURE = Path(__file__).parent / "fixtures" / "chief_of_staff" / "recipe.json"
 
 SIGNAL = {
-    "schema": "nuvel.recipe_signal/1", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
-    "plugin": PLUGIN, "category": "client-followup", "event": "used",
-    "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0,
+    "schema": "nuvel.recipe_signal/2", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
+    "plugin": PLUGIN, "category": "client-followup", "status": "active",
+    "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0, "days_used": 2,
 }
 STEP = {"action": "draft", "tool_kind": "email", "slots": ["person", "topic"]}
 STATS = {"uses": 3, "successes": 2, "corrections": 1, "days_used": 3}
@@ -68,6 +68,36 @@ def _step_schema():
 
 def test_signal_valid():
     assert recipes.validate_signal(SIGNAL) == []
+
+
+def test_signal_v2_valid_snapshot():
+    for status in ("draft", "active", "retired"):
+        assert recipes.validate_signal(SIGNAL | {"status": status}) == []
+    assert recipes.validate_signal(SIGNAL | {"plugin": PLUGIN | {"version": "0.4.0"}}) == []
+
+
+def test_signal_v2_rejects_event_key():
+    assert recipes.validate_signal(SIGNAL | {"event": "used"}) == ["/*"]
+
+
+def test_signal_v2_status_enum():
+    assert recipes.validate_signal(SIGNAL | {"status": "paused"}) == ["/status"]
+
+
+@pytest.mark.parametrize("over, path", [
+    ({"successes": 5, "uses": 3}, "/successes"),
+    ({"days_used": 4, "uses": 3}, "/days_used"),
+    ({"corrections": 9, "uses": 3}, "/corrections"),
+])
+def test_signal_v2_stats_consistency(over, path):
+    assert recipes.validate_signal(SIGNAL | over) == [path]
+
+
+def test_signal_v1_is_gone():
+    from importlib import resources
+    assert recipes.validate_signal(SIGNAL | {"schema": "nuvel.recipe_signal/1"}) == ["/schema"]
+    assert not resources.files("nuvel_mcp").joinpath("schemas/recipe_signal.v1.schema.json").is_file()
+    assert resources.files("nuvel_mcp").joinpath("schemas/recipe_signal.v2.schema.json").is_file()
 
 
 def test_recipe_valid():
@@ -137,7 +167,7 @@ def test_v2_schema_is_gone():
 
 
 def test_schema_ids():
-    assert recipes.SIGNAL_SCHEMA_ID == "nuvel.recipe_signal/1"
+    assert recipes.SIGNAL_SCHEMA_ID == "nuvel.recipe_signal/2"
     assert recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/3"
     assert recipes.RECIPE_RESOURCE == "schemas/recipe.v3.schema.json"
     assert _schema()["properties"]["schema"]["const"] == recipes.RECIPE_SCHEMA_ID == masking.SCHEMA_ID
@@ -243,7 +273,7 @@ def test_plugin_semver(version, ok):
 
 
 def test_signal_bad_event_and_counter():
-    assert recipes.validate_signal(SIGNAL | {"event": "exploded"}) == ["/event"]
+    assert recipes.validate_signal(SIGNAL | {"status": "exploded"}) == ["/status"]
     assert recipes.validate_signal(SIGNAL | {"uses": 100001}) == ["/uses"]
 
 

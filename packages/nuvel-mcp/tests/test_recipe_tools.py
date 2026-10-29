@@ -19,9 +19,9 @@ UUID_B = "22222222-2222-4222-8222-222222222222"
 UUID_C = "33333333-3333-4333-8333-333333333333"
 PLUGIN = {"name": "chief-of-staff", "version": "0.3.0"}
 SIGNAL = {
-    "schema": "nuvel.recipe_signal/1", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
-    "plugin": PLUGIN, "category": "client-followup", "event": "used",
-    "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0,
+    "schema": "nuvel.recipe_signal/2", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
+    "plugin": PLUGIN, "category": "client-followup", "status": "active",
+    "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0, "days_used": 2,
 }
 STRUCTURE = {
     "schema": "nuvel.recipe/3", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
@@ -273,6 +273,33 @@ def test_share_dropped_step_note_keeps_later_notes_on_their_steps(tmp_path):
     assert body["status"] == "recorded" and body["dropped"] == ["/text/step_notes/0"]
     record = json.loads(stored_files(tmp_path)[0].read_text())
     assert record["text"]["step_notes"] == ["", "Redactar el resumen para {person}"]
+
+
+def test_share_es_recipe_with_every_text_field_dropped_is_stored_without_text(tmp_path):
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    junk = "pedro acme garcia lopez"
+    recipe = RECIPE | {"text": {"language": "es", "title": junk, "when_to_use": junk,
+                                "step_notes": [junk], "pitfalls": [junk], "narrative": junk}}
+    res, body = call_recipe(s, recipe)
+    assert res["isError"] is False and body["status"] == "recorded"
+    assert sorted(body["dropped"]) == sorted(FREE_TEXT)
+    assert all(p.startswith("/text/") for p in body["dropped"])
+    record = json.loads(stored_files(tmp_path)[0].read_text())
+    assert "text" not in record and not has_secret(json.dumps(record))
+    assert record["masking"]["lexicon"].startswith("es-")  # the masker ran: a lexicon, no words kept
+    assert record["masking"]["dropped"] == body["dropped"]
+
+
+def test_share_dropped_last_step_note_is_trimmed(tmp_path):
+    steps = [{"action": "search", "tool_kind": "email", "slots": []},
+             {"action": "draft", "tool_kind": "email", "slots": ["person"]}]
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    recipe = {**with_text(step_notes=["Redactar el resumen para {person}", "pedro acme garcia lopez"]),
+              "steps": steps}
+    _, body = call_recipe(s, recipe)
+    assert body["status"] == "recorded" and body["dropped"] == ["/text/step_notes/1"]
+    record = json.loads(stored_files(tmp_path)[0].read_text())
+    assert record["text"]["step_notes"] == ["Redactar el resumen para {person}"]
 
 
 @pytest.mark.parametrize("recipe", [STRUCTURE, RECIPE])
