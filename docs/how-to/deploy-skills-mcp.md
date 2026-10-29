@@ -9,7 +9,9 @@ nothing extra to install, and `nuvel-mcp` has no dependencies and no extras.
 It speaks Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` and `/messages`,
 and answers `GET /healthz`. It is its own OAuth 2.1 authorization server (PKCE,
 dynamic client registration, refresh-token rotation, GitHub as the login
-provider), so every MCP request needs a bearer access token.
+provider), so every MCP request needs a bearer access token, or an
+operator-issued [URL key](#beta-testers-url-keys) for clients that can only be
+given a URL.
 
 ## Run it locally
 
@@ -37,7 +39,9 @@ trace and health tools.
 ## Deploy it for other people
 
 Binding a non-loopback address takes a deliberate `--allow-remote`, plus a public
-URL and a GitHub OAuth app:
+URL and either a GitHub OAuth app (below) or `NUVEL_OAUTH_LOGIN=none`, which
+turns off the interactive login and leaves
+[URL keys](#beta-testers-url-keys) and `client_credentials`:
 
 ```bash
 export NUVEL_MCP_PUBLIC_URL="https://mcp.example.com"
@@ -53,6 +57,7 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `NUVEL_MCP_PUBLIC_URL` | The origin clients reach the server at (for example `https://mcp.example.com`). It is the OAuth issuer and the audience of every token. Required on a non-loopback bind. |
 | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | A GitHub OAuth app whose callback URL is `<NUVEL_MCP_PUBLIC_URL>/oauth/callback`. This is how people log in when they connect an interactive client. |
 | `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to log in. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
+| `NUVEL_OAUTH_LOGIN` | `none` turns the interactive login off: `/authorize`, `/register` and the login callbacks answer `404`, and clients connect with a [URL key](#beta-testers-url-keys) or `client_credentials`. GitHub credentials and `NUVEL_OAUTH_DEV_LOGIN` are then ignored, with a warning. Unset, the login is GitHub when its credentials are set, else the dev login, else the server refuses to start. Any other value stops the server with exit code 2. |
 | `NUVEL_OAUTH_REDIRECT_ALLOWLIST` | Extra redirect URIs accepted at client registration, beyond `https://` and loopback ones. |
 | `NUVEL_MCP_OAUTH_STORE` | The token and client store (default `~/.nuvel/oauth.json`, mode 0600). Tokens and secrets are kept only as hashes. Put it on a persistent volume. |
 | `NUVEL_MCP_ALLOWED_ORIGINS`, `NUVEL_MCP_MAX_BODY_BYTES`, `NUVEL_MCP_MAX_SESSIONS`, `NUVEL_MCP_SESSION_TTL` | Optional tuning of the origin allow-list and the request and session caps. |
@@ -92,6 +97,46 @@ example Claude Code, which runs the OAuth flow itself:
 ```bash
 claude mcp add --transport http nuvel-skills https://mcp.example.com/mcp
 ```
+
+### Beta testers: URL keys
+
+Claude's custom connectors have a **No sign-in** option where the only thing a
+person enters is the server URL. A URL key puts the credential in that URL, one
+key per tester:
+
+```bash
+nuvel-mcp client create --name alice --url-key
+```
+
+It prints the client's `client_id` and a `connector_url` of the form
+`$NUVEL_MCP_PUBLIC_URL/mcp/k/<key>`, once; the store keeps only the key's hash.
+Send the tester that URL; they add it as a custom connector with no sign-in.
+Without `NUVEL_MCP_PUBLIC_URL` set, the command prints just the
+`/mcp/k/<key>` path and tells you to prefix the public origin.
+
+- **Tenant.** Each key belongs to its own client, so the tester's tenant is that
+  `client_id`, exactly as for any other client (see
+  [Tenant is the OAuth `client_id`](#what-is-exposed-over-http-and-why)). The
+  client has no secret and no grant types: it cannot get tokens at `/token`.
+- **Scopes.** A key gets `skills:read` and `skills:write`, the same as a
+  `client_credentials` token. What a tester can call is still the default HTTP
+  tool set below.
+- **Revoking.** `nuvel-mcp token revoke "$CLIENT_ID"` revokes the client's key
+  (and any tokens); `nuvel-mcp token revoke "$CONNECTOR_URL"` revokes one key by
+  its URL; `nuvel-mcp client delete "$CLIENT_ID"` removes the client and its key.
+  The running server refuses the key on the next request and closes an open
+  stream at its next ping. Keys do not expire; to replace one, issue a new client.
+- **Transport.** `/mcp/k/<key>` is Streamable HTTP only (`POST`, `GET` stream and
+  `DELETE`, like `/mcp`). The legacy `/sse` transport has no key form. A request
+  on a key path that also sends an `Authorization` header is refused.
+- **Where keys can leak.** The server redacts keys from its own logs, but the
+  key is part of the URL: a reverse proxy or CDN in front of it must not log full
+  request paths, and a tester should treat the URL like a password. The key
+  travels in the path rather than a query string because MCP clients keep the
+  path of a configured endpoint on every request but may drop or rewrite a query.
+
+Keys work in every gated mode. With `NUVEL_OAUTH_LOGIN=none` they (and
+`client_credentials` for services) are the only way in.
 
 ## Behind a reverse proxy
 
@@ -145,25 +190,35 @@ feedback store under `/data`, and Railway health-checks `GET /healthz`.
    `Dockerfile`.
 2. Under **Settings → Networking**, generate a domain on port `8080`.
 3. Attach a volume at `/data`. Without one, every redeploy loses issued tokens,
-   registered clients and run traces.
-4. Create a GitHub OAuth app whose callback URL is
-   `https://<your-domain>/oauth/callback`.
-5. Set the service variables. Keep the secret in Railway's variables, never in
+   registered clients, URL keys and run traces.
+4. Pick how people get in:
+   - **URL keys only** (beta testers connecting with no sign-in): no OAuth app
+     is needed. Set `NUVEL_OAUTH_LOGIN=none`.
+   - **GitHub login** (interactive clients that run the OAuth flow): create a
+     GitHub OAuth app whose callback URL is `https://<your-domain>/oauth/callback`.
+5. Set the service variables. Keep any secret in Railway's variables, never in
    the start command:
 
    | Variable | Value |
    |---|---|
    | `NUVEL_MCP_PUBLIC_URL` | `https://<your-domain>` |
-   | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | From the OAuth app |
-   | `NUVEL_OAUTH_ALLOWED_USERS` | The GitHub logins allowed to log in |
+   | `NUVEL_OAUTH_LOGIN` | `none`, for URL keys only |
+   | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | For GitHub login: from the OAuth app |
+   | `NUVEL_OAUTH_ALLOWED_USERS` | For GitHub login: the GitHub logins allowed to log in |
    | `NUVEL_MCP_SKILLS_DIR` | Optional: a skills hub inside the container, for example one cloned onto the volume. Unset, the server runs feedback-only. |
 
-   The server refuses to start without the public URL and the GitHub
-   credentials, so a misconfigured deploy fails its health check rather than
-   running open.
-6. Issue clients for headless agents from a shell on the running service
-   (`railway ssh`, then `nuvel-mcp client create --name acme-agent`). It writes
-   to the same store on `/data`, so the server sees the client at once.
+   The server refuses to start without the public URL and without either
+   `NUVEL_OAUTH_LOGIN=none` or the GitHub credentials, so a misconfigured
+   deploy fails its health check rather than running open. A deploy that loses
+   its GitHub variables does not fall back to key mode on its own.
+6. Issue clients from a shell on the running service (`railway ssh`), which
+   writes to the same store on `/data`, so the server sees them at once:
+   `nuvel-mcp client create --name alice --url-key` for a tester (send them the
+   printed `connector_url`), or `nuvel-mcp client create --name acme-agent` for
+   a headless agent. The server's own access log shows key paths as
+   `/mcp/k/<redacted>`, but Railway's HTTP logs record request paths, so anyone
+   who can read the project's logs can see testers' keys. Keep project access
+   to the people who could issue keys anyway.
 
 ## What is exposed over HTTP, and why
 
@@ -208,6 +263,9 @@ tenant, which is what `client create` is for.
 | Condition | Response |
 |---|---|
 | Missing, invalid or expired access token, or more than one `Authorization` header | `401` |
+| Unknown, revoked or deleted-client URL key on `/mcp/k/<key>`, or a key path that also sends `Authorization` | `401` with `WWW-Authenticate: Bearer error="invalid_token"` and no `resource_metadata` |
+| `/mcp/k/` with an empty or multi-segment key, or `/sse/k/…` / `/messages/k/…` | `404` |
+| `/register`, `/authorize` or a login callback with `NUVEL_OAUTH_LOGIN=none` | `404` |
 | Valid token without the scope the method needs | `403` |
 | `Origin` not allowed | `403` |
 | Body over the cap (`NUVEL_MCP_MAX_BODY_BYTES`, default 1 MiB) | `413` |
@@ -217,8 +275,10 @@ tenant, which is what `client create` is for.
 | More than `NUVEL_MCP_MAX_CONNECTIONS` connections open | `503` with `Retry-After: 1`, sent without starting a handler thread |
 | Body that is not valid JSON | `400` |
 
-Error responses do not echo the request body, and a failing trace store reports a
-generic error to the caller; the detail goes to the server log only.
+Error responses do not echo the request body or path, and a failing trace store
+reports a generic error to the caller; the detail goes to the server log only.
+The access log shows the request line with query strings and URL keys replaced
+by `<redacted>`.
 
 A request with `Expect: 100-continue` gets the interim `100 Continue` only once
 it has passed the framing checks, `Origin` and authentication and its body is
