@@ -134,6 +134,37 @@ A browser request whose `Origin` is not loopback, your public origin or one in
 That stops a web page the user visits from reaching a loopback server through DNS
 rebinding.
 
+## Deploy on Railway
+
+`packages/nuvel-mcp/` ships a `Dockerfile` and a `railway.json` for this. The
+image binds `0.0.0.0:$PORT` with `--allow-remote`, keeps the OAuth store and the
+feedback store under `/data`, and Railway health-checks `GET /healthz`.
+
+1. Create a service from this repository and set its **Root Directory** to
+   `packages/nuvel-mcp`. Railway picks up `railway.json` and builds the
+   `Dockerfile`.
+2. Under **Settings → Networking**, generate a domain on port `8080`.
+3. Attach a volume at `/data`. Without one, every redeploy loses issued tokens,
+   registered clients and run traces.
+4. Create a GitHub OAuth app whose callback URL is
+   `https://<your-domain>/oauth/callback`.
+5. Set the service variables. Keep the secret in Railway's variables, never in
+   the start command:
+
+   | Variable | Value |
+   |---|---|
+   | `NUVEL_MCP_PUBLIC_URL` | `https://<your-domain>` |
+   | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | From the OAuth app |
+   | `NUVEL_OAUTH_ALLOWED_USERS` | The GitHub logins allowed to log in |
+   | `NUVEL_MCP_SKILLS_DIR` | Optional: a skills hub inside the container, for example one cloned onto the volume. Unset, the server runs feedback-only. |
+
+   The server refuses to start without the public URL and the GitHub
+   credentials, so a misconfigured deploy fails its health check rather than
+   running open.
+6. Issue clients for headless agents from a shell on the running service
+   (`railway ssh`, then `nuvel-mcp client create --name acme-agent`). It writes
+   to the same store on `/data`, so the server sees the client at once.
+
 ## What is exposed over HTTP, and why
 
 OAuth decides who may call the server; the defaults below decide what a caller can
