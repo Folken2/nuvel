@@ -91,7 +91,23 @@ def test_recipes_view_latest_snapshot_wins(tmp_path: Path) -> None:
     _write_signals(other, [_sig(RID1, "2026-10-27T10:00:00Z", uses=5, status="retired"),
                            _sig(RID1, "2026-10-20T10:00:00Z", uses=2, status="draft")])
     [c] = load_recipe_candidates([other])
-    assert (c.uses, c.statuses) == (5, {"retired": 1})
+    # a retired recipe counts in the statuses but not in the counter totals
+    assert (c.uses, c.recipes, c.statuses) == (0, 1, {"retired": 1})
+
+
+def test_merge_retired_counters_not_double_counted(tmp_path: Path) -> None:
+    # A (active) absorbed B: A's snapshot already holds B's 3 uses; B is retired.
+    _write_signals(tmp_path, [
+        _sig(RID2, "2026-10-20T10:00:00Z", uses=3, successes=2, corrections=1, days_used=3),
+        _sig(RID1, "2026-10-27T10:00:00Z", uses=5, successes=4, corrections=1, days_used=4),
+        _sig(RID2, "2026-10-27T10:00:00Z", uses=3, successes=2, corrections=1, days_used=3,
+             status="retired"),
+    ])
+    [c] = load_recipe_candidates([tmp_path])
+    assert (c.uses, c.successes, c.corrections, c.days_used) == (5, 4, 1, 4)
+    assert abs(c.success_rate - 4 / 5) < 1e-9
+    assert c.recipes == 2
+    assert c.statuses == {"active": 1, "retired": 1}
 
 
 def test_recipes_view_ignores_non_v2_signals(tmp_path: Path) -> None:

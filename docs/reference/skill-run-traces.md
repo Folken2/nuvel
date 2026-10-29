@@ -184,8 +184,8 @@ stamps, stores and relays the masked copy:
   the action verbs ("send", "read"), English months and weekdays, the most frequent
   Spanish words, and the reviewed Spanish business nouns ("reunión"). They pass only in
   lowercase, so a capitalised one mid-sentence ("met May", "con Rosa") is still masked.
-- A field with more than 40 % of its words masked is dropped whole: `title` and
-  `when_to_use` become `""`, `pitfalls` and `narrative` are removed, and a dropped step
+- A field with more than 40 % of its words masked is dropped whole: a dropped
+  `title`, `when_to_use`, pitfall or `narrative` is removed (not set to `""`), and a dropped step
   note becomes `""` so the later notes stay on their steps (a dropped last note is
   trimmed). A field with no words is never dropped. If every field of `text` is dropped,
   the recipe is stored without `text`. Dropped pointers sit under `/text/`.
@@ -242,7 +242,10 @@ block (`lexicon` version, `masked`, `words`, `dropped`).
 Because counters are cumulative, `nuvel traces recipes` and the dashboard's
 `/recipes` page take, per `(tenant, recipe_id)`, the `nuvel.recipe_signal/2` snapshot
 with the latest `at` (the later line wins a tie; other schemas are ignored) and sum
-those per category, with a count of recipes by status. `success_rate` is
+those per category, with a count of recipes by status. The counter totals skip recipes
+whose latest snapshot is `retired`, because a weekly merge already summed a retired
+duplicate's counters into the recipe it kept; retired recipes still count by status.
+`success_rate` is
 `successes / uses` (0 when there are no uses). The latest recipe shown for a category
 is its most recently modified `nuvel.recipe/3` file (older-schema files are skipped
 and counted). A recipe without `text` shows its steps only, with no narrative. Unreadable or malformed lines and files are

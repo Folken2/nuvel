@@ -13,7 +13,9 @@ never shown.
 
 Signals are weekly snapshots whose counters are cumulative, so per
 ``(tenant, recipe_id)`` only the snapshot with the greatest ``at`` counts (ties:
-the later line wins). Unreadable or malformed lines and files are skipped. Tenant values are used for grouping only
+the later line wins). Counter totals add up only recipes whose latest snapshot
+is not ``retired`` (a merge already summed them into the recipe it kept);
+retired recipes still count in ``recipes`` and ``statuses``. Unreadable or malformed lines and files are skipped. Tenant values are used for grouping only
 and never appear in the result.
 """
 
@@ -246,11 +248,15 @@ def load_recipe_candidates(roots: list[Path]) -> CandidateList:
         a = agg.setdefault(cat, blank())
         a["recipes"] += 1
         a["tenants"].add(tenant)
+        a["statuses"][status] = a["statuses"].get(status, 0) + 1
+        # A weekly merge sums a retired duplicate's counters into the recipe it
+        # keeps, so a retired snapshot's counters would be counted twice.
+        if status == "retired":
+            continue
         a["uses"] += uses
         a["successes"] += succ
         a["corrections"] += corr
         a["days_used"] += days
-        a["statuses"][status] = a["statuses"].get(status, 0) + 1
     for cat in latest_recipe:
         agg.setdefault(cat, blank())
 
