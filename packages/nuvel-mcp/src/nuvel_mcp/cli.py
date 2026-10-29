@@ -1,6 +1,7 @@
-"""Command line for the Skills MCP server: ``nuvel-mcp serve|client|token``.
+"""Command line for the Skills MCP server: ``nuvel-mcp serve|client|token|db``.
 
-``add_serve_arguments`` / ``run_serve`` and ``add_oauth_commands`` are shared
+``add_serve_arguments`` / ``run_serve``, ``add_oauth_commands`` and
+``add_db_commands`` are shared
 with ``nuvel mcp …`` so both entry points expose identical flags and commands.
 ``--transport http`` runs the stdlib transport in :mod:`nuvel_mcp.http_transport`
 (OAuth 2.1 via :mod:`nuvel_mcp.oauth`); stdio stays the default.
@@ -13,6 +14,7 @@ import json
 import os
 import sys
 import time
+from contextlib import ExitStack
 
 # --host / --port defaults; a different value with --transport stdio is ignored.
 _DEFAULT_HOST = "127.0.0.1"
@@ -79,19 +81,21 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--trace-store",
-        default="local",
-        metavar="local|MODULE:FACTORY",
-        help="Where record_run_trace stores traces: 'local' (JSONL under "
+        default="auto",
+        metavar="auto|local|postgres|MODULE:FACTORY",
+        help="Where record_run_trace stores traces: 'postgres' "
+             "($NUVEL_MCP_DATABASE_URL), 'local' (JSONL under "
              "<feedback-dir>/_runs/) or 'module:factory', a zero-argument "
-             "callable returning a TraceStore. Default: local.",
+             "callable returning a TraceStore. Default: auto (postgres when "
+             "NUVEL_MCP_DATABASE_URL is set, else local).",
     )
     parser.add_argument(
         "--recipe-store",
-        default="local",
-        metavar="local|MODULE:FACTORY",
-        help="Where recipe signals and recipes are stored: 'local' (files under "
-             "<feedback-dir>/_recipes/) or 'module:factory', a zero-argument "
-             "callable returning a RecipeStore. Default: local.",
+        default="auto",
+        metavar="auto|local|postgres|MODULE:FACTORY",
+        help="Where recipe signals and recipes are stored: 'postgres', 'local' "
+             "(files under <feedback-dir>/_recipes/) or 'module:factory', a "
+             "zero-argument callable returning a RecipeStore. Default: auto.",
     )
     parser.add_argument(
         "--transport",
@@ -201,7 +205,51 @@ def _warn_http_only_flags(args: argparse.Namespace) -> None:
               "ignored with --transport stdio.", file=sys.stderr)
 
 
+def _open_database(*, migrate: bool | None = None):
+    """``(db, None)`` from ``NUVEL_MCP_DATABASE_*``, ``(None, None)`` when no URL
+    is set, or ``(None, error)``. *migrate* defaults to the auto-migrate setting.
+    Every error message is redacted."""
+    from nuvel_mcp.db import Database, DatabaseError, DatabaseSettings, redact_dsn
+
+    try:
+        settings = DatabaseSettings.from_env()
+    except ValueError as exc:
+        return None, f"invalid NUVEL_MCP_DATABASE_* setting: {exc}"
+    if settings is None:
+        return None, None
+    try:
+        db = Database(settings)
+    except DatabaseError as exc:
+        return None, str(exc)
+    if settings.auto_migrate if migrate is None else migrate:
+        try:
+            db.migrate()
+        except db.driver_error as exc:
+            db.close()
+            return None, redact_dsn(f"database migration failed: {type(exc).__name__}: {exc}")
+    return db, None
+
+
+def _select_store(kind: str, spec: str, db, load, feedback_dir, postgres_store):
+    """Resolve a ``--trace-store`` / ``--recipe-store`` value to a store
+    (``None`` means the server's local default), or raise ``ValueError``."""
+    if spec == "auto":
+        spec = "postgres" if db is not None else "local"
+    if spec == "postgres":
+        if db is None:
+            raise ValueError(f"--{kind}-store postgres needs NUVEL_MCP_DATABASE_URL")
+        return postgres_store(db)
+    if spec == "local":
+        return None
+    return load(spec, feedback_dir)
+
+
 def run_serve(args: argparse.Namespace) -> int:
+    with ExitStack() as cleanup:
+        return _run_serve(args, cleanup)
+
+
+def _run_serve(args: argparse.Namespace, cleanup: ExitStack) -> int:
     from nuvel_mcp.feedback import resolve_feedback_dir
     from nuvel_mcp.server import SkillsMCPServer
     from nuvel_mcp.skills_loader import SkillsError, SkillsLoader
@@ -225,25 +273,41 @@ def run_serve(args: argparse.Namespace) -> int:
         for value in args.require:
             require_filter.extend(v.strip() for v in value.split(",") if v.strip())
 
-    trace_store = None
-    if args.trace_store != "local":
-        try:
-            trace_store = load_trace_store(
-                args.trace_store, resolve_feedback_dir(args.feedback_dir)
-            )
-        except ValueError as exc:
-            print(f"Error: invalid --trace-store: {exc}", file=sys.stderr)
-            return 1
+    db, error = _open_database()
+    if error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
+    usage = None
+    if db is not None:
+        from nuvel_mcp.db.stores import (
+            PostgresRecipeStore, PostgresTraceStore, PostgresUsageStore)
+        from nuvel_mcp.usage import UsageRecorder
 
-    recipe_store = None
-    if args.recipe_store != "local":
-        try:
-            recipe_store = load_recipe_store(
-                args.recipe_store, resolve_feedback_dir(args.feedback_dir)
-            )
-        except ValueError as exc:
-            print(f"Error: invalid --recipe-store: {exc}", file=sys.stderr)
-            return 1
+        cleanup.callback(db.close)
+        if db.settings.usage:
+            usage = UsageRecorder(PostgresUsageStore(db))
+            cleanup.callback(usage.close)  # LIFO: flushed before the pool closes
+    else:
+        PostgresRecipeStore = PostgresTraceStore = None
+
+    feedback_dir = resolve_feedback_dir(args.feedback_dir)
+    try:
+        trace_store = _select_store("trace", args.trace_store, db, load_trace_store,
+                                    feedback_dir, PostgresTraceStore)
+    except ValueError as exc:
+        print(f"Error: invalid --trace-store: {exc}", file=sys.stderr)
+        return 1
+    try:
+        recipe_store = _select_store("recipe", args.recipe_store, db, load_recipe_store,
+                                     feedback_dir, PostgresRecipeStore)
+    except ValueError as exc:
+        print(f"Error: invalid --recipe-store: {exc}", file=sys.stderr)
+        return 1
+    if db is not None:
+        print(f"Storage: {db.describe()}; usage recording "
+              f"{'on' if usage else 'off'}.", file=sys.stderr)
+    else:
+        print(f"Storage: files under {feedback_dir}.", file=sys.stderr)
 
     server = SkillsMCPServer(
         loader,
@@ -254,6 +318,8 @@ def run_serve(args: argparse.Namespace) -> int:
         tools=args.tools,
         trace_store=trace_store,
         recipe_store=recipe_store,
+        usage=usage,
+        database=db,
     )
     if args.require_auth and args.no_auth:
         print("Error: --require-auth and --no-auth are mutually exclusive.", file=sys.stderr)
@@ -265,7 +331,7 @@ def run_serve(args: argparse.Namespace) -> int:
             return 2
         _warn_http_only_flags(args)
         if args.require_auth:
-            error = _gate_stdio(server)
+            error = _gate_stdio(server, db)
             if error:
                 print(f"Error: {error}", file=sys.stderr)
                 return 2
@@ -299,7 +365,7 @@ def run_serve(args: argparse.Namespace) -> int:
               file=sys.stderr)
         provider = None
     else:
-        provider, error = _oauth_provider_for_http(loopback, config.public_url)
+        provider, error = _oauth_provider_for_http(loopback, config.public_url, db)
         if error:
             print(f"Error: {error}", file=sys.stderr)
             return 2
@@ -311,7 +377,20 @@ def run_serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _oauth_provider_for_http(loopback: bool, public_url: str | None):
+def _oauth_store(db):
+    """The Postgres OAuth store when a database is configured, else ``None``
+    (the provider's JSON file)."""
+    if db is None:
+        return None
+    from nuvel_mcp.db.stores import PostgresOAuthStore
+
+    if os.environ.get("NUVEL_MCP_OAUTH_STORE", "").strip():
+        print("NUVEL_MCP_OAUTH_STORE is ignored: OAuth state is in the database "
+              "(nuvel-mcp db import copies the file in).", file=sys.stderr)
+    return PostgresOAuthStore(db)
+
+
+def _oauth_provider_for_http(loopback: bool, public_url: str | None, db=None):
     """Build the provider for gated HTTP, or return (None, error)."""
     from nuvel_mcp.oauth import LOGIN_SETTINGS, OAuthConfig, OAuthProvider, OAuthStoreError
 
@@ -331,7 +410,7 @@ def _oauth_provider_for_http(loopback: bool, public_url: str | None):
     if not loopback and not public_url:
         return None, ("a non-loopback bind needs NUVEL_MCP_PUBLIC_URL (e.g. "
                       "https://skills.example.com): it is the OAuth issuer and token audience.")
-    provider = OAuthProvider(config)
+    provider = OAuthProvider(config, _oauth_store(db))
     try:
         with provider.store.reading():
             pass  # fail fast on an unreadable store
@@ -361,14 +440,14 @@ def _oauth_provider_for_http(loopback: bool, public_url: str | None):
     return provider, None
 
 
-def _gate_stdio(server) -> str | None:
+def _gate_stdio(server, db=None) -> str | None:
     from nuvel_mcp.oauth import OAuthConfig, OAuthProvider, public_url_from_env, stdio_gate
 
     try:
         resource = public_url_from_env()
     except ValueError as exc:
         return str(exc)
-    provider = OAuthProvider(OAuthConfig.from_env())
+    provider = OAuthProvider(OAuthConfig.from_env(), _oauth_store(db))
     token = os.environ.get("NUVEL_MCP_ACCESS_TOKEN", "").strip() or None
     if token is None:
         print("Warning: --require-auth without NUVEL_MCP_ACCESS_TOKEN: every request "
@@ -377,10 +456,20 @@ def _gate_stdio(server) -> str | None:
     return None
 
 
-def _provider():
-    from nuvel_mcp.oauth import OAuthConfig, OAuthProvider
+# Databases the client/token commands opened; ``_store_errors`` closes them.
+_COMMAND_DATABASES: list = []
 
-    return OAuthProvider(OAuthConfig.from_env())
+
+def _provider():
+    from nuvel_mcp.oauth import OAuthConfig, OAuthProvider, OAuthStoreError
+
+    # The same store the server uses: the database when one is configured.
+    db, error = _open_database(migrate=True)
+    if error:
+        raise OAuthStoreError(error)
+    if db is not None:
+        _COMMAND_DATABASES.append(db)
+    return OAuthProvider(OAuthConfig.from_env(), _oauth_store(db))
 
 
 def _store_errors(func):
@@ -394,6 +483,9 @@ def _store_errors(func):
         except OAuthStoreError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+        finally:
+            while _COMMAND_DATABASES:
+                _COMMAND_DATABASES.pop().close()
 
     return wrapper
 
@@ -491,6 +583,110 @@ def _cmd_token_revoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def add_db_commands(subparsers: argparse._SubParsersAction) -> None:
+    """``db migrate|status|import``: the Postgres store named by NUVEL_MCP_DATABASE_URL."""
+    p_db = subparsers.add_parser(
+        "db", help="Manage the Postgres database ($NUVEL_MCP_DATABASE_URL).")
+    db_sub = p_db.add_subparsers(dest="db_command", required=True)
+    p_migrate = db_sub.add_parser("migrate", help="Apply pending schema migrations.")
+    p_migrate.set_defaults(func=_cmd_db_migrate)
+    p_status = db_sub.add_parser(
+        "status", help="Show applied and pending migrations and row counts.")
+    p_status.add_argument("--json", action="store_true", help="Print JSON.")
+    p_status.set_defaults(func=_cmd_db_status)
+    p_import = db_sub.add_parser(
+        "import", help="Copy the file stores (OAuth JSON, traces, recipes) into the "
+                       "database. Traces and recipes are deduped; OAuth is imported "
+                       "only while the database has no OAuth state.")
+    p_import.add_argument(
+        "--oauth-store", default=None, metavar="PATH",
+        help="OAuth JSON file. Default: $NUVEL_MCP_OAUTH_STORE, then ~/.nuvel/oauth.json.")
+    p_import.add_argument(
+        "--feedback-dir", default=None, metavar="DIR",
+        help="Feedback dir holding _runs/ and _recipes/. Default: $NUVEL_FEEDBACK_DIR, "
+             "then ~/.nuvel/feedback.")
+    p_import.add_argument(
+        "--force-oauth", action="store_true",
+        help="Import the OAuth file even though the database already has OAuth "
+             "state. Clients and keys deleted in the database since come back.")
+    p_import.set_defaults(func=_cmd_db_import)
+
+
+def _database_command(func):
+    """Open the database for a ``db`` command (no auto-migrate), close it after,
+    and report failures as one redacted line."""
+
+    def wrapper(args: argparse.Namespace) -> int:
+        from nuvel_mcp.db import redact_dsn
+
+        db, error = _open_database(migrate=False)
+        if error:
+            print(f"Error: {error}", file=sys.stderr)
+            return 2
+        if db is None:
+            print("Error: NUVEL_MCP_DATABASE_URL is not set.", file=sys.stderr)
+            return 2
+        try:
+            return func(args, db)
+        except db.driver_error as exc:
+            print(redact_dsn(f"Error: database error: {type(exc).__name__}: {exc}"),
+                  file=sys.stderr)
+            return 1
+        finally:
+            db.close()
+
+    return wrapper
+
+
+@_database_command
+def _cmd_db_migrate(args: argparse.Namespace, db) -> int:
+    applied = db.migrate()
+    for version, name in applied:
+        print(f"Applied {version:04d}_{name}.")
+    if not applied:
+        print(f"Schema {db.schema} is up to date.")
+    return 0
+
+
+@_database_command
+def _cmd_db_status(args: argparse.Namespace, db) -> int:
+    status = db.status()
+    if args.json:
+        print(json.dumps(status, indent=2, sort_keys=True))
+        return 0
+    print(f"Schema:   {status['schema']}")
+    print(f"Applied:  {', '.join(map(str, status['applied'])) or '-'}")
+    print(f"Pending:  {', '.join(map(str, status['pending'])) or '-'}")
+    for table, count in sorted(status["rows"].items()):
+        print(f"  {table:<22} {count}")
+    return 1 if status["pending"] else 0
+
+
+@_database_command
+def _cmd_db_import(args: argparse.Namespace, db) -> int:
+    from pathlib import Path
+
+    from nuvel_mcp.db.importer import import_files
+    from nuvel_mcp.feedback import resolve_feedback_dir
+    from nuvel_mcp.oauth import OAuthConfig
+
+    db.migrate()
+    oauth_store = Path(args.oauth_store).expanduser() if args.oauth_store else \
+        OAuthConfig.from_env().store_path
+    counts = import_files(db, oauth_store=oauth_store,
+                          feedback_dir=resolve_feedback_dir(args.feedback_dir),
+                          force_oauth=args.force_oauth)
+    skipped = counts.pop("skipped")
+    if not counts.pop("oauth_imported"):
+        print(f"OAuth: not imported from {oauth_store}: the database already has OAuth "
+              "state and is the authority (re-importing would restore revoked clients "
+              "and keys). Pass --force-oauth to merge it anyway.", file=sys.stderr)
+    for table, count in counts.items():
+        print(f"  {table:<22} +{count}")
+    print(f"Imported {sum(counts.values())} row(s); {skipped} unreadable record(s) skipped.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nuvel-mcp", description="Nuvel Skills MCP server.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -498,5 +694,6 @@ def main(argv: list[str] | None = None) -> int:
     add_serve_arguments(p_serve)
     p_serve.set_defaults(func=run_serve)
     add_oauth_commands(sub)
+    add_db_commands(sub)
     args = parser.parse_args(argv)
     return args.func(args)

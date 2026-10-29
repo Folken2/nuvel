@@ -19,6 +19,14 @@ Run `nuvel-mcp serve --help` for all flags (`--theme`, `--require`,
 `--require-auth`). Without `--skills-dir` the server starts in feedback-only
 mode.
 
+State lives in files by default. Set `NUVEL_MCP_DATABASE_URL` (for example a
+Neon pooled connection string) and OAuth, run traces, recipes and a per-request
+usage log all go to Postgres instead; that needs `pip install
+"psycopg[binary,pool]"`, and the package itself stays dependency-free. The
+schema is migrated at startup; `nuvel-mcp db migrate|status|import` manage it,
+and `db import` copies existing files in. See the
+[deploy guide](https://github.com/Folken2/nuvel/blob/main/docs/how-to/deploy-skills-mcp.md#store-everything-in-postgres-neon).
+
 The HTTP transport (Streamable HTTP on `/mcp`, legacy SSE, OAuth 2.1) is part of
 the same dependency-free package; there are no extras. It binds
 `127.0.0.1:8080` and requires an OAuth token unless you pass `--no-auth` on a

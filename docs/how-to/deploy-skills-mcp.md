@@ -59,7 +59,8 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to log in. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
 | `NUVEL_OAUTH_LOGIN` | `none` turns the interactive login off: `/authorize`, `/register` and the login callbacks answer `404`, and clients connect with a [URL key](#beta-testers-url-keys) or `client_credentials`. GitHub credentials and `NUVEL_OAUTH_DEV_LOGIN` are then ignored, with a warning. Unset, the login is GitHub when its credentials are set, else the dev login, else the server refuses to start. Any other value stops the server with exit code 2. |
 | `NUVEL_OAUTH_REDIRECT_ALLOWLIST` | Extra redirect URIs accepted at client registration, beyond `https://` and loopback ones. |
-| `NUVEL_MCP_OAUTH_STORE` | The token and client store (default `~/.nuvel/oauth.json`, mode 0600). Tokens and secrets are kept only as hashes. Put it on a persistent volume. |
+| `NUVEL_MCP_DATABASE_URL` | A Postgres connection string. Set, OAuth, run traces, recipes and usage all live in that database ([below](#store-everything-in-postgres-neon)); this is the production setup. |
+| `NUVEL_MCP_OAUTH_STORE` | The token and client file when no database is configured (default `~/.nuvel/oauth.json`, mode 0600). Tokens and secrets are kept only as hashes. Put it on a persistent volume. Ignored when `NUVEL_MCP_DATABASE_URL` is set. |
 | `NUVEL_MCP_ALLOWED_ORIGINS`, `NUVEL_MCP_MAX_BODY_BYTES`, `NUVEL_MCP_MAX_SESSIONS`, `NUVEL_MCP_SESSION_TTL` | Optional tuning of the origin allow-list and the request and session caps. |
 | `NUVEL_MCP_REQUEST_DEADLINE` | Wall-clock seconds a client gets to send one whole request (request line, headers, body), however slowly it trickles. Default 30. |
 | `NUVEL_MCP_READ_TIMEOUT` | Seconds a single socket read or write may stall, and how long an idle keep-alive connection is kept. Default 30. The idle keep-alive limit is the smaller of this and `NUVEL_MCP_REQUEST_DEADLINE`. |
@@ -179,11 +180,79 @@ A browser request whose `Origin` is not loopback, your public origin or one in
 That stops a web page the user visits from reaching a loopback server through DNS
 rebinding.
 
+## Store everything in Postgres (Neon)
+
+Without a database the server keeps its state in files: the OAuth store
+(`NUVEL_MCP_OAUTH_STORE`) and the feedback store (`NUVEL_FEEDBACK_DIR`: run
+traces, recipe signals and recipes). That needs a persistent disk, ties you to a
+single replica, and leaves usage unrecorded. Set `NUVEL_MCP_DATABASE_URL` and all
+of it moves to Postgres, plus a usage log of every request:
+
+```bash
+export NUVEL_MCP_DATABASE_URL="$NEON_DATABASE_URL"   # Neon's *pooled* string
+nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0
+```
+
+nuvel-mcp itself has no dependencies; the Postgres store needs
+`pip install "psycopg[binary,pool]"` (the `Dockerfile` installs it). The server
+creates its schema and applies migrations at startup, so there is nothing to run
+first. On Neon, use the **pooled** connection string (host with `-pooler`): the
+server works behind PgBouncer's transaction mode, and several replicas can share
+one database.
+
+| Setting | What it does |
+|---|---|
+| `NUVEL_MCP_DATABASE_URL` | The connection string. Set, the database stores OAuth clients, codes, tokens and URL keys; run traces; recipe signals and recipes; and usage. It is never logged: errors print it with the password masked. |
+| `NUVEL_MCP_DATABASE_SCHEMA` | The schema the server owns. Default `nuvel_mcp`. |
+| `NUVEL_MCP_DATABASE_POOL_MAX` | Connections per server process. Default 10. |
+| `NUVEL_MCP_DATABASE_AUTO_MIGRATE` | `0` stops migrations at startup; run `nuvel-mcp db migrate` from your release step instead. Default `1`. |
+| `NUVEL_MCP_USAGE` | `0` turns the usage log off. Default `1`. |
+
+`--trace-store` and `--recipe-store` default to `auto`: Postgres when a URL is
+set, files otherwise. `postgres` and `local` force one; `postgres` without a URL
+stops the server. The `client` and `token` commands use the database too, so run
+them anywhere the URL is set: no shell on the server is needed.
+
+`GET /healthz` reports `"storage": "postgres"` and answers `503` with
+`"database unavailable"` when the database stops answering. If the database is
+unreachable, OAuth fails closed: requests get an error, never a free pass.
+
+**Usage.** Every MCP request with an id becomes one row in `usage_events`: when,
+which client (`tenant`, the OAuth `client_id`), transport, method, tool,
+outcome (`ok`, `tool_error` or `error`), JSON-RPC error code and latency. Only
+known method and tool names are stored; anything else becomes `unknown`, and
+arguments are never recorded. Rows are written by a background thread off the
+request path, so a slow database delays the log, not the request. Two views
+summarise it:
+
+```sql
+-- calls, errors and p50/p95 latency per day, client and tool
+SELECT * FROM nuvel_mcp.usage_daily ORDER BY day DESC, calls DESC;
+-- skill runs per day by outcome
+SELECT * FROM nuvel_mcp.skill_runs_daily ORDER BY day DESC;
+```
+
+**Moving off the volume.** On a server that has been running on files, copy
+them in once, then point the server at the database:
+
+```bash
+NUVEL_MCP_DATABASE_URL="$NEON_DATABASE_URL" nuvel-mcp db import \
+  --oauth-store /data/oauth.json --feedback-dir /data/feedback
+```
+
+Traces and recipes are deduped, so re-running the import inserts nothing new.
+OAuth is a one-time move: once the database has held OAuth state it is the
+authority, and later imports leave OAuth alone, so a client or key you revoked
+in the database cannot come back from the old file (`--force-oauth` merges it
+anyway). Issued URL keys and tokens keep working, because only their hashes move. `nuvel-mcp db status` shows applied
+migrations and row counts; `nuvel-mcp db migrate` applies pending migrations.
+The same commands exist as `nuvel mcp db …`.
+
 ## Deploy on Railway
 
 `packages/nuvel-mcp/` ships a `Dockerfile` for this. The image binds
-`0.0.0.0:$PORT` with `--allow-remote` and keeps the OAuth store and the feedback
-store under `/data`. The Railway project itself (service, Dockerfile build, `/data`
+`0.0.0.0:$PORT` with `--allow-remote`. With `NUVEL_MCP_DATABASE_URL` set, all
+state is in Postgres; without it, it falls back to files under `/data`. The Railway project itself (service, Dockerfile build, `/data`
 volume) is defined in `.railway/railway.ts`, Railway's Infrastructure as Code;
 its config-as-code `railway.json` is deprecated.
 
@@ -193,8 +262,14 @@ its config-as-code `railway.json` is deprecated.
    up by hand instead, point the service's **Root Directory** at
    `/packages/nuvel-mcp` with the Dockerfile builder.
 2. Under **Settings → Networking**, generate a domain on port `8080`.
-3. Make sure the volume is mounted at `/data`. Without it, every redeploy loses
-   issued tokens, registered clients, URL keys and run traces.
+3. Create a Neon project and copy its **pooled** connection string into the
+   `NUVEL_MCP_DATABASE_URL` variable (step 5). That replaces the volume. Without
+   a database, mount a volume at `/data` instead: otherwise every redeploy loses
+   issued tokens, registered clients, URL keys and run traces. Moving an
+   existing volume deploy over: run `nuvel-mcp db import` (see
+   [above](#store-everything-in-postgres-neon)) from `railway ssh` with the URL
+   set, then add the variable and redeploy; the volume can go once
+   `nuvel-mcp db status` shows the rows.
 4. Pick how people get in:
    - **URL keys only** (beta testers connecting with no sign-in): no OAuth app
      is needed. Set `NUVEL_OAUTH_LOGIN=none`.
@@ -209,6 +284,7 @@ its config-as-code `railway.json` is deprecated.
    | Variable | Value |
    |---|---|
    | `NUVEL_MCP_PUBLIC_URL` | `https://<your-domain>` |
+   | `NUVEL_MCP_DATABASE_URL` | Neon's pooled connection string (a secret) |
    | `NUVEL_OAUTH_LOGIN` | `none`, for URL keys only |
    | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | For GitHub login: from the OAuth app |
    | `NUVEL_OAUTH_ALLOWED_USERS` | For GitHub login: the GitHub logins allowed to log in |
@@ -218,8 +294,10 @@ its config-as-code `railway.json` is deprecated.
    `NUVEL_OAUTH_LOGIN=none` or the GitHub credentials, so a misconfigured
    deploy fails its health check rather than running open. A deploy that loses
    its GitHub variables does not fall back to key mode on its own.
-6. Issue clients from a shell on the running service (`railway ssh`), which
-   writes to the same store on `/data`, so the server sees them at once:
+6. Issue clients with the database URL set, from your machine
+   (`railway run nuvel-mcp client create …`) or a shell on the service
+   (`railway ssh`); without a database, only the shell reaches the store on
+   `/data`. Either way the server sees new clients at once:
    `nuvel-mcp client create --name alice --url-key` for a tester (send them the
    printed `connector_url`), or `nuvel-mcp client create --name acme-agent` for
    a headless agent. The server's own access log shows key paths as

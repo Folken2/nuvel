@@ -1,6 +1,6 @@
 # Skills MCP server over HTTP, for container platforms (Railway, Fly, Cloud Run).
 # Build context is this directory: nuvel-mcp has no runtime dependencies, so
-# nothing outside it is needed.
+# nothing outside it is needed. The image adds psycopg for the Postgres store.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -12,11 +12,12 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install . && rm -rf /app/src
+RUN pip install . "psycopg[binary,pool]>=3.2,<4" && rm -rf /app/src
 
-# Mount a persistent volume at /data: the OAuth store (tokens, clients) and the
-# feedback store (run traces, recipes) must survive redeploys. Runs as root
-# because Railway volumes are mounted root-owned.
+# Storage: set NUVEL_MCP_DATABASE_URL (e.g. Neon's pooled connection string) and
+# OAuth, traces, recipes and usage all live in Postgres; nothing on disk matters.
+# Without it the server falls back to files under /data, which then needs a
+# persistent volume. Runs as root because Railway volumes are mounted root-owned.
 ENV NUVEL_MCP_OAUTH_STORE=/data/oauth.json \
     NUVEL_FEEDBACK_DIR=/data/feedback
 RUN mkdir -p /data

@@ -16,6 +16,7 @@ import threading
 import urllib.parse
 from pathlib import Path
 
+import _pg
 from nuvel_mcp.http_transport import HttpConfig, make_server
 from nuvel_mcp.oauth import OAuthConfig, OAuthProvider
 from nuvel_mcp.server import SkillsMCPServer
@@ -83,7 +84,10 @@ def make_hub(root: Path) -> Path:
 
 
 def make_provider(store_path: Path, **overrides) -> OAuthProvider:
-    return OAuthProvider(OAuthConfig(store_path=store_path, **{"dev_login": True, **overrides}))
+    config = OAuthConfig(store_path=store_path, **{"dev_login": True, **overrides})
+    if _pg.OAUTH_ON_POSTGRES:
+        return OAuthProvider(config, _pg.oauth_store_for(store_path))
+    return OAuthProvider(config)
 
 
 def start(hub, provider: OAuthProvider | None = None, no_auth: bool = False,

@@ -211,7 +211,8 @@ def test_public_url_sets_issuer_and_resource(launch, store_path):
 def test_healthz_leaks_no_catalog(anon):
     status, _, data = anon.request("GET", "/healthz")
     body = json.loads(data)
-    assert status == 200 and set(body) == {"status", "transport", "skills", "themes", "tools"}
+    assert status == 200 and set(body) == {"status", "transport", "storage", "skills", "themes", "tools"}
+    assert body["storage"] in ("files", "postgres")
     assert all(isinstance(body[k], int) for k in ("skills", "themes", "tools"))
     for leak in ("rollback", "onboarding", "installer", "search_skills"):
         assert leak not in data.decode()
@@ -268,6 +269,7 @@ def test_register_is_rate_limited(launch, store_path):
     assert status == 429 and int(headers["Retry-After"]) > 0
 
 
+@pytest.mark.file_store
 def test_registered_clients_persist_in_store(anon, store_path):
     _, body = register(anon)
     assert body["client_id"] in json.loads(store_path.read_text())["clients"]
@@ -624,6 +626,7 @@ def test_expired_access_token_is_401(httpd):
     assert status == 401 and 'error="invalid_token"' in headers["WWW-Authenticate"]
 
 
+@pytest.mark.file_store
 def test_revoked_token_is_401_via_cli(httpd, store_path, monkeypatch, capsys):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
     token = service_token(httpd)
@@ -634,6 +637,7 @@ def test_revoked_token_is_401_via_cli(httpd, store_path, monkeypatch, capsys):
     assert cli_main(["token", "revoke", "nvat_unknown"]) == 1
 
 
+@pytest.mark.file_store
 def test_revoke_by_client_id_and_delete_client(anon, httpd, store_path, monkeypatch):
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
     client_id, tokens = user_token(anon)
@@ -665,6 +669,7 @@ def test_revoked_token_closes_open_sse_stream(httpd):
 # --- Storage -----------------------------------------------------------------------------
 
 
+@pytest.mark.file_store
 def test_store_holds_hashes_only_with_tight_permissions(anon, httpd, store_path):
     _, confidential = register(anon, token_endpoint_auth_method="client_secret_basic")
     verifier, challenge = pkce()
@@ -703,6 +708,7 @@ def test_secrets_never_logged(anon, httpd, capfd):
     assert "nvac_" not in err and "code=" not in err and "/authorize?<redacted>" in err
 
 
+@pytest.mark.file_store
 def test_corrupt_store_fails_closed(httpd, store_path):
     token = service_token(httpd)
     store_path.write_text("{not json")
@@ -908,6 +914,7 @@ def test_cli_client_create_and_list(store_path, monkeypatch, capsys):
     assert all("client_secret_hash" not in c for c in listed)
 
 
+@pytest.mark.file_store
 def test_cli_created_client_is_usable_by_running_server(httpd, store_path, monkeypatch, capsys):
     # The CLI writes the store while the server runs; the server sees it.
     monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))

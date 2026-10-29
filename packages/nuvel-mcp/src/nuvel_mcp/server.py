@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,8 +50,10 @@ from nuvel_mcp.installer import install_skill
 from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
 
 if TYPE_CHECKING:  # pragma: no cover
+    from nuvel_mcp.db import Database
     from nuvel_mcp.recipes import RecipeStore
     from nuvel_mcp.traces import TraceStore
+    from nuvel_mcp.usage import UsageRecorder
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -493,9 +496,16 @@ class SkillsMCPServer:
         trace_store: "TraceStore | None" = None,
         health_runs_only: bool = False,
         recipe_store: "RecipeStore | None" = None,
+        usage: "UsageRecorder | None" = None,
+        database: "Database | None" = None,
     ):
         # None means feedback-only mode: no hub tools or resources are served.
         self.loader = loader
+        # One usage event per request when set (Postgres storage); the HTTP
+        # transport sets ``transport``. ``database`` is what /healthz pings.
+        self.usage = usage
+        self.database = database
+        self.transport = "stdio"
         # Optional allow-list narrowing which tools are listed and callable.
         self._allowed_tools = tools
         self.trace_store = trace_store
@@ -1671,6 +1681,45 @@ class SkillsMCPServer:
 
     def dispatch(self, message):
         """Handle one decoded JSON-RPC message. Returns a response dict or None."""
+        if self.usage is None:
+            return self._dispatch(message)
+        started = time.monotonic()
+        response = self._dispatch(message)
+        if isinstance(message, dict) and "id" in message:
+            try:
+                self.usage.record(self._usage_event(message, response, started))
+            except Exception as exc:  # noqa: BLE001 - usage never fails a request
+                log(f"usage: event not recorded: {type(exc).__name__}")
+        return response
+
+    def _usage_event(self, message: dict, response, started: float) -> dict:
+        """The usage record of one request: known names only, never caller text."""
+        method = message.get("method")
+        params = message.get("params")
+        tool = None
+        if method == "tools/call":
+            name = params.get("name") if isinstance(params, dict) else None
+            tool = name if isinstance(name, str) and name in self._tools else "unknown"
+        error = response.get("error") if isinstance(response, dict) else None
+        result = response.get("result") if isinstance(response, dict) else None
+        if error is not None:
+            outcome, code = "error", error.get("code")
+        elif isinstance(result, dict) and result.get("isError"):
+            outcome, code = "tool_error", None
+        else:
+            outcome, code = "ok", None
+        return {
+            "at": datetime.now(timezone.utc),
+            "tenant": current_principal.get(),
+            "transport": self.transport,
+            "method": method if isinstance(method, str) and method in self._methods else "unknown",
+            "tool": tool,
+            "outcome": outcome,
+            "error_code": code if isinstance(code, int) else None,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        }
+
+    def _dispatch(self, message):
         msg_id = message.get("id")
         method = message.get("method")
         is_notification = "id" not in message

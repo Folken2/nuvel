@@ -4,7 +4,7 @@ Serves a skills hub (a directory with ``index.json`` and
 ``<theme>/<name>/SKILL.md`` files) to MCP clients over stdio (default) or HTTP
 (``--transport http``: Streamable HTTP on ``/mcp`` plus legacy SSE on ``/sse``,
 gated by OAuth 2.1). ``nuvel mcp client`` and ``nuvel mcp token`` manage the
-OAuth store. Every flag and command comes from :mod:`nuvel_mcp.cli`, so
+OAuth store; ``nuvel mcp db`` manages the Postgres database. Every flag and command comes from :mod:`nuvel_mcp.cli`, so
 ``nuvel mcp …`` and ``nuvel-mcp …`` stay identical. Stdlib only, so it runs
 without the framework's heavier agent dependencies.
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 
-from nuvel_mcp.cli import add_oauth_commands, add_serve_arguments, run_serve
+from nuvel_mcp.cli import add_db_commands, add_oauth_commands, add_serve_arguments, run_serve
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -44,6 +44,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     add_serve_arguments(p_serve)
     p_serve.set_defaults(func=_cmd_mcp_serve)
     add_oauth_commands(sub)
+    add_db_commands(sub)
 
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
