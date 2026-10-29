@@ -14,6 +14,7 @@ export default defineRailway(() => {
     env: {
       NUVEL_MCP_PUBLIC_URL: preserve(),
       NUVEL_OAUTH_ALLOWED_USERS: preserve(),
+      NUVEL_OAUTH_LOGIN: preserve(),
       PORT: preserve(),
     },
   });
