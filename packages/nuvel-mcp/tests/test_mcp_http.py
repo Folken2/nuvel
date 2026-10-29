@@ -987,7 +987,11 @@ def test_connections_over_the_cap_get_503_and_a_slot_frees_up(server_factory):
         deadline = time.monotonic() + TIMEOUT
         status = None
         while time.monotonic() < deadline:
-            status = client.post(INIT)[0]
+            try:
+                status = client.post(INIT)[0]
+            except ConnectionError:
+                # still capped: the 503 close can beat the client's body write
+                status = None
             if status == 200:
                 break
             time.sleep(0.1)

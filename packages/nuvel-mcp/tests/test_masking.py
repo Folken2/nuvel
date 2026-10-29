@@ -842,11 +842,13 @@ def test_letter_prefixed_ids_are_one_token(text, expected):
 
 def test_letter_prefixed_id_regex_is_bounded():
     # quadratic in the hyphen-part starts at worst; the 8000-character cap bounds it
+    # (~0.9 s locally, ~2.5 s on CI runners). The bound catches catastrophic
+    # backtracking, which takes minutes, not runner speed.
     import time
     start = time.perf_counter()
     for text in ("a-" * 3999 + "a", "ab-" * 2600 + "x", ("a-" * 1000 + " ") * 3):
         mask_text(text, lex({"a"}))
-    assert time.perf_counter() - start < 2
+    assert time.perf_counter() - start < 15
 
 
 def test_lone_number_word_outside_words_is_a_number():
