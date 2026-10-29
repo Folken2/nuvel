@@ -136,16 +136,20 @@ rebinding.
 
 ## Deploy on Railway
 
-`packages/nuvel-mcp/` ships a `Dockerfile` and a `railway.json` for this. The
-image binds `0.0.0.0:$PORT` with `--allow-remote`, keeps the OAuth store and the
-feedback store under `/data`, and Railway health-checks `GET /healthz`.
+`packages/nuvel-mcp/` ships a `Dockerfile` for this. The image binds
+`0.0.0.0:$PORT` with `--allow-remote` and keeps the OAuth store and the feedback
+store under `/data`. The Railway project itself (service, Dockerfile build, `/data`
+volume) is defined in `.railway/railway.ts`, Railway's Infrastructure as Code;
+its config-as-code `railway.json` is deprecated.
 
-1. Create a service from this repository and set its **Root Directory** to
-   `packages/nuvel-mcp`. Railway picks up `railway.json` and builds the
-   `Dockerfile`.
+1. Install the IaC SDK once with `npm install --prefix .railway`, link the
+   repository to your project with `railway link`, then review and apply the
+   definition with `railway config plan` and `railway config apply`. To set it
+   up by hand instead, point the service's **Root Directory** at
+   `/packages/nuvel-mcp` with the Dockerfile builder.
 2. Under **Settings → Networking**, generate a domain on port `8080`.
-3. Attach a volume at `/data`. Without one, every redeploy loses issued tokens,
-   registered clients and run traces.
+3. Make sure the volume is mounted at `/data`. Without it, every redeploy loses
+   issued tokens, registered clients and run traces.
 4. Create a GitHub OAuth app whose callback URL is
    `https://<your-domain>/oauth/callback`.
 5. Set the service variables. Keep the secret in Railway's variables, never in
