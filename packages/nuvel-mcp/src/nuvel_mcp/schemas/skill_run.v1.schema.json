@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nuvel.skill_run/1",
+  "description": "One content-free skill run trace. Closed at every level: every string is an enum, a UUIDv4, a semver, an RFC 3339 timestamp or a short lowercase identifier. 'tenant' is stamped by the server and rejected from clients.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "nuvel.skill_run/1"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "install_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "plugin": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "skill": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "host": {
+      "type": "string",
+      "enum": [
+        "claude-chat",
+        "claude-cowork",
+        "claude-code",
+        "claude-routine",
+        "codex",
+        "other"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "scheduled",
+        "interactive"
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_s": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "success",
+        "partial",
+        "failure",
+        "blocked",
+        "skipped"
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "skipped",
+              "error"
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "maxProperties": 20,
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tools": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "errors": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "name",
+          "calls",
+          "errors"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "errors": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "auth",
+              "rate_limit",
+              "not_found",
+              "permission",
+              "timeout",
+              "tool_error",
+              "contract_violation",
+              "registry_missing",
+              "other"
+            ]
+          }
+        },
+        "required": [
+          "step",
+          "class"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "routing": {
+      "type": "object",
+      "maxProperties": 20,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100000
+      }
+    },
+    "safety": {
+      "type": "object",
+      "properties": {
+        "injection_suspected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "forbidden_tool_requested": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "injection_suspected",
+        "forbidden_tool_requested"
+      ],
+      "additionalProperties": false
+    },
+    "user_corrected": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "install_id",
+    "plugin",
+    "skill",
+    "host",
+    "mode",
+    "started_at",
+    "duration_s",
+    "outcome"
+  ],
+  "additionalProperties": false
+}

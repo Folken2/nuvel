@@ -15,7 +15,7 @@ It ships as:
 - Knowledge skills in `nuvel/backends/<framework>/skills/`.
 - A CLI scaffolder exposed as `nuvel agent create` (deprecated alias: `nuvel new`).
 - A meta-agent exposed as `nuvel run`, implemented as a Google ADK `LlmAgent` in `nuvel/agent.py`.
-- A Skills MCP server exposed as `nuvel mcp serve` (stdio or HTTP), in `nuvel/mcp/` (stdlib only).
+- A Skills MCP server exposed as `nuvel mcp serve` (stdio or HTTP), in `packages/nuvel-mcp/src/nuvel_mcp/` (stdlib only; `nuvel/mcp/` is a deprecated alias).
 
 Generated projects are written to `generated-agents/<name>/` and are standalone runnable FastAPI apps. They should not depend on importing the local `nuvel` package at runtime.
 
@@ -81,7 +81,7 @@ Keep `.claude/skills/nuvel/SKILL.md` in sync with CLI flags, scaffold behavior, 
 `nuvel mcp serve` starts a stdlib-only MCP (Model Context Protocol) server that exposes a skills hub — the [Nuvel Skills](https://github.com/Folken2/skills) repo, or any directory laid out the same way — to MCP clients such as Claude Code, Cursor, and Codex. It speaks stdio by default, or HTTP so clients can point at a URL with nothing installed locally.
 
 ```bash
-nuvel mcp serve [--skills-dir <dir>] [--theme <t>] [--require <cap>]... [--with-org-memory <dsn|path>] [--feedback-dir <dir>]
+nuvel mcp serve [--skills-dir <dir>] [--theme <t>] [--require <cap>]... [--with-org-memory <dsn|path>] [--feedback-dir <dir>] [--tools A,B] [--trace-store local|MODULE:FACTORY]
                 [--transport stdio|http] [--host 127.0.0.1] [--port 8080] [--allow-remote]
                 [--no-auth] [--require-auth]
 nuvel mcp client create --name <n> [--redirect-uri <u>]...
@@ -90,7 +90,7 @@ nuvel mcp client delete <client-id>
 nuvel mcp token revoke <token-or-client-id>
 ```
 
-- `--skills-dir` (default: current directory) points at a skills hub. It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
+- `--skills-dir` points at a skills hub; omit it to serve the feedback tools only (feedback-only mode). It accepts either the skills directory itself (contains `index.json`) or a repo root that contains `skills/index.json`.
 - `--transport stdio` (default) speaks JSON-RPC 2.0 over stdio: protocol messages on stdout (one JSON object per line), diagnostics on stderr.
 - `--transport http` serves the same dispatcher over HTTP (diagnostics still on stderr; request bodies are never logged). `--host` defaults to `127.0.0.1`; binding a non-loopback address (e.g. `0.0.0.0`) exits with an error unless `--allow-remote` is passed. `--port 0` picks a free port. Every MCP method over HTTP requires an OAuth 2.1 access token (see **Authentication** below).
 
@@ -122,7 +122,7 @@ HTTP security defaults and settings:
 
 **Everything over HTTP is gated.** `initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call` (all nine tools, read-only ones included), the `GET /mcp` and `/sse` streams, and `DELETE /mcp` all require `Authorization: Bearer <access token>`. The only unauthenticated surfaces are `/healthz`, the two `/.well-known/` documents, `/register`, `/authorize`, `/oauth/callback` (and `/oauth/dev-login`), `/token`, and CORS preflights. Without a valid token the server answers `401` with `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource", scope="skills:read skills:write"` (plus `error="invalid_token"` when a token was presented). That lets MCP clients run discovery → registration → authorization → retry on their own. Every token failure (unknown, expired, revoked, wrong client, wrong resource) gets the same `401`. `403` is reserved for a valid token that isn't allowed: a missing scope, or a user since removed from the allowlist.
 
-The server is its own authorization server, in `nuvel/mcp/oauth.py`, stdlib only:
+The server is its own authorization server, in `packages/nuvel-mcp/src/nuvel_mcp/oauth.py`, stdlib only:
 
 - **Scopes**: `skills:read` covers every MCP method and the read-only tools. `skills:write` covers `install_skill`, `propose_improvement`, `record_feedback`, and any unknown tool, so it fails closed. Clients get both unless they ask for less.
 - **Dynamic registration** (`POST /register`) accepts `redirect_uris`, `client_name` and `token_endpoint_auth_method` (`none`, `client_secret_basic` or `client_secret_post`; only confidential clients get a `client_secret`). Redirect URIs must be `http://localhost:*` or `http://127.0.0.1:*`, or listed exactly in `NUVEL_OAUTH_REDIRECT_ALLOWLIST` (comma-separated); anything else is `invalid_redirect_uri`. Registered clients can only use `authorization_code` + `refresh_token`. Because registration is open, `client_credentials` is reserved for operator-issued clients (`nuvel mcp client create`).
@@ -162,12 +162,12 @@ It exposes:
 `propose_improvement` delivers via the first available path:
 
 1. `GITHUB_TOKEN` set — files an issue against `github.com/Folken2/skills` (`status: "filed"`, `delivery: "github"`, `issue_url`).
-2. `NUVEL_FEEDBACK_URL` set — POSTs the proposal as JSON to that relay (`status: "relayed"`, `delivery: "relay"`, plus the relay's `issue_url`/`id` if returned). If the relay fails, it falls through to the queue with a `relay_error`.
-3. Otherwise — appends one JSON line to the feedback store's inbound queue, `<feedback dir>/feedback-queue.jsonl`, and returns `status: "queued"`, `delivery: "queue"`, the `queue_path` and the `feedback_dir`. If even that write fails the call returns an error, never a success.
+2. `NUVEL_FEEDBACK_URL` set — POSTs the proposal as JSON to that relay (`status: "relayed"`, `delivery: "relay"`, plus the relay's `issue_url`/`id` if returned). If the relay fails, it falls through to the queue with a `relay_error` (the exception class, plus the HTTP status for an HTTP error — never its message).
+3. Otherwise — appends one JSON line to the feedback store's inbound queue, `<feedback dir>/feedback-queue.jsonl`, and returns `status: "queued"`, `delivery: "queue"` (no server paths: the store location is the operator's `--feedback-dir` / `$NUVEL_FEEDBACK_DIR`). If even that write fails the call returns an error, never a success; error messages carry the exception class (and HTTP status), with the detail in the server log.
 
 **The feedback store.** All local skill feedback lands in one directory: `--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback` (kept out of the skills hub so a read-only clone works). It holds `<skill>/<id>.json` per `record_feedback` report plus `feedback-queue.jsonl` for queued proposals. `check_skill_health` and `get_skill`'s `health` read both, so a queued proposal is visible immediately (repeat submissions of the same proposal share a `feedback_id` and count once). `theme/name` and `name` address the same skill. The former `NUVEL_FEEDBACK_QUEUE` variable is no longer read; the server logs a warning if it is set.
 
-The code lives in `nuvel/mcp/` (`server.py` = JSON-RPC protocol and tools, shared by both transports via `SkillsMCPServer.dispatch`; `http_transport.py` = the HTTP transports, sessions and OAuth routes; `oauth.py` = the OAuth 2.1 store, authorization server and token validation; `skills_loader.py` = hub discovery/loading; `installer.py` = the plan/apply installer behind `install_skill`; `feedback.py` = the feedback store and health computation) with the command handler in `nuvel/commands/mcp_serve.py`. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
+The code lives in `packages/nuvel-mcp/src/nuvel_mcp/` (`server.py` = JSON-RPC protocol and tools, shared by both transports via `SkillsMCPServer.dispatch`; `http_transport.py` = the HTTP transports, sessions and OAuth routes; `oauth.py` = the OAuth 2.1 store, authorization server and token validation; `skills_loader.py` = hub discovery/loading; `installer.py` = the plan/apply installer behind `install_skill`; `feedback.py` = the feedback store and health computation; `cli.py` = the `serve` / `client` / `token` commands shared by `nuvel-mcp` and `nuvel mcp`) with `nuvel/commands/mcp_serve.py` delegating to it. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Role scoping
 

@@ -41,6 +41,13 @@ def describe_run(run: Run) -> str:
     most runs from new users won't match a template, and that's fine.
     """
     agent = run.agent.split("/")[-1]  # strip "(local)/" or similar prefix
+    if run.schema == "skill_run":
+        n_calls, n_steps = run.tool_calls, len(run.steps)
+        return (
+            f"{agent}: {run.subtype or 'unknown'} · "
+            f"{n_calls} tool call{'s' if n_calls != 1 else ''} · "
+            f"{n_steps} step{'s' if n_steps != 1 else ''}"
+        )
     transfers, last_target = _count_transfers(run)
 
     if _has_errors(run):

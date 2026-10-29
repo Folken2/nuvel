@@ -1,0 +1,3 @@
+# English months and weekdays.
+january february march april may june july august september october november december
+monday tuesday wednesday thursday friday saturday sunday

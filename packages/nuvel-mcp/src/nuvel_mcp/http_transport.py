@@ -1,6 +1,6 @@
 """HTTP transports for the Nuvel Skills MCP server. Stdlib only.
 
-Serves the same :class:`~nuvel.mcp.server.SkillsMCPServer` dispatcher that the
+Serves the same :class:`~nuvel_mcp.server.SkillsMCPServer` dispatcher that the
 stdio loop uses, over two wire formats:
 
 Streamable HTTP (MCP 2025-03-26), single endpoint ``/mcp``:
@@ -17,7 +17,7 @@ Legacy HTTP+SSE (MCP 2024-11-05):
 Plus ``GET /healthz`` (unauthenticated liveness + counts only).
 
 Every MCP method on both transports requires an OAuth 2.1 bearer access token
-(see :mod:`nuvel.mcp.oauth`); this server is also the authorization server:
+(see :mod:`nuvel_mcp.oauth`); this server is also the authorization server:
 
     GET  /.well-known/oauth-protected-resource     RFC 9728 metadata
     GET  /.well-known/oauth-authorization-server   RFC 8414 metadata
@@ -32,6 +32,13 @@ An unauthenticated request gets ``401`` with
 ``make_server(..., no_auth=True)`` (``--no-auth``) turns all of this off for
 loopback development.
 
+Every server built here runs its dispatcher in remote mode
+(``SkillsMCPServer.enable_remote_mode``): nothing read from the feedback store
+is served, and without an explicit ``tools`` allow-list only
+``HTTP_DEFAULT_TOOLS`` are exposed. Each authenticated dispatch runs with
+``nuvel_mcp.auth.current_principal`` set to the token's ``client_id``, the
+tenant that run traces are stamped and scoped with (``None`` with no auth).
+
 Diagnostics go to stderr; request bodies, query strings, tokens and codes are
 never logged.
 """
@@ -41,6 +48,7 @@ from __future__ import annotations
 import http.cookies
 import ipaddress
 import json
+import math
 import os
 import queue
 import re
@@ -55,8 +63,9 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from nuvel.mcp import oauth
-from nuvel.mcp.oauth import (
+from nuvel_mcp import oauth
+from nuvel_mcp.auth import current_principal
+from nuvel_mcp.oauth import (
     FORBIDDEN,
     UNAUTHORIZED,
     AuthorizeError,
@@ -65,7 +74,7 @@ from nuvel.mcp.oauth import (
     OAuthStoreError,
     TokenInfo,
 )
-from nuvel.mcp.server import (
+from nuvel_mcp.server import (
     INTERNAL_ERROR,
     INVALID_REQUEST,
     PARSE_ERROR,
@@ -73,7 +82,7 @@ from nuvel.mcp.server import (
     error_response,
     log,
 )
-from nuvel.mcp.skills_loader import SkillsError
+from nuvel_mcp.skills_loader import SkillsError
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
@@ -81,6 +90,9 @@ DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_MAX_SESSIONS = 64
 DEFAULT_SESSION_TTL = 3600.0
 DEFAULT_PING_INTERVAL = 15.0
+DEFAULT_READ_TIMEOUT = 30.0
+DEFAULT_REQUEST_DEADLINE = 30.0
+DEFAULT_MAX_CONNECTIONS = 128
 CORS_MAX_AGE = 600
 
 SESSION_HEADER = "Mcp-Session-Id"
@@ -114,10 +126,29 @@ class HttpConfig:
     max_sessions: int = DEFAULT_MAX_SESSIONS
     session_ttl: float = DEFAULT_SESSION_TTL
     ping_interval: float = DEFAULT_PING_INTERVAL
+    # Seconds one socket read (or write) may stall; also how long an idle
+    # keep-alive connection is kept. Must be > 0.
+    read_timeout: float = DEFAULT_READ_TIMEOUT
+    # Wall-clock seconds a client gets to send a whole request (request line,
+    # headers and body), however slowly it trickles. Must be > 0.
+    request_deadline: float = DEFAULT_REQUEST_DEADLINE
+    # Handler threads (open connections, SSE streams included) served at once;
+    # further connections are refused with 503. Must be >= 1.
+    max_connections: int = DEFAULT_MAX_CONNECTIONS
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
     # The origin clients reach this server at (NUVEL_MCP_PUBLIC_URL). It is the
     # OAuth issuer and resource; unset, the origin is derived from Host.
     public_url: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("read_timeout", "request_deadline"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                env = "NUVEL_MCP_" + name.upper()
+                raise ValueError(f"{env} must be a number of seconds greater than 0 (got {value})")
+        if self.max_connections < 1:
+            raise ValueError("NUVEL_MCP_MAX_CONNECTIONS must be at least 1 "
+                             f"(got {self.max_connections})")
 
     @classmethod
     def from_env(cls) -> "HttpConfig":
@@ -126,6 +157,9 @@ class HttpConfig:
             max_body_bytes=_env_int("NUVEL_MCP_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
             max_sessions=_env_int("NUVEL_MCP_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
             session_ttl=_env_float("NUVEL_MCP_SESSION_TTL", DEFAULT_SESSION_TTL),
+            read_timeout=_env_float("NUVEL_MCP_READ_TIMEOUT", DEFAULT_READ_TIMEOUT),
+            request_deadline=_env_float("NUVEL_MCP_REQUEST_DEADLINE", DEFAULT_REQUEST_DEADLINE),
+            max_connections=_env_int("NUVEL_MCP_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
             allowed_origins=frozenset(
                 o for o in (_normalize_origin(x) for x in origins.split(",")) if o
             ),
@@ -212,6 +246,9 @@ class Session:
         self.last_seen = time.monotonic()
         self.outbox: queue.Queue = queue.Queue()
         self.closed = threading.Event()
+        # Held by the one GET /mcp stream allowed per streamable session, so a
+        # single session cannot pin every connection slot with parallel streams.
+        self.stream_lock = threading.Lock()
 
     def touch(self) -> None:
         self.last_seen = time.monotonic()
@@ -288,6 +325,96 @@ class SessionStore:
 # --- HTTP server -----------------------------------------------------------------------
 
 
+class _DeadlineReader:
+    """Request-side reader with a wall-clock deadline.
+
+    Replaces ``rfile``: every ``recv`` runs with the time left until the
+    deadline as its socket timeout, so a client trickling bytes cannot hold the
+    handler thread past it. Between reads the socket timeout is ``idle``
+    (which also bounds writes). The leftover buffer carries over to the next
+    keep-alive request.
+    """
+
+    def __init__(self, sock: socket.socket, idle: float):
+        self._sock = sock
+        self._idle = idle
+        self._buf = bytearray()
+        self._deadline = math.inf
+
+    def arm(self, seconds: float) -> None:
+        self._deadline = time.monotonic() + seconds
+
+    def _fill(self) -> bool:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("request deadline exceeded")
+        self._sock.settimeout(min(remaining, self._idle))
+        try:
+            data = self._sock.recv(65536)
+        except TimeoutError:
+            raise
+        except OSError:  # reset by peer: same as EOF
+            data = b""
+        finally:
+            self._sock.settimeout(self._idle)
+        self._buf += data
+        return bool(data)
+
+    def readline(self, limit: int = -1) -> bytes:
+        start = 0
+        while True:
+            end = self._buf.find(b"\n", start)
+            if end >= 0:
+                end += 1
+                break
+            if 0 <= limit <= len(self._buf):
+                end = limit
+                break
+            start = len(self._buf)
+            if not self._fill():
+                end = len(self._buf)
+                break
+        if limit >= 0:
+            end = min(end, limit)
+        line = bytes(self._buf[:end])
+        del self._buf[:end]
+        return line
+
+    def read(self, size: int) -> bytes:
+        while len(self._buf) < size and self._fill():
+            pass
+        data = bytes(self._buf[:size])
+        del self._buf[:size]
+        return data
+
+    def close(self) -> None:
+        pass
+
+
+# Upper bound on the bytes a refused (503) connection's unread request may be
+# drained of before closing; the drain itself never waits for more.
+_DRAIN_LIMIT = 256 * 1024
+
+
+def _drain_pending(sock: socket.socket) -> None:
+    """Read and discard whatever request bytes are already queued on ``sock``.
+
+    Closing a TCP socket with unread data sends a reset, which can make the
+    client drop the response it was just sent; draining first gives it a clean
+    close. Non-blocking and bounded, so it cannot stall the accept loop.
+    """
+    sock.setblocking(False)
+    drained = 0
+    try:
+        while drained < _DRAIN_LIMIT:
+            data = sock.recv(65536)
+            if not data:
+                break
+            drained += len(data)
+    except (BlockingIOError, InterruptedError):
+        pass
+
+
 class McpHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server carrying the MCP dispatcher, config, sessions and
     the OAuth provider (``None`` only when auth is deliberately off)."""
@@ -301,12 +428,42 @@ class McpHTTPServer(ThreadingHTTPServer):
         if ":" in host.strip("[]"):
             self.address_family = socket.AF_INET6
             address = (host.strip("[]"), address[1])
+        # Every HTTP server runs in remote mode with the gated default tool
+        # set (unless the caller chose an explicit allow-list).
+        mcp.enable_remote_mode()
         self.mcp = mcp
         self.config = config
         self.oauth = oauth_provider
         self.sessions = SessionStore(config.max_sessions, config.session_ttl)
         self.stopping = threading.Event()
+        self._slots = threading.BoundedSemaphore(config.max_connections)
         super().__init__(address, McpRequestHandler)
+
+    def process_request(self, request, client_address) -> None:
+        # Cap handler threads: when full, answer 503 from the accept loop
+        # (one short write) without spawning a thread.
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(1.0)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\n"
+                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+                request.shutdown(socket.SHUT_WR)
+                _drain_pending(request)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     @property
     def url(self) -> str:
@@ -342,7 +499,58 @@ _HTML_HEADERS = {
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
+# RFC 9110 field-name: a token.
+_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
+class _HeaderTap:
+    """Records the raw lines read while the header block is parsed: the parser
+    unfolds obs-fold, so a fold after an empty value would otherwise vanish."""
+
+    def __init__(self, fp) -> None:
+        self._fp = fp
+        self.lines: list[bytes] = []
+
+    def readline(self, *args) -> bytes:
+        line = self._fp.readline(*args)
+        self.lines.append(line)
+        return line
+
+
 class McpRequestHandler(BaseHTTPRequestHandler):
+    def setup(self) -> None:
+        super().setup()
+        # Reads go through a wall-clock deadline (see handle_one_request); SSE
+        # streams only write, so they are unaffected.
+        self.connection.settimeout(self.server.config.read_timeout)
+        self.rfile.close()
+        self.rfile = _DeadlineReader(self.connection, self.server.config.read_timeout)
+
+    def handle_one_request(self) -> None:
+        # One deadline for request line + headers + body (an idle keep-alive
+        # connection counts too). Expiry closes the connection quietly; a body
+        # that outlives it gets 408 in _read_body.
+        self.rfile.arm(self.server.config.request_deadline)
+        super().handle_one_request()
+
+    def parse_request(self) -> bool:
+        self._expects_continue = False
+        tap = _HeaderTap(self.rfile)
+        self._raw_header_lines = tap.lines
+        self.rfile = tap
+        try:
+            return super().parse_request()
+        finally:
+            self.rfile = tap._fp
+
+    def handle_expect_100(self) -> bool:
+        # The stdlib would send "100 Continue" here, inside parse_request, before
+        # the framing gate, Origin and auth have run. Defer it to _read_body: the
+        # interim response goes out only once the request is accepted and its
+        # body is about to be read; a refused request gets its one final status.
+        self._expects_continue = True
+        return True
+
     server: McpHTTPServer
     protocol_version = "HTTP/1.1"
     server_version = "nuvel-skills-mcp"
@@ -381,7 +589,19 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     def _check_origin(self) -> None:
         """DNS-rebinding guard: a present Origin must be loopback, our public
-        origin, or allow-listed."""
+        origin, or allow-listed.
+
+        A request with no Origin passes even when its Host is foreign (a
+        rebound name). That is acceptable because every path that dispatches
+        or changes state (POST /mcp, POST /messages, DELETE /mcp and the OAuth
+        POSTs) is a non-GET request, and browsers send Origin on every non-GET
+        request, same-origin ones included -- which is what a rebinding page's
+        requests are -- so they are caught here. A non-browser client that
+        omits Origin is not a rebinding attack. GET paths are readable without
+        Origin, but expose only counts (/healthz), public OAuth metadata and the
+        login pages (whose state changes are POSTs); the streams (GET /mcp,
+        GET /sse) need a bearer token (``--no-auth`` is loopback-only).
+        """
         origin = self.headers.get("Origin")
         if origin and not self._origin_ok(origin):
             raise _Reject(HTTPStatus.FORBIDDEN, "Origin not allowed")
@@ -413,19 +633,61 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _send_reject(self, exc: _Reject, msg_id=None) -> None:
         self._send_json(exc.status, error_response(msg_id, exc.code, exc.message), exc.headers)
 
-    def _read_body(self) -> bytes:
-        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
-            raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Chunked bodies are not supported")
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
+    def _check_framing(self) -> int:
+        """The one framing gate, run before Origin, auth and routing: return the
+        declared body length or raise. Every refusal here leaves the connection
+        marked to close (see ``_handle``), so a body is never misread as the
+        next request.
+        """
+        # A header line the parser could not take as "token: value" (e.g.
+        # whitespace before the colon) or a line starting with whitespace.
+        if self.headers.defects:
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
+        # obs-fold (a line starting with SP/HTAB), seen on the raw lines because
+        # the parser joins a fold after an empty value into a clean one.
+        if any(line[:1] in (b" ", b"\t") for line in self._raw_header_lines):
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
+        for name, value in self.headers.items():
+            if not _TOKEN.fullmatch(name) or any(c in value for c in "\r\n\x00"):
+                raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid header")
+        # No transfer coding is supported, in any form or count.
+        if "Transfer-Encoding" in self.headers:
+            raise _Reject(HTTPStatus.LENGTH_REQUIRED, "Transfer-Encoding is not supported")
+        lengths = self.headers.get_all("Content-Length") or []
+        if not lengths:
+            return 0
+        # More than one Content-Length, equal or not, is refused (RFC 9112 6.3).
+        # ASCII digits only: int() would also take "+1", "-0", "1_0" and
+        # non-ASCII digits, none of which a valid Content-Length may be.
+        # Only SP/HTAB is optional whitespace (RFC 9110 5.6.3); str.strip()
+        # would also take VT, FF, NBSP, \x1c-\x1f and \x85.
+        raw = lengths[0].strip(" \t")
+        if len(lengths) > 1 or not (raw.isascii() and raw.isdigit()):
             raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
-        if length < 0:
-            raise _Reject(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
-        if length > self.server.config.max_body_bytes:
+        # More digits than the cap has is over it; checked before int(), which
+        # refuses strings past 4300 digits.
+        max_body = self.server.config.max_body_bytes
+        if len(raw) > len(str(max_body)) or int(raw) > max_body:
             raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large")
-        body = self.rfile.read(length) if length else b""
-        self.close_connection = self._client_wants_close  # body consumed: keep-alive is safe
+        return int(raw)
+
+    def _read_body(self) -> bytes:
+        # Framing was decided by _check_framing; this only reads what it allowed.
+        length = self._body_length
+        if length and self._expects_continue:
+            self._expects_continue = False
+            self.send_response_only(HTTPStatus.CONTINUE)
+            self.end_headers()
+        try:
+            body = self.rfile.read(length) if length else b""
+        except (TimeoutError, OSError):  # client stalled (socket.timeout) or vanished
+            self.close_connection = True
+            raise _Reject(HTTPStatus.REQUEST_TIMEOUT, "Request timed out")
+        if len(body) < length:  # EOF before the declared length: never parse a partial body
+            self.close_connection = True
+            raise _Reject(HTTPStatus.BAD_REQUEST, "Incomplete request body")
+        # The gate passed and the whole declared body was read: keep-alive is safe.
+        self.close_connection = self._client_wants_close
         return body
 
     def _read_form(self) -> dict[str, str]:
@@ -451,7 +713,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         """Decode a JSON-RPC payload -> (messages, is_batch)."""
         try:
             payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError) as exc:  # bad JSON or UTF-8, or nested too deep
+            log(f"Parse error: {type(exc).__name__}")  # never the body
             raise _Reject(HTTPStatus.BAD_REQUEST, "Parse error", PARSE_ERROR)
         if isinstance(payload, list):
             if not payload:
@@ -486,6 +749,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         return {"WWW-Authenticate": "Bearer " + ", ".join(params)}
 
     def _bearer(self) -> str | None:
+        if len(self.headers.get_all("Authorization") or []) > 1:
+            return None  # ambiguous credentials: refuse before any token check
         scheme, _, presented = (self.headers.get("Authorization") or "").partition(" ")
         if scheme.lower() != "bearer" or not presented.strip():
             return None
@@ -538,8 +803,24 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     # --- dispatch -------------------------------------------------------------------
 
-    def _dispatch_all(self, messages) -> list:
-        """Run each message through the shared dispatcher; collect responses."""
+    def _dispatch_all(self, messages, info: TokenInfo | None) -> list:
+        """Run each message through the shared dispatcher; collect responses.
+
+        The caller's tenant is the token's ``client_id`` (never its subject, a
+        person's login); ``None`` when auth is off. Dispatch is synchronous on
+        this thread, so the tool handlers see it via ``current_principal``.
+        This is the only place the principal is set for HTTP: both POST /mcp
+        and the legacy POST /messages route through here, and the ``finally``
+        resets it even when dispatch raises, so a keep-alive connection's next
+        request never inherits it.
+        """
+        reset = current_principal.set(info.client_id if info else None)
+        try:
+            return self._dispatch_each(messages)
+        finally:
+            current_principal.reset(reset)
+
+    def _dispatch_each(self, messages) -> list:
         responses = []
         for message in messages:
             if not isinstance(message, dict):
@@ -597,13 +878,17 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     # --- verbs ----------------------------------------------------------------------
 
     def _handle(self, route) -> None:
-        # Until a route consumes the request body, any reply must close the
-        # connection — otherwise the unread bytes would be parsed as the next request.
+        # Keep-alive is allowed again only once the framing gate has passed and
+        # the declared body is fully read (at once when it is empty, else in
+        # _read_body). Any other reply closes the connection, so unread bytes
+        # are never parsed as the next request.
         self._client_wants_close = self.close_connection
-        if (self.headers.get("Content-Length", "0").strip() not in ("", "0")
-                or "Transfer-Encoding" in self.headers):
-            self.close_connection = True
+        self.close_connection = True
+        self._body_length = 0
         try:
+            self._body_length = self._check_framing()
+            if self._body_length == 0:
+                self.close_connection = self._client_wants_close
             self._check_origin()
             route()
         except _Reject as exc:
@@ -669,7 +954,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # Unauthenticated: status and counts only, never the catalog itself.
         mcp = self.server.mcp
         try:
-            entries = list(mcp._scoped_entries())
+            entries = list(mcp._scoped_entries()) if mcp.loader is not None else []
         except SkillsError as exc:
             log(f"healthz: {exc}")
             self._send_json(HTTPStatus.SERVICE_UNAVAILABLE,
@@ -680,7 +965,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             "transport": "http",
             "skills": len(entries),
             "themes": len({theme for theme, _ in entries}),
-            "tools": len(mcp._tools),
+            "tools": len(mcp.handle_tools_list({})["tools"]),
         })
 
     def _session_or_404(self, session_id: str | None, kind: str, info: TokenInfo | None) -> Session:
@@ -712,7 +997,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             session = self._session_or_404(self.headers.get(SESSION_HEADER), "streamable", info)
 
         try:
-            responses = self._dispatch_all(messages)
+            responses = self._dispatch_all(messages, info)
         except BaseException:
             if is_init:
                 self.server.sessions.terminate(session.id)
@@ -739,7 +1024,13 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                           "GET /mcp requires Accept: text/event-stream",
                           headers={"Allow": "POST, DELETE, OPTIONS"})
         session = self._session_or_404(self.headers.get(SESSION_HEADER), "streamable", info)
-        self._stream(session, still_valid=self._still_valid(info))
+        if not session.stream_lock.acquire(blocking=False):
+            self.close_connection = True  # free this connection's slot right away
+            raise _Reject(HTTPStatus.CONFLICT, "A stream is already open for this session")
+        try:
+            self._stream(session, still_valid=self._still_valid(info))
+        finally:
+            session.stream_lock.release()
 
     def _delete_mcp(self) -> None:
         info = self._authenticate()
@@ -763,7 +1054,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         session = self._session_or_404(self._query().get("sessionId"), "legacy", info)
         messages, _ = self._parse_jsonrpc(self._read_body())
         self._check_scopes(info, messages)
-        for response in self._dispatch_all(messages):
+        for response in self._dispatch_all(messages, info):
             session.send(response)
         self._send(HTTPStatus.ACCEPTED)
 
@@ -779,7 +1070,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         body = self._read_body()
         try:
             metadata = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError):  # bad JSON or UTF-8, or nested too deep
             raise OAuthError("invalid_client_metadata", "Body must be JSON")
         response = self.server.oauth.register_client(metadata, self.client_address[0])
         self._send_json(HTTPStatus.CREATED, response, _NO_STORE)
@@ -911,7 +1202,13 @@ def make_server(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFA
         oauth_provider = None
     elif oauth_provider is None:
         raise ValueError("the gated HTTP transport needs an OAuthProvider (or no_auth=True)")
-    return McpHTTPServer((host, port), mcp, config or HttpConfig.from_env(), oauth_provider)
+    config = config or HttpConfig.from_env()
+    if config.max_sessions >= config.max_connections:
+        log(f"Warning: NUVEL_MCP_MAX_SESSIONS ({config.max_sessions}) >= "
+            f"NUVEL_MCP_MAX_CONNECTIONS ({config.max_connections}): every open SSE stream "
+            "holds a connection, so streams can use up all connections before the "
+            "session cap applies. Keep sessions below connections.")
+    return McpHTTPServer((host, port), mcp, config, oauth_provider)
 
 
 def serve_http(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
@@ -928,7 +1225,8 @@ def serve_http(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFAU
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    log(f"nuvel-skills MCP server starting (skills_dir={mcp.loader.skills_dir})")
+    where = mcp.loader.skills_dir if mcp.loader is not None else "none (feedback-only)"
+    log(f"nuvel-skills MCP server starting (skills_dir={where})")
     log(f"Listening on {httpd.url}  (streamable: /mcp, legacy SSE: /sse, health: /healthz)")
     if httpd.oauth is not None:
         log(f"OAuth 2.1: every MCP method needs a bearer token "

@@ -1,0 +1,43 @@
+# Hand-reviewed Spanish business vocabulary (spec §4.2 "Plus"). Generic words
+# only: no names, companies, products or places. The build drops any entry
+# that a name, place or brand list contains.
+
+# imperatives (tú) of the recipe actions, with common enclitics
+revisa revísalo revísala revísalos revísalas repasa repásalo comprueba compruébalo
+redacta redáctalo redáctala escribe escríbele escríbeles envía envíalo envíala envíalos envíalas envíale envíales
+manda mándalo mándala mándale mándales reenvía reenvíalo responde contesta contéstale
+prepara prepáralo prepárala actualiza actualízalo crea créalo genera archiva archívalo guarda guárdalo
+resume resúmelo extrae compara compáralo compárala calcula lista enumera traduce tradúcelo
+agenda programa planifica recuerda recuérdale recuérdales recuérdame recuérdaselo
+pregunta pregúntale pregúntales pide pídele pídeles llama llámale avisa avísale avisa
+confirma confírmalo concilia busca averigua investiga mira mírate comprueba decide espera
+asigna asígnalo asígnala asígnalas asígnalos sigue haz dime dile corrige corrígelo valida aprueba
+reclama reclámale negocia renegocia renegociar renueva cancela reserva resérvalo bloquea comparte compártelo
+adjunta adjúntalo sube descarga marca márcalo filtra ordena ordénalas clasifica etiqueta mueve
+anota apunta organiza coordina convoca reprograma pospón cierra abre factura cobra paga
+
+# infinitives and forms often missing from news text
+enviarla enviarlo enviarle enviará enviarán enviaré recordarle recordarles mandarle preguntarle
+digitalizar facturar presupuestar reprogramar renegociar escalar priorizar
+miraré revisaré mandaré prepararé llamaré
+
+# nouns and adjectives of business
+factura facturas presupuesto presupuestos propuesta propuestas oferta ofertas pedido pedidos albarán albaranes
+cliente clientes proveedor proveedores proveedora proveedoras contrato contratos póliza pólizas
+reunión reuniones acta actas agenda orden informe informes resumen resúmenes borrador borradores
+proyecto proyectos hito hitos fase fases entrega entregas entregable entregables plazo plazos
+correo correos bandeja buzón adjunto adjuntos enlace enlaces carpeta carpetas documento documentos
+seguro seguros aseguradora siniestro renovación renovaciones vencimiento vence vencida vencidas
+nómina nóminas plantilla empleado empleados contratación candidato candidatos entrevista entrevistas
+ventas compras cobros pagos impagos gastos ingresos margen márgenes coste costes beneficio caja tesorería
+trimestral trimestre semestral semestre mensual anual desviación desviaciones penalización penalizaciones
+inversor inversores inversión ronda capital socio socios accionista accionistas consejo
+logística transporte transportes envío envíos almacén stock inventario
+reserva reservas vuelo vuelos tren hotel hoteles localizador sala salas catering
+marketing campaña campañas boletín newsletter newsletters feedback leads lead partners partner marketplace
+offsite onboarding kickoff teletrabajo dashboard panel portal web
+taller talleres mecánico panadería imprenta hostelería ingeniería naviera reformas soluciones sistemas
+industrias cerámicas textiles plásticos muebles aceros cartonajes distribuciones bodegas hermanos
+subvención subvenciones ayuda ayudas licitación licitaciones
+equipo equipos departamento área responsable gerente director directora
+mañana pasado tarde hoy ayer semana semanas mes meses

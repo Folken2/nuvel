@@ -1,4 +1,4 @@
-"""Tests for the Nuvel Skills MCP server (nuvel.mcp)."""
+"""Tests for the Nuvel Skills MCP server (nuvel_mcp)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import (
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import (
     SkillsError,
     SkillsLoader,
     parse_frontmatter,
@@ -623,6 +623,16 @@ class TestFeedbackTools(unittest.TestCase):
         self.assertEqual(len(parts[3]), 16)
         # Remainder is the microsecond suffix.
         self.assertGreater(len("-".join(parts[4:])), 4)
+
+
+def test_org_memory_import_error_names_the_missing_module(monkeypatch, tmp_path, capsys):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nuvel.memory.factory", None)  # forces ImportError
+    server = SkillsMCPServer(None, feedback_dir=tmp_path)
+    assert server._resolve_templates("hi {{ x }}", ["x"]) is None
+    err = capsys.readouterr().err
+    assert "nuvel.memory.factory" in err and "nuvel-cli" in err
 
 
 if __name__ == "__main__":

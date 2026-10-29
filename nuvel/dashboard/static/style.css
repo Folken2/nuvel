@@ -77,3 +77,8 @@ a.ed-run:hover { background: rgba(0,0,0,0.02); }
 .ed-event.transfer .kind { color: var(--ed-accent); }
 .ed-event.err .kind { color: #b45309; }
 .ed-event.llm-resp .body { color: var(--ed-fg); font-style: italic; font-family: "Source Serif 4", "Source Serif Pro", Georgia, serif; font-size: 13px; }
+
+.ed-steps { border-collapse: collapse; margin: 0 0 32px; font-size: 13px; }
+.ed-steps th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ed-muted); font-weight: 600; padding: 0 24px 8px 0; }
+.ed-steps td { padding: 4px 24px 4px 0; }
+.ed-steps td.err { color: #b3261e; font-weight: 600; }

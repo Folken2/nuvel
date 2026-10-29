@@ -1,0 +1,67 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "a207270a-59c4-47de-ac79-13dcfb3cd0e2",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "skill": {
+    "name": "radar",
+    "version": "0.3.0"
+  },
+  "host": "claude-routine",
+  "mode": "scheduled",
+  "started_at": "2026-10-27T08:30:00Z",
+  "duration_s": 55,
+  "outcome": "success",
+  "steps": [
+    {
+      "id": "radar.load-state",
+      "status": "ok"
+    },
+    {
+      "id": "radar.sweep.email",
+      "status": "ok",
+      "counts": {
+        "read": 14,
+        "relevant": 3,
+        "skipped_noise": 6,
+        "needs_you_now": 1,
+        "decide": 1,
+        "open_loops": 4,
+        "handoffs_applied": 0
+      }
+    },
+    {
+      "id": "radar.sweep.calendar",
+      "status": "ok"
+    },
+    {
+      "id": "radar.sweep.chat",
+      "status": "ok"
+    },
+    {
+      "id": "radar.write",
+      "status": "ok"
+    },
+    {
+      "id": "radar.notify",
+      "status": "ok"
+    }
+  ],
+  "routing": {
+    "vip": 1,
+    "priority": 1,
+    "ask": 1,
+    "waiting_on": 1,
+    "decide": 1,
+    "watching": 2,
+    "noise": 6
+  },
+  "safety": {
+    "injection_suspected": 0,
+    "forbidden_tool_requested": 0
+  },
+  "user_corrected": false
+}

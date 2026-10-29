@@ -1,0 +1,57 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "f36a0ab6-ae66-486d-9040-99eff1b5a1e8",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "skill": {
+    "name": "brief",
+    "version": "0.3.0"
+  },
+  "host": "claude-cowork",
+  "mode": "interactive",
+  "started_at": "2026-10-27T09:30:00Z",
+  "duration_s": 65,
+  "outcome": "success",
+  "steps": [
+    {
+      "id": "brief.load-state",
+      "status": "ok"
+    },
+    {
+      "id": "brief.refresh-radar",
+      "status": "ok",
+      "counts": {
+        "meetings": 4,
+        "needs_you_now": 1,
+        "due_or_overdue": 2,
+        "waiting_on": 3,
+        "free_blocks": 2,
+        "conflicts": 0
+      }
+    },
+    {
+      "id": "brief.read-calendar",
+      "status": "ok",
+      "counts": {
+        "meetings": 4,
+        "needs_you_now": 1,
+        "due_or_overdue": 2,
+        "waiting_on": 3,
+        "free_blocks": 2,
+        "conflicts": 0
+      }
+    },
+    {
+      "id": "brief.write",
+      "status": "ok"
+    }
+  ],
+  "safety": {
+    "injection_suspected": 0,
+    "forbidden_tool_requested": 0
+  },
+  "user_corrected": false
+}

@@ -10,3 +10,4 @@ composio>=0.7.0
 croniter>=2.0.0,<7.0.0
 asyncpg>=0.29,<1.0
 pgvector>=0.3,<1.0
+nuvel-mcp>=0.5.0.dev0,<0.6

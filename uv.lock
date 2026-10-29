@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 
+[manifest]
+members = [
+    "nuvel-cli",
+    "nuvel-mcp",
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -1550,7 +1556,7 @@ wheels = [
 
 [[package]]
 name = "nuvel-cli"
-version = "0.3.1"
+version = "0.5.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },
@@ -1561,6 +1567,7 @@ dependencies = [
     { name = "google-cloud-storage" },
     { name = "jinja2" },
     { name = "litellm" },
+    { name = "nuvel-mcp" },
     { name = "pgvector" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1589,6 +1596,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.83.0,<2.0.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
+    { name = "nuvel-mcp", editable = "packages/nuvel-mcp" },
     { name = "pgvector", specifier = ">=0.3,<1.0" },
     { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.7" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23,<2.0" },
@@ -1597,6 +1605,11 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.40.0,<1.0.0" },
 ]
 provides-extras = ["docs", "test"]
+
+[[package]]
+name = "nuvel-mcp"
+version = "0.5.0.dev0"
+source = { editable = "packages/nuvel-mcp" }
 
 [[package]]
 name = "openai"

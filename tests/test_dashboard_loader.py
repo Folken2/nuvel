@@ -61,6 +61,19 @@ def test_loader_returns_none_for_unknown_id(traces_dir: Path) -> None:
     assert loader.find_by_id("does-not-exist") is None
 
 
+def test_loader_rejects_an_empty_id(traces_dir: Path) -> None:
+    loader = TraceLoader(sources=[traces_dir])
+    assert loader.find_by_id("") is None
+
+
+def test_loader_exposes_static_sources_and_keeps_runs_unsorted_private(
+    traces_dir: Path,
+) -> None:
+    loader = TraceLoader(sources=[traces_dir])
+    assert loader.static_sources() == [traces_dir]
+    assert not hasattr(loader, "runs_unsorted")
+
+
 def test_loader_returns_empty_list_for_empty_dir(tmp_path: Path) -> None:
     loader = TraceLoader(sources=[tmp_path / "empty"])
     assert loader.runs() == []

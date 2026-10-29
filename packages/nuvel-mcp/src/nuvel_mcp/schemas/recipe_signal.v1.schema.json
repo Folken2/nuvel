@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nuvel.recipe_signal/1",
+  "description": "One content-free recipe lifecycle signal. Closed at every level. 'tenant' is stamped by the server and rejected from clients.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "nuvel.recipe_signal/1"
+    },
+    "signal_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "recipe_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "install_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "plugin": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "created",
+        "used",
+        "succeeded",
+        "corrected",
+        "retired"
+      ]
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "uses": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "successes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "corrections": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    }
+  },
+  "required": [
+    "schema",
+    "signal_id",
+    "recipe_id",
+    "install_id",
+    "plugin",
+    "category",
+    "event",
+    "at",
+    "uses",
+    "successes",
+    "corrections"
+  ],
+  "additionalProperties": false
+}

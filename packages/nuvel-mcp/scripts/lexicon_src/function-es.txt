@@ -1,0 +1,30 @@
+# Spanish closed-class words (articles, prepositions, conjunctions, pronouns,
+# auxiliaries) and common adverbs. Exempt from name, place and brand
+# subtraction (I1 ruling); a Capitalised form mid-sentence is still masked.
+# articles and contractions
+el la los las lo un una unos unas al del
+# prepositions
+ante bajo con contra de desde durante en entre hacia hasta mediante para por según sin sobre tras
+# conjunctions
+ni pero sino aunque porque que si como cuando donde mientras pues luego
+# pronouns and determiners
+yo tú él ella ello nosotros nosotras vosotros vosotras ellos ellas me te se nos os le les
+mí ti sí conmigo contigo consigo usted ustedes mi mis tu tus su sus nuestro nuestra nuestros nuestras
+vuestro vuestra vuestros vuestras este esta estos estas ese esa esos esas aquel aquella aquellos aquellas
+esto eso aquello quien quienes cual cuales cuyo cuya qué quién quiénes cuál cuáles cuánto cuánta cuántos cuántas
+algo alguien nada nadie alguno alguna algunos algunas algún ninguno ninguna ningún todo toda todos todas
+otro otra otros otras mismo misma mismos mismas cada varios varias tanto tanta tantos tantas
+mucho mucha muchos muchas poco poca pocos pocas demás ambos ambas
+# auxiliaries
+ser soy eres es somos son era eras éramos eran fue fui fueron sido siendo sea sean sería serán será
+estar estoy estás está estamos están estaba estaban estado estuvo esté estén
+haber he has ha hemos han había habían hay habrá habría haya hayan habido hubo
+tener tengo tienes tiene tenemos tienen tenía tenido tuvo tenga
+ir voy vas va vamos van iba ido fue vaya
+poder puedo puedes puede podemos pueden podía podría podrías pudo
+deber debo debes debe debemos deben debería
+hacer hago haces hace hacemos hacen hizo hecho haga
+# common adverbs
+no sí ya muy más menos también tampoco siempre nunca jamás hoy ayer mañana ahora antes después
+pronto tarde temprano aquí allí ahí allá acá bien mal así casi solo sólo todavía aún además entonces
+quizá quizás bastante demasiado dónde cuándo cómo cuánto adónde mejor peor despacio rápido

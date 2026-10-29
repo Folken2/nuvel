@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]  # >=77: SPDX license + license-files
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuvel-mcp"
+version = "0.5.0.dev0"
+description = "Dependency-free Skills MCP server for Nuvel skill hubs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+# A copy of the repository LICENSE: license files must sit inside the package root.
+license-files = ["LICENSE"]
+authors = [{ name = "Albert Folch" }]
+dependencies = []
+
+[project.scripts]
+nuvel-mcp = "nuvel_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nuvel_mcp = ["schemas/*.json", "lexicon/*.txt", "lexicon/*.md"]

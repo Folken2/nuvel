@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -10,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from nuvel.mcp import server as server_mod
-from nuvel.mcp.server import SkillsMCPServer
-from nuvel.mcp.skills_loader import SkillsLoader
+from nuvel_mcp import server as server_mod
+from nuvel_mcp.server import SkillsMCPServer
+from nuvel_mcp.skills_loader import SkillsLoader
 
 # theme -> [(name, description, frontmatter version, body)]; a body of None
 # means the SKILL.md is not vendored (a dependency entry).
@@ -119,7 +120,8 @@ def test_tools_list_has_full_tool_set(server):
     assert set(tools) == {
         "search_skills", "list_skills", "list_themes",
         "get_skill", "install_skill", "propose_improvement",
-        "fence_value", "record_feedback", "check_skill_health",
+        "fence_value", "record_feedback", "check_skill_health", "record_run_trace",
+        "record_recipe_signal", "share_recipe",
     }
     assert "confirm=true" in tools["install_skill"]["description"]
     assert tools["propose_improvement"]["inputSchema"]["required"] == [
@@ -527,7 +529,7 @@ def test_propose_queues_without_token_or_relay(server, tmp_path):
     assert result["delivery"] == "queue"
     assert re.fullmatch(r"[0-9a-f]{16}", result["feedback_id"])
     queue = tmp_path / "feedback" / "feedback-queue.jsonl"
-    assert result["queue_path"] == str(queue)
+    assert "queue_path" not in result and "feedback_dir" not in result
     lines = queue.read_text().splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
@@ -540,8 +542,7 @@ def test_propose_queues_without_token_or_relay(server, tmp_path):
 def test_propose_queue_creates_parent_dirs(server, tmp_path, monkeypatch):
     queue = tmp_path / "deep" / "er" / "feedback-queue.jsonl"
     monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(queue.parent))
-    result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
-    assert result["queue_path"] == str(queue)
+    call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
     assert queue.is_file()
 
 
@@ -605,8 +606,124 @@ def test_propose_relay_failure_falls_back_to_queue(server, tmp_path, monkeypatch
     monkeypatch.setattr(server_mod.urllib.request, "urlopen", fake)
     result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
     assert result["status"] == "queued"
-    assert "unreachable" in result["relay_error"]
-    assert (tmp_path / "feedback" / "feedback-queue.jsonl").is_file()
+    # Class name only: the exception text can echo the relay URL (credentials).
+    assert result["relay_error"] == "URLError"
+    queue = tmp_path / "feedback" / "feedback-queue.jsonl"
+    record = json.loads(queue.read_text().splitlines()[0])
+    assert record["relay_error"] == "URLError"
+    assert "unreachable" not in queue.read_text()
+
+
+def test_propose_relay_http_error_reports_class_and_status(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("NUVEL_FEEDBACK_URL", "https://relay.example/feedback")
+    exc = server_mod.urllib.error.HTTPError(
+        "https://relay.example/feedback", 502, "bad gateway at relay.example", {},
+        io.BytesIO(b"upstream body"))
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(exc=exc))
+    result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert result["relay_error"] == "HTTPError 502"
+    assert "relay.example" not in (tmp_path / "feedback" / "feedback-queue.jsonl").read_text()
+
+
+def test_propose_github_http_error_hides_the_response_body(server, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    exc = server_mod.urllib.error.HTTPError(
+        server_mod.GITHUB_ISSUES_URL, 422, "Unprocessable", {},
+        io.BytesIO(b'{"message": "secret-detail /srv/private"}'))
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(exc=exc))
+    err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert err["code"] == server_mod.INTERNAL_ERROR
+    assert "422" in err["message"]
+    assert "secret-detail" not in err["message"] and "/srv" not in err["message"]
+    assert "secret-detail" in capsys.readouterr().err  # the detail goes to the server log
+
+
+def test_propose_github_unreachable_reports_class_only(server, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    exc = server_mod.urllib.error.URLError("unreachable via proxy.internal")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(exc=exc))
+    err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert err["code"] == server_mod.INTERNAL_ERROR
+    assert "URLError" in err["message"]
+    assert "unreachable" not in err["message"] and "proxy.internal" not in err["message"]
+    assert "proxy.internal" in capsys.readouterr().err
+
+
+class _BadBody:
+    """A response whose read() fails mid-body, or returns a non-JSON body."""
+
+    def __init__(self, exc: Exception | None = None, body: bytes = b""):
+        self.exc, self.body = exc, body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self, *args):
+        if self.exc:
+            raise self.exc
+        return self.body
+
+
+def _incomplete_read():
+    return http.client.IncompleteRead(b"partial /srv/private", 99)
+
+
+@pytest.mark.parametrize("response, cls", [
+    (lambda: _BadBody(exc=_incomplete_read()), "IncompleteRead"),
+    (lambda: _BadBody(body=b"<html>secret-detail /srv/private</html>"), "JSONDecodeError"),
+    (lambda: _BadBody(body=b"\xff\xfe secret-detail"), "UnicodeDecodeError"),
+])
+def test_propose_github_bad_response_reports_class_only(server, monkeypatch, response, cls):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen",
+                        lambda request, timeout=None: response())
+    err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert err["code"] == server_mod.INTERNAL_ERROR
+    assert cls in err["message"]
+    assert "secret-detail" not in err["message"] and "/srv" not in err["message"]
+
+
+def test_propose_relay_incomplete_read_falls_back_to_queue(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("NUVEL_FEEDBACK_URL", "https://relay.example/feedback")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen",
+                        lambda request, timeout=None: _BadBody(exc=_incomplete_read()))
+    result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert result["status"] == "queued"
+    assert result["relay_error"] == "IncompleteRead"
+    assert "/srv" not in (tmp_path / "feedback" / "feedback-queue.jsonl").read_text()
+
+
+def test_propose_github_bad_response_over_stdio_has_no_exception_text(server, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen",
+                        lambda request, timeout=None: _BadBody(exc=_incomplete_read()))
+    request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "propose_improvement",
+                          "arguments": {"skill_name": SKILL, **PROPOSAL}}}
+    out = io.StringIO()
+    server.serve(io.StringIO(json.dumps(request) + "\n"), out)
+    raw = out.getvalue()
+    assert "IncompleteRead" in raw
+    assert "/srv" not in raw and "partial" not in raw and "99 more" not in raw
+
+
+def test_propose_over_stdio_returns_no_path_or_exception_text(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("NUVEL_FEEDBACK_URL", "https://relay.example/feedback")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(
+        exc=server_mod.urllib.error.URLError("unreachable relay.example")))
+    request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "propose_improvement",
+                          "arguments": {"skill_name": SKILL, **PROPOSAL}}}
+    out = io.StringIO()
+    server.serve(io.StringIO(json.dumps(request) + "\n"), out)
+    raw = out.getvalue()
+    result = json.loads(json.loads(raw)["result"]["content"][0]["text"])
+    assert result["status"] == "queued" and result["relay_error"] == "URLError"
+    assert str(tmp_path) not in raw and "feedback-queue" not in raw
+    assert "unreachable" not in raw and "relay.example" not in raw
 
 
 def test_propose_relay_rejects_non_http_url(server, tmp_path, monkeypatch):
@@ -636,9 +753,86 @@ def test_propose_unqueueable_is_an_error_not_success(server, tmp_path, monkeypat
     monkeypatch.setenv("NUVEL_FEEDBACK_DIR", str(blocker / "store"))
     err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
     assert err["code"] == server_mod.INTERNAL_ERROR
+    assert str(tmp_path) not in err["message"] and "blocker" not in err["message"]
+
+
+def test_unknown_tool_error_does_not_echo_the_name(server):
+    for name in ("/etc/passwd", "<script>x</script>", 7, None):
+        err = call_error(server, name)
+        assert err == {"code": server_mod.INVALID_PARAMS, "message": "Unknown tool"}
 
 
 def test_propose_missing_required_args(server):
     err = call_error(server, "propose_improvement", skill_name=SKILL)
     assert err["code"] == server_mod.INVALID_PARAMS
     assert "issue" in err["message"] and "suggested_fix" in err["message"]
+
+
+
+
+def _http_error_with_unreadable_body(exc):
+    """A GitHub HTTPError whose body read itself fails (cut-off error reply)."""
+    class _Body(io.BytesIO):
+        def read(self, *args):
+            raise exc
+    return server_mod.urllib.error.HTTPError(
+        server_mod.GITHUB_ISSUES_URL, 502, "Bad Gateway", {}, _Body(b""))
+
+
+@pytest.mark.parametrize("read_exc", [
+    _incomplete_read(), ConnectionResetError("reset by /srv/private"),
+])
+def test_propose_github_http_error_with_unreadable_body(server, monkeypatch, read_exc):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    exc = _http_error_with_unreadable_body(read_exc)
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(exc=exc))
+    err = call_error(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert err == {"code": server_mod.INTERNAL_ERROR,
+                   "message": "GitHub API request failed: HTTPError 502"}
+
+
+@pytest.mark.parametrize("reply", [b"[1, 2]", b"null", b'"text"', b"7"])
+def test_propose_github_non_object_reply_is_filed_without_links(server, monkeypatch, reply):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", _FakeUrlopen(reply))
+    result = call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert result["status"] == "filed"
+    assert result["issue_url"] is None and result["issue_number"] is None
+
+
+def test_propose_github_request_has_a_timeout(server, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    seen = {}
+
+    def fake(request, timeout=None):
+        seen["timeout"] = timeout
+        return io.BytesIO(b'{"html_url": "https://github.com/x/1", "number": 1}')
+
+    monkeypatch.setattr(server_mod.urllib.request, "urlopen", fake)
+    call(server, "propose_improvement", skill_name=SKILL, **PROPOSAL)
+    assert seen["timeout"] == server_mod.RELAY_TIMEOUT_SECONDS
+
+
+def _raise_skills_error(params):
+    raise server_mod.SkillsError("bad frontmatter in /srv/private/skills/x/SKILL.md")
+
+
+def test_skills_error_is_masked_in_remote_mode(server, capsys):
+    server.health_runs_only = True
+    server._methods["test/skills-error"] = _raise_skills_error
+    resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "test/skills-error"})
+    assert resp["error"] == {"code": server_mod.INTERNAL_ERROR, "message": "Skills error"}
+    assert "/srv/private" in capsys.readouterr().err  # detail stays in the server log
+
+
+def test_skills_error_keeps_detail_over_stdio(server):
+    server._methods["test/skills-error"] = _raise_skills_error
+    resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "test/skills-error"})
+    assert resp["error"]["message"].startswith("Skills error: bad frontmatter")
+
+
+def test_method_not_found_does_not_echo_the_method(server):
+    for method in ("/etc/passwd", "<script>x</script>", "tools/nope"):
+        resp = server.dispatch({"jsonrpc": "2.0", "id": 1, "method": method})
+        assert resp["error"] == {"code": server_mod.METHOD_NOT_FOUND,
+                                 "message": "Method not found"}

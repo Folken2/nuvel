@@ -121,6 +121,14 @@ nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>]
 
 Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total cost. Prints a cost-coverage warning at the bottom when runs have token usage but no cost — the symptom of a model missing from `pricing.json`. Run `nuvel doctor` to verify.
 
+### `nuvel traces recipes`
+
+```bash
+nuvel traces recipes [-s <dir>]
+```
+
+Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest masked version. The feedback directory is always searched; `--source` adds more roots. Counters come from each recipe's latest signal per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
+
 ### `nuvel traces errors`
 
 ```bash
@@ -183,7 +191,7 @@ nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-op
 | `--demo` | off | Load bundled demo fixtures instead of real traces. |
 | `--no-open` | off | Don't open the browser automatically. |
 
-Two pages: a home view (hero + headline stats + recent activity) and a per-run detail with the thinking timeline. Live updates push new runs as the watcher sees them.
+Three pages: a home view (hero + headline stats + recent activity), a per-run detail with the thinking timeline, and `/recipes`, the **Recipe candidates** view (the same data as `nuvel traces recipes`, plus the latest recipe per category: its action sequence, slots and masked narrative). Live updates push new runs as the watcher sees them.
 
 ## `nuvel eval`
 
@@ -273,6 +281,34 @@ nuvel run [--dev]
 | `--dev` | Sets `DEV_MODE=true` for the meta-agent's session service (in-memory; no Postgres needed). |
 
 The meta-agent itself is a nuvel-scaffolded ADK agent. Its source is under `nuvel/` in the repository.
+
+## `nuvel-mcp serve`
+
+Standalone Skills MCP server, shipped as its own dependency-free package (`nuvel-mcp`). `nuvel mcp serve` delegates to it with the same flags.
+
+```bash
+uvx nuvel-mcp serve --skills-dir ./skills-hub
+nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--allow-remote] [--no-auth] [--require-auth]
+nuvel-mcp client create --name NAME [--redirect-uri URI ...]
+nuvel-mcp client list [--json]
+nuvel-mcp client delete CLIENT_ID
+nuvel-mcp token revoke TOKEN_OR_CLIENT_ID
+```
+
+| Flag | Description |
+|---|---|
+| `--skills-dir DIR` | Skills hub to serve. Optional: without it the server starts in feedback-only mode and exposes just the feedback tools (`record_feedback`, `check_skill_health`, `propose_improvement`, `record_run_trace`). `nuvel mcp serve` used to serve the current directory when it was omitted; pass `--skills-dir .` to keep that. |
+| `--tools A,B` | Comma-separated allow-list of tool names to expose. Default: every tool on stdio; over HTTP `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value`, `record_run_trace` and `check_skill_health`. `record_feedback`, `propose_improvement` and `install_skill` are exposed over HTTP only when named here. |
+| `--trace-store` | Where `record_run_trace` keeps traces: `local` (JSONL under `<feedback-dir>/_runs/`, the default) or `module:factory`, a zero-argument callable returning a `TraceStore`. See [Skill run traces](skill-run-traces.md). |
+| `--transport stdio\|http` | `stdio` (default) or `http`: Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` + `/messages`, and `GET /healthz`. Both need only the standard library. |
+| `--host H`, `--port P` | HTTP bind address. Default `127.0.0.1:8080` (`--port 0` picks a free port). |
+| `--allow-remote` | Allow a non-loopback `--host`. Requires `NUVEL_MCP_PUBLIC_URL` and GitHub OAuth credentials. |
+| `--no-auth` | HTTP only: disable OAuth for local development. Refused unless `--host` is loopback. There is then no principal, so traces carry no `tenant` and `check_skill_health` aggregates all tenants, as over stdio. |
+| `--require-auth` | stdio only: gate every request on the access token in `$NUVEL_MCP_ACCESS_TOKEN`. HTTP is always gated unless `--no-auth`. |
+
+HTTP requires an OAuth 2.1 access token by default. The tenant of each run trace is the token's OAuth `client_id`. Operators create clients with `client create` (the secret is printed once) and revoke access with `client delete` or `token revoke`. Tuning and deployment settings (`NUVEL_MCP_PUBLIC_URL`, `NUVEL_OAUTH_*`, `NUVEL_MCP_REQUEST_DEADLINE`, `NUVEL_MCP_READ_TIMEOUT`, `NUVEL_MCP_MAX_CONNECTIONS`, ...) are listed in [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md).
+
+`nuvel-mcp` has no runtime dependencies and no extras. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
 
 ## Programmatic API
 

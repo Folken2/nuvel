@@ -145,12 +145,15 @@ class ScoreSession:
 
     async def run(self) -> ScoreReport:
         report = ScoreReport()
-        dirs = _discover_trace_dirs(self.sources)
+        dirs = _discover_trace_dirs(self.sources, include_skill_runs=False)
         if not dirs:
             logger.info("no trace directories found")
             return report
 
-        all_runs = _collect_runs(self.sources, keep_events=True)
+        all_runs = [
+            r for r in _collect_runs(self.sources, keep_events=True, include_skill_runs=False)
+            if r.schema != "skill_run"
+        ]
         baseline = compute_baseline_stats(all_runs)
 
         # Group runs by their containing trace directory.

@@ -1,0 +1,6 @@
+# Catalan number words (cardinals and the ordinals used in dates). Hand-written closed set.
+zero un una dos dues tres quatre cinc sis set vuit nou deu
+onze dotze tretze catorze quinze setze disset divuit dinou
+vint trenta quaranta cinquanta seixanta setanta vuitanta noranta
+cent cents centes mil milió milio milions bilió bilions
+primer primera segon tercer quart cinquè sisè setè vuitè novè desè

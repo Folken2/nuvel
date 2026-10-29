@@ -1,0 +1,19 @@
+# Catalan closed-class words (articles, prepositions, conjunctions, pronouns,
+# auxiliaries) and common adverbs. Exempt from name, place and brand
+# subtraction (I1 ruling); a Capitalised form mid-sentence is still masked.
+el la els les lo un una uns unes al als del dels pel pels
+de amb per en entre sense sobre sota cap fins des durant contra segons cap envers
+ni però sinó perquè que si com quan on mentre doncs
+jo tu ell ella nosaltres vosaltres ells elles em et es ens us li ho hi me te se
+meu meva meus meves teu teva teus teves seu seva seus seves nostre nostra nostres vostre vostra vostres
+aquest aquesta aquests aquestes aquell aquella aquells aquelles això allò qui quin quina quins quines
+tot tota tots totes altre altra altres cada molt molta molts moltes poc poca pocs poques res algú ningú
+ser sóc ets és som sou són era eren estat sigui siguin seria serà
+estar estic estàs està estem esteu estan estava
+haver he has ha hem heu han havia hagi hauria
+tenir tinc tens té tenim teniu tenen tenia
+anar vaig vas va anem aneu van
+poder puc pots pot podem podeu poden podria
+fer faig fas fa fem feu fan feia
+no sí ja molt més menys també tampoc sempre mai avui ahir demà ara abans després aviat tard aquí allà
+bé malament així gairebé només encara llavors potser

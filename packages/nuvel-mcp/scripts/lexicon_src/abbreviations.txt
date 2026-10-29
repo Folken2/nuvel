@@ -1,0 +1,8 @@
+# Reviewed business abbreviations (es, en, ca): 2-4 capital letters, none a
+# name, place or brand, and none an identifier prefix (such as PO or REF).
+# They pass the capitalisation rule in any language.
+CEO CFO CTO COO CMO CIO CRM ERP KPI OKR ROI SLA NDA RFP RFQ
+IVA IRPF NIF CIF NIE DNI VAT HR RRHH IT TI
+PDF FAQ CV QA UX UI SEO SEM API SDK
+PM AM ETA EOD TBD FYI ASAP
+SL SA SLU PYME IPC PIB GDP

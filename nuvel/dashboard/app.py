@@ -8,6 +8,7 @@ the templates stay logic-light.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,15 +16,18 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 
 from nuvel.dashboard.headlines import describe_run
 from nuvel.dashboard.loader import TraceLoader
 from nuvel.eval.schema import ScoredRun
-from nuvel.traces_cli import Run
+from nuvel.recipes_view import load_recipe_candidates
+from nuvel.traces_cli import Run, step_error_rates
 
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent
 _ERROR_EVENTS = {"llm_error", "tool_exception"}
+_MAX_STEP_ROWS = 50  # "Skill steps" table cap; the rest collapse to "+N more"
 
 
 def _short_int(n: int) -> str:
@@ -37,12 +41,33 @@ def _cost_label(cost: float | None) -> str:
 
 
 def _run_has_error(run: Run) -> bool:
+    if run.schema == "skill_run":
+        return run.subtype in {"failure", "blocked"}
     for ev in run.events:
         if ev.get("event") in _ERROR_EVENTS:
             return True
         if ev.get("event") == "tool_end" and ev.get("status") == "error":
             return True
     return False
+
+
+_PLACEHOLDER = re.compile(r"\{(\?|[a-z][a-z0-9_]*)\}")
+
+
+def _chips(text: object) -> Markup:
+    """Escape ``text`` first, then wrap ``{type}`` / ``{?}`` placeholders in chips.
+
+    ``{?}`` means the server masked a word; ``{type}`` is a client-side slot.
+    """
+    safe = str(escape("" if text is None else str(text)))
+
+    def wrap(m: re.Match) -> str:
+        name = m.group(1)
+        if name == "?":
+            return '<span class="chip chip-masked" title="masked by the server">{?}</span>'
+        return f'<span class="chip chip-slot">{{{name}}}</span>'
+
+    return Markup(_PLACEHOLDER.sub(wrap, safe))
 
 
 def _score_class(overall: float) -> str:
@@ -118,10 +143,12 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
     app.state.loader = loader
     app.state.watcher = watcher
     templates = Jinja2Templates(directory=str(_DASHBOARD_DIR / "templates"))
+    templates.env.filters["chips"] = _chips
     app.mount("/static", StaticFiles(directory=str(_DASHBOARD_DIR / "static")), name="static")
 
     def _home_context(runs: list[Run]) -> dict:
         scored = loader.scored_index()
+        all_rates = step_error_rates(runs)  # sorted worst-first
         views = [_view(r, scored.get(r.trace_id or r.session_id)) for r in runs]
         agents = sorted({r.agent.split("/")[0] for r in runs})
         total_tokens = sum(r.total_tokens or 0 for r in runs)
@@ -134,6 +161,11 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
             "total_cost_label": _cost_label(total_cost or None),
             "error_count": sum(1 for v in views if v.has_error),
             "recent_error": next((v for v in views if v.has_error), None),
+            "step_rates": [
+                {"step": sid, "runs": n, "errors": bad}
+                for sid, n, bad in all_rates[:_MAX_STEP_ROWS]
+            ],
+            "step_rates_more": max(0, len(all_rates) - _MAX_STEP_ROWS),
             "window_label": "all time",
             "live": watcher is not None,
         }
@@ -143,9 +175,23 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
         runs = loader.runs()
         return templates.TemplateResponse(request, "home.html", _home_context(runs))
 
-    @app.get("/run/{trace_id}", response_class=HTMLResponse)
+    @app.get("/recipes", response_class=HTMLResponse)
+    def recipes(request: Request) -> HTMLResponse:
+        cands = load_recipe_candidates(loader.skill_roots())
+        return templates.TemplateResponse(
+            request,
+            "recipes.html",
+            {
+                "candidates": cands,
+                "total_uses": sum(c.uses for c in cands),
+                "skipped_v1": cands.skipped_v1,
+                "live": watcher is not None,
+            },
+        )
+
+    @app.get("/run/{trace_id:path}", response_class=HTMLResponse)
     def run_detail(request: Request, trace_id: str) -> HTMLResponse:
-        run = loader.find_by_id(trace_id)
+        run = loader.find_by_id(trace_id) if trace_id else None
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
         scored = loader.scored_index().get(run.trace_id or run.session_id)
@@ -166,7 +212,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
         # Each SSE connection gets its own watcher + queue so multi-tab and
         # reconnect work cleanly. Disconnect tears down only this client's loop.
         from nuvel.dashboard.watcher import RunWatcher
-        own_watcher = RunWatcher(sources=loader.sources())
+        own_watcher = RunWatcher(sources=loader.static_sources(), skill_roots=loader.skill_roots())
         queue: asyncio.Queue[Run] = asyncio.Queue()
         task = asyncio.create_task(own_watcher.run(queue))
         card_template = templates.get_template("_run_card.html")

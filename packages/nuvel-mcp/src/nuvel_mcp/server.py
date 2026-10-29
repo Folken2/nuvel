@@ -20,11 +20,17 @@ Tools:
                          local feedback store).
     record_feedback      Record the outcome of using a skill in the local feedback store.
     check_skill_health   Health report for a skill from the local feedback store.
+    record_run_trace     Record one content-free ``nuvel.skill_run/1`` run trace.
+    record_recipe_signal Record one content-free ``nuvel.recipe_signal/1`` event.
+    share_recipe         Share one ``nuvel.recipe/2`` recipe; its free text is masked
+                         server-side before it is stored, relayed or logged.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -32,16 +38,32 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from importlib import metadata
 from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
-from nuvel.mcp import feedback
-from nuvel.mcp.installer import install_skill
-from nuvel.mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
+from nuvel_mcp import feedback, masking, recipes, traces
+from nuvel_mcp.auth import current_principal
+from nuvel_mcp.installer import install_skill
+from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
+
+if TYPE_CHECKING:  # pragma: no cover
+    from nuvel_mcp.recipes import RecipeStore
+    from nuvel_mcp.traces import TraceStore
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "nuvel-skills", "version": "1.0.0"}
+
+
+def _package_version() -> str:
+    """The installed nuvel-mcp version; '0+unknown' when run from a bare source tree."""
+    try:
+        return metadata.version("nuvel-mcp")
+    except metadata.PackageNotFoundError:
+        return "0+unknown"
+
+
+SERVER_INFO = {"name": "nuvel-skills", "version": _package_version()}
 
 # JSON-RPC standard error codes.
 PARSE_ERROR = -32700
@@ -72,6 +94,33 @@ _SEPARATORS = re.compile(r"[\s\-_./]+")
 def log(*args) -> None:
     """Diagnostics go to stderr so stdout stays a clean protocol channel."""
     print(*args, file=sys.stderr, flush=True)
+
+
+HUB_TOOLS = frozenset({
+    "search_skills", "list_skills", "list_themes", "get_skill", "install_skill", "fence_value",
+})
+FEEDBACK_TOOLS = frozenset({
+    "record_feedback", "check_skill_health", "propose_improvement", "record_run_trace",
+    "record_recipe_signal", "share_recipe",
+})
+# Tools the HTTP transport exposes when no explicit allow-list (--tools) is
+# given: the hub read tools, run traces and their health summary, and the two
+# recipe tools (closed-schema signals and server-masked recipes).
+# Off unless named: record_feedback / propose_improvement (free-text input) and
+# install_skill (writes to the server's filesystem).
+HTTP_DEFAULT_TOOLS = frozenset({
+    "search_skills", "list_skills", "list_themes", "get_skill", "fence_value",
+    "record_run_trace", "check_skill_health", "record_recipe_signal", "share_recipe",
+})
+RUN_OUTCOMES = ("success", "partial", "failure", "blocked", "skipped")
+
+
+class ToolInputError(Exception):
+    """A tool rejected its input; surfaced as a ``rejected`` tool result."""
+
+    def __init__(self, errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.errors = list(errors)
 
 
 class McpError(Exception):
@@ -169,6 +218,33 @@ def _optional_str_arg(args, key):
     return value.strip() or None
 
 
+_REMOTE_DESCRIPTIONS = {
+    "check_skill_health": (
+        "Check a skill's run record before relying on it: outcome counts for the "
+        "last 30 days, errors by step and error class, and the total, from the "
+        "run traces recorded for your tenant. 'plugin' is required."
+    ),
+    "get_skill": (
+        "Get the full SKILL.md content, frontmatter metadata and version for a "
+        "skill by name or 'theme/name'. Pass 'section' to read a single '## ' "
+        "section instead of the whole file. 'metadata.template_variables' lists "
+        "any {{ placeholders }} the skill expects you to fill."
+    ),
+}
+
+
+def _remote_definition(tool: dict) -> dict:
+    """``tool`` as listed in remote mode (nothing from the feedback store)."""
+    name = tool["name"]
+    if name not in _REMOTE_DESCRIPTIONS:
+        return tool
+    tool = {**tool, "description": _REMOTE_DESCRIPTIONS[name]}
+    if name == "check_skill_health":
+        schema = tool["inputSchema"]
+        tool["inputSchema"] = {**schema, "required": [*schema["required"], "plugin"]}
+    return tool
+
+
 def _required_str_arg(args, key):
     value = _optional_str_arg(args, key)
     if value is None:
@@ -192,6 +268,48 @@ def _feedback_id(proposal: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def _describe_failure(exc: BaseException) -> str:
+    """Log-safe description of a relay failure: exception class (+ HTTP status).
+
+    Never ``str(exc)`` and never the URL: ``NUVEL_FEEDBACK_URL`` may carry
+    credentials (``https://user:pass@host``) that exception messages echo.
+    """
+    name = type(exc).__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{name} {exc.code}"
+    return name
+
+
+def _masked_recipe(recipe: object) -> dict:
+    """The stored form of a client recipe (spec §5), or ``ToolInputError(paths)``.
+
+    validate ``nuvel.recipe/2`` → ``mask_recipe`` → ``invariant_hits`` on the
+    masked output (before any server field is added) → re-validate the masked
+    output → stamp ``masking``. The caller stamps ``tenant``. The result is
+    built by the masker from the schema's keys, so it shares nothing with
+    *recipe*. A masker failure is logged by exception type only.
+    """
+    errors = recipes.validate_recipe(recipe)
+    if errors:
+        raise ToolInputError(errors)
+    try:
+        abbreviations = masking.ABBREVIATIONS
+        lexicon = masking.load_lexicon(recipe["language"])
+        masked, info = masking.mask_recipe(recipe, lexicon, abbreviations)
+        hits = masking.invariant_hits(masked, abbreviations, dropped=info["dropped"])
+    except Exception as exc:  # noqa: BLE001 - its text may quote the input
+        log(f"Could not mask the recipe: {type(exc).__name__}")
+        raise McpError(INTERNAL_ERROR, "Could not mask the recipe") from None
+    if hits:
+        raise ToolInputError(hits)
+    errors = recipes.validate_recipe(masked)
+    if errors:  # e.g. a required field lost in masking: never stored
+        raise ToolInputError(errors)
+    masked["masking"] = {"lexicon": info["lexicon"], "masked": info["masked"],
+                         "words": info["words"], "dropped": list(info["dropped"])}
+    return masked
+
+
 def _relay_feedback(url: str, payload: dict) -> dict:
     """POST ``payload`` as JSON to the feedback relay; return its JSON reply."""
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
@@ -210,7 +328,7 @@ def _relay_feedback(url: str, payload: dict) -> dict:
         raw = resp.read().decode("utf-8", "replace")
     try:
         data = json.loads(raw) if raw.strip() else {}
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -362,13 +480,28 @@ class SkillsMCPServer:
 
     def __init__(
         self,
-        loader: SkillsLoader,
+        loader: SkillsLoader | None,
         theme: str | None = None,
         require_filter: list[str] | None = None,
         with_org_memory: str | None = None,
         feedback_dir: str | None = None,
+        tools: frozenset[str] | None = None,
+        trace_store: "TraceStore | None" = None,
+        health_runs_only: bool = False,
+        recipe_store: "RecipeStore | None" = None,
     ):
+        # None means feedback-only mode: no hub tools or resources are served.
         self.loader = loader
+        # Optional allow-list narrowing which tools are listed and callable.
+        self._allowed_tools = tools
+        self.trace_store = trace_store
+        self.recipe_store = recipe_store
+        # Remote mode, set by the HTTP transport: no tool returns anything
+        # read from the local feedback store (which holds free text and every
+        # tenant's outcomes). check_skill_health then requires 'plugin' and
+        # returns only the principal-scoped run-trace summary; get_skill omits
+        # 'health'.
+        self.health_runs_only = health_runs_only
         # When set, discovery (resources/list, search_skills, list_skills,
         # list_themes, get_skill, install_skill) is scoped to this single theme. resources/read is unaffected — scoping
         # is about discovery, not access control.
@@ -413,12 +546,27 @@ class SkillsMCPServer:
             "fence_value": self.tool_fence_value,
             "record_feedback": self.tool_record_feedback,
             "check_skill_health": self.tool_check_skill_health,
+            "record_run_trace": self.tool_record_run_trace,
+            "record_recipe_signal": self.tool_record_recipe_signal,
+            "share_recipe": self.tool_share_recipe,
         }
 
     @property
     def feedback_dir(self) -> Path:
         """The local feedback store directory."""
         return feedback.resolve_feedback_dir(self._feedback_dir_override)
+
+    def _trace_store(self) -> "TraceStore":
+        """The configured trace store, else a local one under ``feedback_dir``."""
+        if self.trace_store is not None:
+            return self.trace_store
+        return traces.LocalTraceStore(self.feedback_dir)
+
+    def _recipe_store(self) -> "RecipeStore":
+        """The configured recipe store, else a local one under ``feedback_dir``."""
+        if self.recipe_store is not None:
+            return self.recipe_store
+        return recipes.LocalRecipeStore(self.feedback_dir)
 
     # --- Scoping helpers -----------------------------------------------------
 
@@ -491,7 +639,24 @@ class SkillsMCPServer:
             "serverInfo": SERVER_INFO,
         }
 
+    def enable_remote_mode(self) -> None:
+        """Prepare this server to be served over HTTP (called by the transport).
+
+        Turns on ``health_runs_only`` and, when no explicit allow-list was
+        given, narrows the tools to :data:`HTTP_DEFAULT_TOOLS`.
+        """
+        self.health_runs_only = True
+        if self._allowed_tools is None:
+            self._allowed_tools = HTTP_DEFAULT_TOOLS
+
+    def _tool_enabled(self, name: str) -> bool:
+        if self.loader is None and name in HUB_TOOLS:
+            return False
+        return self._allowed_tools is None or name in self._allowed_tools
+
     def handle_resources_list(self, params):
+        if self.loader is None:
+            return {"resources": []}
         resources = []
         for theme, entry in self._scoped_entries():
             name = entry["name"]
@@ -512,6 +677,8 @@ class SkillsMCPServer:
         except ValueError as exc:
             raise McpError(INVALID_PARAMS, f"Invalid skill URI: {exc}")
 
+        if self.loader is None:
+            raise McpError(INVALID_PARAMS, f"Skill not found: {uri}")
         theme, entry = self.loader.find(theme, name)
         if entry is None:
             raise McpError(INVALID_PARAMS, f"Skill not found: {uri}")
@@ -529,6 +696,12 @@ class SkillsMCPServer:
         }
 
     def handle_tools_list(self, params):
+        tools = self._all_tool_definitions()["tools"]
+        if self.health_runs_only:
+            tools = [_remote_definition(t) for t in tools]
+        return {"tools": [t for t in tools if self._tool_enabled(t["name"])]}
+
+    def _all_tool_definitions(self):
         return {
             "tools": [
                 {
@@ -815,7 +988,10 @@ class SkillsMCPServer:
                         "trend, sections flagged as blocking or misleading, improvement "
                         "proposals still queued, and a recommendation ('ok', "
                         "'review_before_use' or 'use_cautiously'). get_skill embeds the "
-                        "same report as 'health'."
+                        "same report as 'health'. With 'plugin', the report also "
+                        "carries a 'runs' block built from recorded run traces: "
+                        "outcome counts for the last 30 days, errors by step and "
+                        "error class, and the total."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -824,20 +1000,128 @@ class SkillsMCPServer:
                                 "type": "string",
                                 "description": "Skill name (e.g. 'bug-triage') or 'theme/name'.",
                             },
+                            "plugin": {
+                                "type": "string",
+                                "description": (
+                                    "Plugin the skill ships in (e.g. 'chief-of-staff'). "
+                                    "Adds the 'runs' block from recorded run traces."
+                                ),
+                            },
                         },
                         "required": ["skill_name"],
+                    },
+                },
+                {
+                    "name": "record_run_trace",
+                    "description": (
+                        "Record one skill run as a content-free nuvel.skill_run/1 "
+                        "trace, once per run, when the skill tells you to. Every "
+                        "field is an enum, a UUID, a version, a timestamp, a count "
+                        "or a short lowercase identifier. Step ids, count keys and "
+                        "error steps come only from the skill's published step "
+                        "catalog (step ids start with '<skill name>.'); never "
+                        "invent them. Never put names, subjects, addresses, "
+                        "message text or any other user content in a trace. "
+                        "'safety' must contain both injection_suspected and "
+                        "forbidden_tool_requested, or be omitted. Do not send "
+                        "'tenant' (the server sets it). A rejected trace returns "
+                        "the failing field paths only. Re-sending the same run_id "
+                        "returns 'duplicate'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"trace": self._trace_input_schema()},
+                        "required": ["trace"],
+                    },
+                },
+                {
+                    "name": "record_recipe_signal",
+                    "description": (
+                        "Record one content-free nuvel.recipe_signal/1 event each "
+                        "time a recipe is created, used, succeeded, corrected or "
+                        "retired, when the learn skill tells you to. Every field "
+                        "is an enum, a UUID, a version, a timestamp, a count or a "
+                        "short lowercase identifier; never put names, subjects, "
+                        "addresses, message text or any other user content in a "
+                        "signal. Do not send 'tenant' (the server sets it). A "
+                        "rejected signal returns the failing field paths only. "
+                        "Re-sending the same signal_id returns 'duplicate'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "signal": self._doc_input_schema(
+                                recipes.SIGNAL_RESOURCE, "One nuvel.recipe_signal/1 signal object."
+                            )
+                        },
+                        "required": ["signal"],
+                    },
+                },
+                {
+                    "name": "share_recipe",
+                    "description": (
+                        "Share one nuvel.recipe/2 recipe, when the learn skill tells "
+                        "you to. A recipe is structure (steps with an action from the "
+                        "catalogue, a tool kind and placeholder slots), short notes "
+                        "(title, when_to_use, step notes, pitfalls) and a narrative: "
+                        "the original wording of what was asked and how it was "
+                        "solved. In every free-text field write a {type} placeholder "
+                        "(for example {person}, {company}, {amount}, {date}, {email}) "
+                        "instead of names, companies, products, places, amounts, "
+                        "dates, contacts (emails, phone numbers), URLs or file names. "
+                        "All free text is masked server-side before anything is "
+                        "stored: every word that is not a common word of the "
+                        "recipe's language becomes {?}, and a field that is mostly "
+                        "masked is dropped. The reply gives the masked and word "
+                        "counts and the dropped field paths; a schema error returns "
+                        "the failing field paths only. Do not send 'tenant' or "
+                        "'masking' (the server sets them). Re-sending the same "
+                        "recipe_id and version returns 'duplicate'."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "recipe": self._doc_input_schema(
+                                recipes.RECIPE_RESOURCE, "One nuvel.recipe/2 recipe object."
+                            )
+                        },
+                        "required": ["recipe"],
                     },
                 },
             ]
         }
 
+    @staticmethod
+    def _trace_input_schema() -> dict:
+        schema = {k: v for k, v in traces.load_schema().items() if k != "$schema"}
+        schema["description"] = "One nuvel.skill_run/1 trace object."
+        return schema
+
+    @staticmethod
+    def _doc_input_schema(resource: str, description: str) -> dict:
+        schema = {k: v for k, v in traces.load_schema(resource).items() if k != "$schema"}
+        schema["description"] = description
+        return schema
+
     def handle_tools_call(self, params):
         tool_name = params.get("name")
         args = params.get("arguments") or {}
         handler = self._tools.get(tool_name)
-        if handler is None:
-            raise McpError(INVALID_PARAMS, f"Unknown tool: {tool_name}")
-        result = handler(args)
+        if handler is None or not self._tool_enabled(tool_name):
+            # Fixed text: never echo the caller-supplied name.
+            raise McpError(INVALID_PARAMS, "Unknown tool")
+        try:
+            result = handler(args)
+        except ToolInputError as exc:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(
+                        {"status": "rejected", "errors": exc.errors}, ensure_ascii=False
+                    ),
+                }],
+                "isError": True,
+            }
         # MCP tool results wrap output as a list of content blocks.
         return {
             "content": [{
@@ -976,10 +1260,12 @@ class SkillsMCPServer:
             result["section"] = section
 
         # Health signals from the feedback store (best-effort, no feedback = "ok").
-        try:
-            result["health"] = feedback.compute_health(self.feedback_dir, entry["name"])
-        except ValueError:  # a hub name that can't be a store key has no feedback
-            result["health"] = {"total_feedback": 0, "queued_proposals": 0, "recommendation": "ok"}
+        # Never in remote mode: the store holds other callers' free text.
+        if not self.health_runs_only:
+            try:
+                result["health"] = feedback.compute_health(self.feedback_dir, entry["name"])
+            except ValueError:  # a hub name that can't be a store key has no feedback
+                result["health"] = {"total_feedback": 0, "queued_proposals": 0, "recommendation": "ok"}
 
         # Optional OrgMemoryService resolution (ADK-backed, best-effort).
         if variables and self.with_org_memory:
@@ -1022,6 +1308,8 @@ class SkillsMCPServer:
 
     def _lookup_version(self, skill_ref: str) -> str:
         """Frontmatter version for ``name`` / ``theme/name`` ('' if unknown)."""
+        if self.loader is None:
+            return ""
         theme, entry = self.loader.find(*_split_skill_ref(skill_ref))
         if entry is None:
             return ""
@@ -1043,11 +1331,150 @@ class SkillsMCPServer:
 
     def tool_check_skill_health(self, args):
         """Check a skill's health from its feedback history."""
+        if self.health_runs_only:
+            return self._runs_only_health(args)
         skill_name = _required_str_arg(args, "skill_name")
+        plugin = args.get("plugin")
+        if plugin is not None and not (
+            isinstance(plugin, str) and traces.IDENTIFIER_RE.fullmatch(plugin)
+        ):
+            raise McpError(INVALID_PARAMS, "Argument 'plugin' must be a plugin identifier")
         try:
-            return feedback.compute_health(self.feedback_dir, skill_name)
+            report = feedback.compute_health(self.feedback_dir, skill_name)
         except ValueError as exc:
             raise McpError(INVALID_PARAMS, str(exc))
+        if plugin is not None:
+            report["runs"] = self._runs_summary(plugin, feedback.skill_key(skill_name))
+        return report
+
+    def _runs_only_health(self, args) -> dict:
+        """check_skill_health for remote callers: the run summary and nothing else.
+
+        Error messages never repeat the caller's values.
+        """
+        plugin = args.get("plugin")
+        if not (isinstance(plugin, str) and traces.IDENTIFIER_RE.fullmatch(plugin)):
+            raise McpError(INVALID_PARAMS, "Argument 'plugin' is required and must be a plugin identifier")
+        skill_name = args.get("skill_name")
+        try:
+            skill = feedback.skill_key(skill_name if isinstance(skill_name, str) else "")
+        except ValueError:
+            raise McpError(INVALID_PARAMS, "Argument 'skill_name' must be a skill name") from None
+        return {"skill": skill, "plugin": plugin, "runs": self._runs_summary(plugin, skill)}
+
+    def _runs_summary(self, plugin: str, skill: str) -> dict:
+        """Last-30-days run-trace summary for ``plugin.skill`` (principal-scoped)."""
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        runs = self._trace_store().query(plugin, skill, since, current_principal.get())
+        outcomes = dict.fromkeys(RUN_OUTCOMES, 0)
+        errors_by_step: dict[str, dict[str, int]] = {}
+        for run in runs:
+            if run.get("outcome") in outcomes:
+                outcomes[run["outcome"]] += 1
+            # Custom stores may hand back records without the schema's
+            # error fields; skip what cannot be counted rather than fail.
+            errors = run.get("errors")
+            for err in errors if isinstance(errors, list) else ():
+                step = err.get("step") if isinstance(err, dict) else None
+                cls = err.get("class") if isinstance(err, dict) else None
+                if not isinstance(step, str) or not isinstance(cls, str):
+                    continue
+                by_class = errors_by_step.setdefault(step, {})
+                by_class[cls] = by_class.get(cls, 0) + 1
+        return {
+            "last_30_days": outcomes,
+            "errors_by_step": errors_by_step,
+            "total": len(runs),
+        }
+
+    def tool_record_run_trace(self, args):
+        """Validate, normalise, store and (optionally) relay one run trace."""
+        trace = args.get("trace")
+        errors = traces.validate_skill_run(trace)
+        if not errors:
+            prefix = f"{trace['skill']['name']}."
+            errors = [
+                f"/steps/{i}/id"
+                for i, step in enumerate(trace.get("steps", []))
+                if not step["id"].startswith(prefix)
+            ]
+        if errors:
+            raise ToolInputError(errors)
+
+        record = traces.normalize(trace, tenant=current_principal.get())
+        try:
+            stored = self._trace_store().append(record)
+        except OSError as exc:
+            log(f"Could not store the run trace: {exc}")  # detail stays server-side
+            raise McpError(INTERNAL_ERROR, "Could not store the run trace") from None
+        if not stored:
+            return {"status": "duplicate", "run_id": record["run_id"]}
+
+        relay_url = os.environ.get("NUVEL_FEEDBACK_URL", "").strip()
+        if relay_url:
+            try:
+                _relay_feedback(relay_url, {"type": "skill_run", "record": record})
+            except Exception as exc:  # the local copy stands; never retried
+                log(f"Run trace relay failed (kept locally): {_describe_failure(exc)}")
+        return {"status": "recorded", "run_id": record["run_id"]}
+
+    def tool_record_recipe_signal(self, args):
+        """Validate, screen, stamp, store and (optionally) relay one recipe signal."""
+        signal = args.get("signal")
+        errors = recipes.validate_signal(signal) or recipes.screen_signal(signal)
+        if errors:
+            raise ToolInputError(errors)
+
+        record = copy.deepcopy(signal)
+        parsed = traces._parse_started_at(record["at"])
+        record["at"] = parsed.replace(second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        tenant = current_principal.get()
+        if tenant is not None:
+            record["tenant"] = tenant
+        try:
+            stored = self._recipe_store().append_signal(record)
+        except OSError as exc:
+            log(f"Could not store the recipe signal: {exc}")  # detail stays server-side
+            raise McpError(INTERNAL_ERROR, "Could not store the recipe signal") from None
+        result = {"signal_id": record["signal_id"]}
+        if not stored:
+            return {"status": "duplicate", **result}
+        self._relay_record("recipe_signal", record)
+        return {"status": "recorded", **result}
+
+    def tool_share_recipe(self, args):
+        """Validate, mask, check, stamp, store and (optionally) relay one recipe.
+
+        Only the masked record (``_masked_recipe``) reaches the store, the relay
+        or a log line; the raw input is never kept beyond this call.
+        """
+        record = _masked_recipe(args.get("recipe"))
+        tenant = current_principal.get()
+        if tenant is not None:
+            record["tenant"] = tenant
+        info = record["masking"]
+        try:
+            stored = self._recipe_store().put_recipe(record)
+        except OSError as exc:
+            # Type only: a store's message is not ours to vouch for.
+            log(f"Could not store the recipe: {type(exc).__name__}")
+            raise McpError(INTERNAL_ERROR, "Could not store the recipe") from None
+        result = {"recipe_id": record["recipe_id"], "version": record["version"]}
+        if not stored:
+            return {"status": "duplicate", **result}
+        self._relay_record("recipe", record)
+        return {"status": "recorded", **result, "masked": info["masked"],
+                "words": info["words"], "dropped": list(info["dropped"])}
+
+    @staticmethod
+    def _relay_record(kind: str, record: dict) -> None:
+        """Relay a stored record to $NUVEL_FEEDBACK_URL; failures are logged, never raised."""
+        relay_url = os.environ.get("NUVEL_FEEDBACK_URL", "").strip()
+        if relay_url:
+            try:
+                _relay_feedback(relay_url, {"type": kind, "record": record})
+            except Exception as exc:  # the local copy stands; never retried
+                log(f"Relay of {kind} failed (kept locally): {_describe_failure(exc)}")
 
     def _resolve_templates(self, content: str, variables: list[str]) -> str | None:
         """Resolve ``{{ var_name }}`` placeholders against OrgMemoryService.
@@ -1062,7 +1489,12 @@ class SkillsMCPServer:
             import asyncio
 
             from nuvel.memory.factory import build_default_service
-        except Exception as exc:  # ADK stack not installed
+        except ImportError as exc:  # nuvel-cli / ADK stack not installed
+            missing = exc.name or "nuvel.memory"
+            log(f"--with-org-memory needs the module {missing!r}, which is not installed "
+                f"(install nuvel-cli): {exc}")
+            return None
+        except Exception as exc:
             log(f"OrgMemoryService unavailable (--with-org-memory): {exc}")
             return None
 
@@ -1132,17 +1564,33 @@ class SkillsMCPServer:
             },
         )
         try:
-            with urllib.request.urlopen(request) as resp:
+            with urllib.request.urlopen(request, timeout=RELAY_TIMEOUT_SECONDS) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace") if exc.fp else str(exc)
+            # The response body and exception text stay in the server log; the
+            # caller gets the class and status only.
+            try:
+                detail = exc.read().decode("utf-8", "replace") if exc.fp else str(exc)
+            except (OSError, http.client.HTTPException):
+                detail = ""  # a cut-off error body: the status alone is enough
             log(f"GitHub API error {exc.code}: {detail}")
             raise McpError(
-                INTERNAL_ERROR, f"GitHub API returned {exc.code}: {detail}"
-            )
+                INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
+            ) from None
         except urllib.error.URLError as exc:
             log(f"GitHub API request failed: {exc}")
-            raise McpError(INTERNAL_ERROR, f"GitHub API request failed: {exc}")
+            raise McpError(
+                INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
+            ) from None
+        except (http.client.HTTPException, ValueError) as exc:
+            # A cut-off reply (IncompleteRead) or a success body that is not
+            # UTF-8 JSON: class name only, in the log and the error alike.
+            log(f"GitHub API request failed: {_describe_failure(exc)}")
+            raise McpError(
+                INTERNAL_ERROR, f"GitHub API request failed: {_describe_failure(exc)}"
+            ) from None
+        if not isinstance(data, dict):
+            data = {}  # a non-object reply: filed, but no issue link to report
 
         return {
             "status": "filed",
@@ -1163,9 +1611,12 @@ class SkillsMCPServer:
         if relay_url:
             try:
                 data = _relay_feedback(relay_url, record)
-            except (OSError, ValueError) as exc:  # URLError/HTTPError are OSErrors
-                relay_error = str(exc)
-                log(f"Feedback relay failed, queueing locally: {exc}")
+            # URLError/HTTPError are OSErrors; HTTPException covers IncompleteRead.
+            except (OSError, ValueError, http.client.HTTPException) as exc:
+                # Class (+ status) only, in the result and the queue file alike:
+                # the exception text can echo the relay URL and its credentials.
+                relay_error = _describe_failure(exc)
+                log(f"Feedback relay failed, queueing locally: {relay_error}")
             else:
                 return {
                     "status": "relayed",
@@ -1182,11 +1633,13 @@ class SkillsMCPServer:
         if relay_error:
             record["relay_error"] = relay_error
         try:
-            queue_path = feedback.queue_proposal(self.feedback_dir, record)
+            feedback.queue_proposal(self.feedback_dir, record)
         except OSError as exc:
+            log(f"Could not queue the proposal: {exc}")  # paths stay server-side
             raise McpError(
-                INTERNAL_ERROR, f"Could not deliver or queue the proposal: {exc}"
-            )
+                INTERNAL_ERROR,
+                f"Could not deliver or queue the proposal: {type(exc).__name__}",
+            ) from None
         result = {
             "status": "queued",
             "delivery": "queue",
@@ -1197,8 +1650,6 @@ class SkillsMCPServer:
             ),
             "feedback_id": feedback_id,
             "current_version": proposal["current_version"],
-            "queue_path": str(queue_path),
-            "feedback_dir": str(queue_path.parent),
             "title": title,
         }
         if relay_error:
@@ -1226,7 +1677,8 @@ class SkillsMCPServer:
         if handler is None:
             if is_notification:
                 return None
-            return error_response(msg_id, METHOD_NOT_FOUND, f"Method not found: {method}")
+            # Fixed text, like "Unknown tool": the caller's value is not echoed.
+            return error_response(msg_id, METHOD_NOT_FOUND, "Method not found")
 
         params = message.get("params") or {}
         try:
@@ -1236,9 +1688,21 @@ class SkillsMCPServer:
             return error_response(msg_id, exc.code, exc.message)
         except SkillsError as exc:
             log(f"SkillsError in {method}: {exc}")
+            if self.health_runs_only:
+                # Skills errors can carry hub paths: remote callers get fixed text.
+                return error_response(msg_id, INTERNAL_ERROR, "Skills error")
             return error_response(msg_id, INTERNAL_ERROR, f"Skills error: {exc}")
         except Exception as exc:  # noqa: BLE001 - report as JSON-RPC internal error
-            log(f"Internal error in {method}: {exc}")
+            if method == "tools/call" and isinstance(params, dict) and params.get("name") == "share_recipe":
+                # share_recipe carries raw client text until it is masked, and an
+                # exception's text may quote it: the type only, here and to the caller.
+                log(f"Internal error in {method} (share_recipe): {type(exc).__name__}")
+                return error_response(msg_id, INTERNAL_ERROR, "Internal error")
+            log(f"Internal error in {method}: {type(exc).__name__}: {exc}")
+            if self.health_runs_only:
+                # Remote callers get no server paths or exception text; the
+                # detail stays in the operator's stderr log.
+                return error_response(msg_id, INTERNAL_ERROR, "Internal error")
             return error_response(msg_id, INTERNAL_ERROR, f"Internal error: {exc}")
 
         if is_notification:
@@ -1249,15 +1713,16 @@ class SkillsMCPServer:
         """Run the stdio read/dispatch/write loop until EOF on stdin."""
         stdin = stdin or sys.stdin
         stdout = stdout or sys.stdout
-        log(f"nuvel-skills MCP server starting (skills_dir={self.loader.skills_dir})")
+        where = self.loader.skills_dir if self.loader is not None else "none (feedback-only)"
+        log(f"nuvel-skills MCP server starting (skills_dir={where})")
         for line in stdin:
             line = line.strip()
             if not line:
                 continue
             try:
                 message = json.loads(line)
-            except json.JSONDecodeError as exc:
-                log(f"Parse error: {exc}")
+            except (ValueError, RecursionError) as exc:  # bad JSON, an int over the digit limit, nesting too deep
+                log(f"Parse error: {type(exc).__name__}")  # never the line's content
                 _write_message(stdout, error_response(None, PARSE_ERROR, "Parse error"))
                 continue
 

@@ -5,6 +5,7 @@ What lives where in the nuvel source tree.
 ```
 nuvel/                                  # the Python package
 ├── cli.py                              # `nuvel` CLI entrypoint (argparse)
+├── mcp/                                # deprecated shim re-exporting `nuvel_mcp`
 ├── agent.py                            # the meta-agent's LlmAgent definition
 ├── run_adk.py                          # FastAPI server for the meta-agent
 ├── backends/
@@ -48,6 +49,12 @@ nuvel/                                  # the Python package
 ├── plugins/                            # meta-agent's plugins
 ├── config/                             # logging, LLM config (used by meta-agent)
 └── utils/
+
+packages/
+└── nuvel-mcp/                          # second PyPI package: `nuvel-mcp` (import `nuvel_mcp`)
+    ├── pyproject.toml                  # no runtime deps; `http` extra adds `mcp`
+    ├── src/nuvel_mcp/                  # Skills MCP server (cli, server, skills_loader, feedback, installer)
+    └── tests/                          # run in CI with `pytest tests packages/nuvel-mcp/tests`
 
 tests/                                  # pytest suite
 docs/                                   # this site (reader-facing) +

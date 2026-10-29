@@ -31,11 +31,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from nuvel_mcp.feedback import resolve_feedback_dir
+
 
 # ── Discovery ────────────────────────────────────────────────────────
 
 
-def _discover_trace_dirs(extra: list[str] | None = None) -> list[Path]:
+def _discover_trace_dirs(
+    extra: list[str] | None = None, *, include_skill_runs: bool = True
+) -> list[Path]:
     roots: list[Path] = []
     cwd = Path.cwd()
 
@@ -58,10 +62,122 @@ def _discover_trace_dirs(extra: list[str] | None = None) -> list[Path]:
 
     for src in extra or []:
         p = Path(src)
-        if p.is_dir() and p not in roots:
-            roots.append(p)
+        if not p.is_dir() or p in roots:
+            continue
+        # Eval never scores skill runs: an explicit source that sits inside a
+        # `_runs` tree is not a trace root for it.
+        if not include_skill_runs and _RUNS_DIRNAME in p.resolve().parts:
+            continue
+        roots.append(p)
+
+    # Skill run traces (nuvel.skill_run/1) live one level deeper, under
+    # `_runs/<plugin>.<skill>/`. Only `_runs` trees are walked recursively.
+    skill_roots = [resolve_feedback_dir()] + [Path(src) for src in extra or []]
+    for root in skill_roots if include_skill_runs else []:
+        for d in _skill_run_dirs(root):
+            if d not in roots:
+                roots.append(d)
 
     return roots
+
+
+_RUNS_DIRNAME = "_runs"
+# Directories never worth descending into while looking for `_runs` trees.
+_PRUNED_DIRS = frozenset({"node_modules", "venv", "__pycache__"})
+
+def _skill_run_dirs(root: Path) -> list[Path]:
+    """Every directory at or under a `_runs` directory found in `root`.
+
+    Hidden directories and vendored trees (`node_modules`, virtualenvs,
+    `__pycache__`) are not descended into, and neither are symlinks.
+    """
+    return _walk_skill_run_dirs(root)[0]
+
+
+def _mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _walk_skill_run_dirs(root: Path) -> tuple[list[Path], tuple[int | None, ...]]:
+    """`(dirs, stamps)`: the `_runs` dirs under `root` (pre-order, sorted) and
+    the mtimes of `root` and of each of those dirs.
+
+    Each stamp is taken *before* that directory is listed, so an entry added
+    while the walk runs bumps the mtime past the stamp and is seen next time.
+    """
+    if not root.is_dir():
+        return [], (None,)
+    found: list[Path] = []
+    stamps: list[int | None] = [_mtime_ns(root)]
+    stack = [(root, root.name == _RUNS_DIRNAME)]  # (dir, inside a `_runs` tree)
+    while stack:
+        here, inside = stack.pop()
+        if inside:
+            found.append(here)
+            if here != root:
+                stamps.append(_mtime_ns(here))
+        try:
+            with os.scandir(here) as entries:
+                names = sorted(
+                    e.name for e in entries
+                    if e.is_dir(follow_symlinks=False)
+                    and e.name not in _PRUNED_DIRS and not e.name.startswith(".")
+                )
+        except OSError:
+            continue
+        for name in reversed(names):  # pop() order = sorted pre-order
+            stack.append((here / name, inside or name == _RUNS_DIRNAME))
+    return found, tuple(stamps)
+
+
+class SkillRunDirIndex:
+    """The `_runs` dirs under fixed skill roots, for long-lived readers.
+
+    The dashboard asks on every request and poll, so a `plugin.skill` dir
+    created after startup shows up without a restart. A root is re-walked only
+    when its own mtime or the mtime of a dir in one of its `_runs` trees changed
+    since the last walk (a new `plugin.skill` dir, or a new day file, which
+    happens once a day per skill); otherwise the last result is reused (a stat
+    per dir, no listing). Appends to an existing day file change no dir.
+    A `_runs` dir created deeper than a direct child of the root, inside a
+    subtree that already existed, changes neither and is not picked up until
+    something else does; skill roots are trace-store dirs, whose `_runs` is a
+    direct child.
+    """
+
+    def __init__(self, skill_roots: Iterable[Path]) -> None:
+        self._roots = list(skill_roots)
+        self._walks: dict[Path, tuple[tuple[int | None, ...], list[Path]]] = {}
+
+    def roots(self) -> list[Path]:
+        return list(self._roots)
+
+    def _root_dirs(self, root: Path) -> list[Path]:
+        last = self._walks.get(root)
+        if last is not None:
+            stamps, dirs = last
+            current = (_mtime_ns(root) if root.is_dir() else None,
+                       *(_mtime_ns(d) for d in dirs))
+            if current == stamps:
+                return dirs
+        dirs, stamps = _walk_skill_run_dirs(root)
+        self._walks[root] = (stamps, dirs)
+        return dirs
+
+    def dirs(self) -> list[Path]:
+        out: list[Path] = []
+        for root in self._roots:
+            out.extend(d for d in self._root_dirs(root) if d not in out)
+        return out
+
+    def with_sources(self, sources: Iterable[Path]) -> list[Path]:
+        """`sources` plus every `_runs` dir currently under the skill roots."""
+        out = list(sources)
+        out.extend(d for d in self.dirs() if d not in out)
+        return out
 
 
 # Eval writes scored.jsonl as a sibling of trace files; never treat it
@@ -80,6 +196,12 @@ def _iter_trace_files(dirs: Iterable[Path]) -> Iterator[Path]:
 def _agent_label_for(file: Path) -> str:
     """Derive an agent label from the trace file's location."""
     parts = file.resolve().parts
+    # Skill runs: `<...>/_runs/<plugin>.<skill>/<day>.jsonl` -> `plugin:skill`
+    # (split on the first dot; the record's own plugin/skill names win in
+    # `_skill_run_from_record`, this only labels file-level lookups).
+    if len(parts) >= 3 and parts[-3] == _RUNS_DIRNAME and "." in parts[-2]:
+        plugin, _, skill = parts[-2].partition(".")
+        return f"{plugin}:{skill}"
     if "generated-agents" in parts:
         i = parts.index("generated-agents")
         if i + 1 < len(parts):
@@ -110,8 +232,10 @@ class Run:
     cost_usd: float | None = None
     user_input: str | None = None
     subtype: str | None = None
-    schema: str = "adk"  # "adk" | "casdk"
+    schema: str = "adk"  # "adk" | "casdk" | "skill_run"
     events: list[dict] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)  # skill_run only
+    tenant: str | None = None  # skill_run only; stamped by the nuvel-mcp server
 
     @property
     def key(self) -> str:
@@ -134,12 +258,54 @@ def _read_jsonl(path: Path) -> Iterator[dict]:
         return
 
 
+def _skill_run_from_record(path: Path, rec: dict) -> Run | None:
+    """Normalise one `nuvel.skill_run/1` record; None when it is malformed."""
+    try:
+        run_id = str(rec["run_id"])
+        tenant = rec.get("tenant")
+        tenant = tenant if isinstance(tenant, str) else None
+        # Same identity the store dedupes on: (tenant, run_id). '@' is outside
+        # the run_id alphabet, so `<run_id>@<tenant>` cannot collide with a
+        # tenantless run_id; `session_id` stays the bare run_id.
+        trace_id = f"{run_id}@{tenant}" if tenant is not None else run_id
+        agent = f"{rec['plugin']['name']}:{rec['skill']['name']}"
+        duration_s = rec.get("duration_s")
+        steps = [s for s in rec.get("steps") or [] if isinstance(s, dict)]
+        calls = sum(int(t.get("calls") or 0) for t in rec.get("tools") or [])
+        return Run(
+            agent=agent,
+            file=path,
+            session_id=run_id,
+            trace_id=trace_id,
+            tenant=tenant,
+            started_at=rec.get("started_at"),
+            duration_ms=int(duration_s * 1000) if duration_s is not None else None,
+            tool_calls=calls,
+            subtype=rec.get("outcome"),
+            schema="skill_run",
+            steps=steps,
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def _parse_file_runs(path: Path, keep_events: bool = False) -> list[Run]:
     """Group records in one JSONL file into Run summaries."""
     agent_label = _agent_label_for(path)
     runs: dict[str, Run] = {}
 
     for rec in _read_jsonl(path):
+        if not isinstance(rec, dict):
+            continue
+        # Skill run schema (written by nuvel-mcp).
+        if rec.get("schema") == "nuvel.skill_run/1":
+            sr = _skill_run_from_record(path, rec)
+            if sr is not None:
+                if keep_events:
+                    sr.events.append(rec)
+                runs[f"skill_run:{sr.trace_id}"] = sr
+            continue
+
         # CASDK flat schema: no `event` key, has top-level cost/duration/num_turns.
         if "event" not in rec and ("num_turns" in rec or "total_cost_usd" in rec):
             sid = str(rec.get("session_id") or "")
@@ -211,12 +377,38 @@ def _parse_file_runs(path: Path, keep_events: bool = False) -> list[Run]:
     return list(runs.values())
 
 
-def _collect_runs(sources: list[str] | None, keep_events: bool = False) -> list[Run]:
-    dirs = _discover_trace_dirs(sources)
+def _collect_runs(
+    sources: list[str] | None, keep_events: bool = False, *, include_skill_runs: bool = True
+) -> list[Run]:
+    dirs = _discover_trace_dirs(sources, include_skill_runs=include_skill_runs)
     runs: list[Run] = []
     for f in _iter_trace_files(dirs):
         runs.extend(_parse_file_runs(f, keep_events=keep_events))
     return runs
+
+
+def step_error_rates(runs: list[Run]) -> list[tuple[str, int, int]]:
+    """Per skill step: (step_id, runs containing it, runs where it errored).
+
+    Sorted by error ratio descending, then step id. Non-skill runs are ignored.
+    """
+    seen: dict[str, int] = {}
+    errored: dict[str, int] = {}
+    for r in runs:
+        if r.schema != "skill_run":
+            continue
+        ids: dict[str, bool] = {}
+        for step in r.steps:
+            sid = step.get("id")
+            if not isinstance(sid, str):
+                continue
+            ids[sid] = ids.get(sid, False) or step.get("status") == "error"
+        for sid, bad in ids.items():
+            seen[sid] = seen.get(sid, 0) + 1
+            errored[sid] = errored.get(sid, 0) + (1 if bad else 0)
+    rows = [(sid, n, errored[sid]) for sid, n in seen.items()]
+    rows.sort(key=lambda t: (-(t[2] / t[1]), t[0]))
+    return rows
 
 
 # ── Filters & formatting ─────────────────────────────────────────────
@@ -477,6 +669,14 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     print(f"\nTotal: {total_runs} run(s), {_fmt_tokens(total_tokens)} tokens"
           + (f", ${total_cost:.4f}" if total_cost else ""))
 
+    step_rows = step_error_rates(runs)
+    if step_rows:
+        print("\nSkill steps")
+        _print_table(
+            ("STEP", "RUNS", "ERRORED", "ERROR RATE"),
+            [(sid, str(n), str(e), f"{e / n:.0%}") for sid, n, e in step_rows],
+        )
+
     # Cost-coverage warning: runs that have token usage but no cost mean
     # pricing.json is missing the model that actually ran. Surfacing this
     # at the bottom of `stats` is the cheapest way to catch silent gaps.
@@ -646,6 +846,39 @@ def _print_recent_errors(records: list[tuple[Path, dict]], n: int) -> int:
     return 0
 
 
+def _cmd_recipes(args: argparse.Namespace) -> int:
+    from nuvel.recipes_view import load_recipe_candidates
+
+    roots = [resolve_feedback_dir()] + [Path(s) for s in args.source or []]
+    cands = load_recipe_candidates(roots)
+    if not cands:
+        print("No recipe signals found.")
+        return 0
+    rows = [
+        (
+            c.category,
+            str(c.recipes),
+            str(c.tenants),
+            str(c.uses),
+            f"{c.success_rate * 100:.0f}%",
+            str(c.corrections),
+            _short(str(c.latest.get("title") or "").strip() or "(title masked)", 50) if c.latest else "-",
+        )
+        for c in cands
+    ]
+    _print_table(
+        ("CATEGORY", "RECIPES", "TENANTS", "USES", "SUCCESS", "CORRECTIONS", "LATEST"), rows
+    )
+    for c in cands:
+        actions = c.latest.get("actions") if c.latest else None
+        if actions:
+            print(f"  {c.category}: {' → '.join(actions)}")
+    skipped = getattr(cands, "skipped_v1", 0)
+    if skipped:
+        print(f"({skipped} older recipe file(s) in pre-masking format skipped)")
+    return 0
+
+
 # ── Parser wiring ────────────────────────────────────────────────────
 
 
@@ -699,3 +932,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Instead of the summary, print the last N error events with messages.",
     )
     p_errors.set_defaults(func=_cmd_errors)
+
+    p_recipes = sub.add_parser(
+        "recipes",
+        help="List recipe candidates (signals and shared recipes) by category.",
+    )
+    p_recipes.add_argument(
+        "--source", "-s", action="append", default=None,
+        help="Extra directory to search for a `_recipes` tree (repeatable). "
+             "The feedback directory is always searched.",
+    )
+    p_recipes.set_defaults(func=_cmd_recipes)

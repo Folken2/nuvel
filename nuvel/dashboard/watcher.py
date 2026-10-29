@@ -16,6 +16,7 @@ from pathlib import Path
 
 from nuvel.traces_cli import (
     Run,
+    SkillRunDirIndex,
     _iter_trace_files,
     _parse_file_runs,
 )
@@ -26,8 +27,17 @@ logger = logging.getLogger(__name__)
 class RunWatcher:
     """Polls trace dirs and emits newly-arrived runs onto a queue."""
 
-    def __init__(self, sources: list[Path], poll_seconds: float = 1.0) -> None:
-        self._sources = sources
+    def __init__(
+        self,
+        sources: list[Path],
+        poll_seconds: float = 1.0,
+        skill_roots: list[Path] | None = None,
+    ) -> None:
+        self._static_sources = sources
+        # Roots checked for `_runs` dirs on every poll, so a `plugin.skill`
+        # directory created after startup is picked up (unchanged roots are
+        # not re-walked).
+        self._skill_dirs = SkillRunDirIndex(skill_roots or [])
         self._poll = poll_seconds
         # TODO: bound this set (e.g. LRU cap at 10k) once the dashboard is
         # used in long-running scenarios. For the demo / short sessions it
@@ -43,7 +53,8 @@ class RunWatcher:
 
     def _snapshot(self) -> dict[str, Run]:
         out: dict[str, Run] = {}
-        for f in _iter_trace_files(self._sources):
+        sources = self._skill_dirs.with_sources(self._static_sources)
+        for f in _iter_trace_files(sources):
             # keep_events=True so RunView.has_error correctly detects
             # streamed-in error runs at render time.
             for run in _parse_file_runs(f, keep_events=True):
@@ -53,7 +64,7 @@ class RunWatcher:
     async def run(self, queue: asyncio.Queue[Run]) -> None:
         # Baseline scan: anything present at startup is "already known".
         try:
-            baseline = self._snapshot()
+            baseline = await asyncio.to_thread(self._snapshot)
         except Exception:  # noqa: BLE001 — never crash the watcher
             logger.exception("watcher baseline scan failed")
             baseline = {}
@@ -70,7 +81,8 @@ class RunWatcher:
                 except asyncio.TimeoutError:
                     pass  # poll interval elapsed; do a scan
 
-                current = self._snapshot()
+                # Off the event loop: a scan reads every trace file.
+                current = await asyncio.to_thread(self._snapshot)
             except Exception:  # noqa: BLE001
                 logger.exception("watcher scan failed")
                 continue

@@ -169,6 +169,13 @@ nuvel new <kebab-name> --description "…" --with-acp
 #   then: python -m <snake_name>.acp     (Agent Client Protocol over stdio)
 #         python -m <snake_name>.cli "…"  (one-shot)  |  python -m <snake_name>.cli  (REPL)
 
+# Serve a skills hub over MCP (standalone, dependency-free package)
+nuvel-mcp serve --skills-dir ./skills-hub   # same as: nuvel mcp serve; or: uvx nuvel-mcp serve
+nuvel-mcp serve                             # no --skills-dir: feedback-only mode (feedback tools + record_run_trace)
+nuvel-mcp serve --tools record_run_trace,check_skill_health --trace-store local   # allow-list; trace store local|module:factory
+nuvel-mcp client create --name acme-radar    # OAuth client for the HTTP server; also: client list|delete, token revoke
+nuvel-mcp serve --transport http             # Streamable HTTP + OAuth 2.1, no extras; --host/--port default 127.0.0.1:8080; non-loopback needs --allow-remote + NUVEL_MCP_PUBLIC_URL; --no-auth is loopback-only dev; tenant = OAuth client_id; default HTTP tools exclude record_feedback/propose_improvement/install_skill (add via --tools)
+
 # Knowledge
 nuvel skills list
 nuvel skills search prompt

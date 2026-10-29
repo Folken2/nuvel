@@ -1,0 +1,55 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "63a42bab-29cd-432d-9743-ca300845ff32",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "skill": {
+    "name": "prep",
+    "version": "0.3.0"
+  },
+  "host": "claude-chat",
+  "mode": "interactive",
+  "started_at": "2026-10-27T10:30:00Z",
+  "duration_s": 75,
+  "outcome": "success",
+  "steps": [
+    {
+      "id": "prep.load-state",
+      "status": "ok"
+    },
+    {
+      "id": "prep.identify-meeting",
+      "status": "ok",
+      "counts": {
+        "attendees": 3,
+        "open_loops": 2,
+        "handoffs": 1,
+        "threads_read": 5,
+        "runs_searched": 7
+      }
+    },
+    {
+      "id": "prep.gather-context",
+      "status": "ok",
+      "counts": {
+        "attendees": 3,
+        "open_loops": 2,
+        "handoffs": 1,
+        "threads_read": 5,
+        "runs_searched": 7
+      }
+    },
+    {
+      "id": "prep.write",
+      "status": "ok"
+    }
+  ],
+  "safety": {
+    "injection_suspected": 0,
+    "forbidden_tool_requested": 0
+  },
+  "user_corrected": false
+}

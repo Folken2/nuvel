@@ -31,6 +31,9 @@ cp .env.example .env
 # add your OPENROUTER_API_KEY
 ```
 
+Contributors using `uv` can instead run `uv sync --all-extras` to install the
+project with every extra (the `nuvel-mcp` package is a workspace member).
+
 Run the test suite:
 
 ```bash
@@ -71,14 +74,16 @@ API tokens stored in GitHub secrets. The workflow in
 [.github/workflows/release.yml](.github/workflows/release.yml) triggers on a
 `v*.*.*` tag push and:
 
-1. Builds sdist + wheel and verifies the tag matches `pyproject.toml` `version`
+1. Builds sdist + wheel for both `nuvel-cli` and `nuvel-mcp` and verifies the tag matches the `version` in both `pyproject.toml` and `packages/nuvel-mcp/pyproject.toml` (the two packages always release at the same version)
 2. Publishes to PyPI through the OIDC-backed `pypi` environment
 3. Creates a GitHub release with auto-generated notes
 
 To cut a release:
 
 ```bash
-# 1. Bump version in pyproject.toml
+# 1. Bump version in pyproject.toml AND packages/nuvel-mcp/pyproject.toml
+#    and move the nuvel-mcp range in requirements.txt to match
+#    (e.g. 0.6.0 -> nuvel-mcp>=0.6.0,<0.7)
 # 2. Commit, push, and tag
 git commit -am "release: 0.2.0"
 git tag v0.2.0
@@ -89,8 +94,20 @@ One-time setup before the first release:
 
 - Register `nuvel` on PyPI and add this repo as a Trusted Publisher
   (`pypi.org` → Account → Publishing → Add a new pending publisher).
+- Do the same for `nuvel-mcp`: the PyPI project does not exist yet, so add a
+  *pending publisher* for it (same repo, workflow `release.yml`, environment
+  `pypi`). This is a manual maintainer step outside the repo.
 - Create a GitHub environment named `pypi` (Settings → Environments → New
   environment).
+
+### Before merging the `nuvel-mcp` branch
+
+`nuvel-cli` depends on `nuvel-mcp`, a name nobody has registered on PyPI yet.
+Before the branch that introduces it is pushed or merged, a maintainer must
+publish `nuvel-mcp` `0.5.0.dev0` (or a placeholder) through the pending
+publisher above, so no one else can claim the name in between
+(dependency confusion). Keep the compatible range pin
+(`nuvel-mcp>=0.5.0.dev0,<0.6`); do not switch to an exact pin.
 
 ## Adding a new messaging-app channel
 

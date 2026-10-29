@@ -27,3 +27,4 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 ## Shipping it
 
 - [Deploy to Railway](deploy-to-railway.md) — the path of least resistance.
+- [Deploy the Skills MCP server over HTTP](deploy-skills-mcp.md) — `nuvel-mcp serve --transport http` with OAuth 2.1, behind TLS.

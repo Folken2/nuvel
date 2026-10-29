@@ -1,0 +1,60 @@
+{
+  "schema": "nuvel.skill_run/1",
+  "run_id": "8e3dedde-8a51-4436-92e2-88a86e1587d5",
+  "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
+  "plugin": {
+    "name": "chief-of-staff",
+    "version": "0.3.0"
+  },
+  "skill": {
+    "name": "setup",
+    "version": "0.3.0"
+  },
+  "host": "claude-cowork",
+  "mode": "interactive",
+  "started_at": "2026-10-27T07:30:00Z",
+  "duration_s": 45,
+  "outcome": "success",
+  "steps": [
+    {
+      "id": "setup.detect",
+      "status": "ok"
+    },
+    {
+      "id": "setup.questions",
+      "status": "ok",
+      "counts": {
+        "sources_ok": 2,
+        "sources_missing": 1,
+        "questions_asked": 6,
+        "routines_created": 2,
+        "corrections": 0
+      }
+    },
+    {
+      "id": "setup.folder",
+      "status": "ok"
+    },
+    {
+      "id": "setup.memory",
+      "status": "ok"
+    },
+    {
+      "id": "setup.routines",
+      "status": "ok"
+    },
+    {
+      "id": "setup.first-radar",
+      "status": "ok"
+    },
+    {
+      "id": "setup.wrap-up",
+      "status": "ok"
+    }
+  ],
+  "safety": {
+    "injection_suspected": 0,
+    "forbidden_tool_requested": 0
+  },
+  "user_corrected": false
+}

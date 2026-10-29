@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nuvel.recipe/2",
+  "description": "One shared recipe: closed structure (actions, tool kinds, placeholder slots) plus free text (title, when_to_use, step notes, pitfalls, narrative) that the server masks with a per-language allowlist before anything is stored, relayed or logged. Closed at every level. 'tenant' and 'masking' are stamped by the server and rejected from clients.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "nuvel.recipe/2"
+    },
+    "recipe_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "install_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "plugin": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "chief-of-staff"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{1,2}$"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "client-proposal",
+        "client-onboarding",
+        "client-followup",
+        "meeting-prep",
+        "meeting-followup",
+        "sales-pipeline",
+        "partner-relations",
+        "investor-update",
+        "board-meeting",
+        "monthly-close",
+        "invoicing",
+        "budget-planning",
+        "hiring",
+        "team-management",
+        "reporting",
+        "contract-review",
+        "travel-planning",
+        "event-planning",
+        "inbox-triage",
+        "document-drafting",
+        "research",
+        "weekly-planning",
+        "other"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^[a-z]{2}$"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "when_to_use": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "search",
+              "read",
+              "summarise",
+              "extract",
+              "compare",
+              "check",
+              "calculate",
+              "list",
+              "draft",
+              "edit",
+              "translate",
+              "create",
+              "update",
+              "file",
+              "propose_slot",
+              "schedule",
+              "send",
+              "reply",
+              "forward",
+              "share",
+              "remind",
+              "follow_up",
+              "ask",
+              "decide",
+              "wait",
+              "other"
+            ]
+          },
+          "tool_kind": {
+            "type": "string",
+            "enum": [
+              "email",
+              "calendar",
+              "chat",
+              "docs",
+              "storage",
+              "tasks",
+              "web",
+              "none"
+            ]
+          },
+          "slots": {
+            "type": "array",
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "person",
+                "company",
+                "team",
+                "product",
+                "project",
+                "document",
+                "file",
+                "folder",
+                "amount",
+                "number",
+                "date",
+                "time",
+                "period",
+                "place",
+                "email",
+                "phone",
+                "url",
+                "id",
+                "topic",
+                "other"
+              ]
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "action",
+          "tool_kind",
+          "slots"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pitfalls": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 160
+      }
+    },
+    "narrative": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "required": [
+    "schema",
+    "recipe_id",
+    "install_id",
+    "plugin",
+    "version",
+    "category",
+    "language",
+    "title",
+    "when_to_use",
+    "steps"
+  ],
+  "additionalProperties": false
+}
