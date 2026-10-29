@@ -116,7 +116,9 @@ def add_serve_arguments(parser: argparse.ArgumentParser) -> None:
         "--allow-remote",
         action="store_true",
         help="Allow binding a non-loopback --host (e.g. 0.0.0.0). Requires "
-             "NUVEL_MCP_PUBLIC_URL (the OAuth issuer) and GitHub OAuth credentials.",
+             "NUVEL_MCP_PUBLIC_URL (the OAuth issuer) and either GitHub OAuth "
+             "credentials or NUVEL_OAUTH_LOGIN=none (URL keys and "
+             "client_credentials only).",
     )
     parser.add_argument(
         "--no-auth",
@@ -139,12 +141,17 @@ def add_oauth_commands(subparsers: argparse._SubParsersAction) -> None:
     p_create = client_sub.add_parser(
         "create",
         help="Issue a confidential client (client_credentials; plus the "
-             "authorization code flow when --redirect-uri is given).",
+             "authorization code flow when --redirect-uri is given), or with "
+             "--url-key a client reached through a connector URL.",
     )
     p_create.add_argument("--name", required=True, help="Human-readable client name.")
     p_create.add_argument("--redirect-uri", action="append", default=None, metavar="URI",
                           help="Allowed redirect URI (https://, or http:// on loopback). "
                                "Repeatable.")
+    p_create.add_argument("--url-key", action="store_true",
+                          help="Issue a URL key instead of a secret and print the "
+                               "connector URL ($NUVEL_MCP_PUBLIC_URL/mcp/k/<key>) once, "
+                               "for MCP clients that connect with no sign-in.")
     p_create.set_defaults(func=_cmd_client_create)
     p_list = client_sub.add_parser("list", help="List registered clients (no secrets).")
     p_list.add_argument("--json", action="store_true", help="Print JSON.")
@@ -157,9 +164,10 @@ def add_oauth_commands(subparsers: argparse._SubParsersAction) -> None:
     token_sub = p_token.add_subparsers(dest="token_command", required=True)
     p_revoke = token_sub.add_parser(
         "revoke",
-        help="Revoke an access/refresh token, or every token of a client id.",
+        help="Revoke an access/refresh token, a URL key (or connector URL), or "
+             "every token and URL key of a client id.",
     )
-    p_revoke.add_argument("value", metavar="TOKEN_OR_CLIENT_ID")
+    p_revoke.add_argument("value", metavar="TOKEN_KEY_OR_CLIENT_ID")
     p_revoke.set_defaults(func=_cmd_token_revoke)
 
 
@@ -305,15 +313,19 @@ def run_serve(args: argparse.Namespace) -> int:
 
 def _oauth_provider_for_http(loopback: bool, public_url: str | None):
     """Build the provider for gated HTTP, or return (None, error)."""
-    from nuvel_mcp.oauth import OAuthConfig, OAuthProvider, OAuthStoreError
+    from nuvel_mcp.oauth import LOGIN_SETTINGS, OAuthConfig, OAuthProvider, OAuthStoreError
 
     config = OAuthConfig.from_env()
+    if config.login not in LOGIN_SETTINGS:
+        return None, (f"NUVEL_OAUTH_LOGIN={config.login!r} is not supported: set it to "
+                      "'none' (URL keys and client_credentials only) or leave it unset.")
     mode = config.login_mode
     if mode is None:
         return None, ("the HTTP transport is gated by OAuth and needs a login provider: set "
                       "NUVEL_OAUTH_GITHUB_CLIENT_ID and NUVEL_OAUTH_GITHUB_CLIENT_SECRET "
                       "(a GitHub OAuth app whose callback is <origin>/oauth/callback), or "
-                      "NUVEL_OAUTH_DEV_LOGIN=1 for local tests, or pass --no-auth on loopback.")
+                      "NUVEL_OAUTH_LOGIN=none to accept only URL keys and client_credentials, "
+                      "or NUVEL_OAUTH_DEV_LOGIN=1 for local tests, or pass --no-auth on loopback.")
     if mode == "dev" and not loopback:
         return None, "NUVEL_OAUTH_DEV_LOGIN=1 is for local tests and is refused on a non-loopback bind."
     if not loopback and not public_url:
@@ -325,6 +337,17 @@ def _oauth_provider_for_http(loopback: bool, public_url: str | None):
             pass  # fail fast on an unreadable store
     except OAuthStoreError as exc:
         return None, str(exc)
+    if mode == "none":
+        ignored = [what for what, set_ in (
+            ("GitHub credentials", config.github_client_id or config.github_client_secret),
+            ("NUVEL_OAUTH_DEV_LOGIN", config.dev_login),
+        ) if set_]
+        if ignored:
+            print(f"Warning: NUVEL_OAUTH_LOGIN=none: {' and '.join(ignored)} are ignored; "
+                  "there is no interactive login.", file=sys.stderr)
+        print("NUVEL_OAUTH_LOGIN=none: no interactive login; clients connect with a URL key "
+              "(nuvel-mcp client create --url-key) or client_credentials.", file=sys.stderr)
+        return provider, None
     if config.dev_login and mode == "github":
         print("Warning: NUVEL_OAUTH_DEV_LOGIN is ignored because GitHub credentials are set.",
               file=sys.stderr)
@@ -377,6 +400,8 @@ def _store_errors(func):
 
 @_store_errors
 def _cmd_client_create(args: argparse.Namespace) -> int:
+    if args.url_key:
+        return _create_url_key_client(args)
     provider = _provider()
     try:
         record, secret = provider.create_client(args.name, args.redirect_uri)
@@ -396,6 +421,35 @@ def _cmd_client_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def _create_url_key_client(args: argparse.Namespace) -> int:
+    from nuvel_mcp.oauth import URL_KEY_PATH, public_url_from_env
+
+    if args.redirect_uri:
+        print("Error: --url-key and --redirect-uri are mutually exclusive: a URL-key "
+              "client never uses the authorization code flow.", file=sys.stderr)
+        return 2
+    try:
+        public_url = public_url_from_env()
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    provider = _provider()
+    record, key = provider.create_client(args.name, url_key=True)
+    print(json.dumps({
+        "client_id": record["client_id"],
+        "client_name": record["client_name"],
+        "url_key": key,
+        "connector_url": f"{public_url or ''}{URL_KEY_PATH}{key}",
+    }, indent=2))
+    if public_url is None:
+        print("NUVEL_MCP_PUBLIC_URL is not set: prefix connector_url with the server's "
+              "public origin.", file=sys.stderr)
+    print(f"Give connector_url to this tester now: only the key's hash is kept in "
+          f"{provider.store.path}. Revoke it with: nuvel-mcp token revoke {record['client_id']}",
+          file=sys.stderr)
+    return 0
+
+
 @_store_errors
 def _cmd_client_list(args: argparse.Namespace) -> int:
     clients = _provider().list_clients()
@@ -408,7 +462,8 @@ def _cmd_client_list(args: argparse.Namespace) -> int:
     print(f"{'CLIENT_ID':<28} {'NAME':<24} {'TYPE':<12} {'SOURCE':<6} {'TOKENS':>6}  CREATED")
     for c in clients:
         created = time.strftime("%Y-%m-%d %H:%M", time.gmtime(c.get("client_id_issued_at", 0)))
-        kind = "confidential" if c["confidential"] else "public"
+        kind = ("url-key" if c.get("url_key")
+                else "confidential" if c["confidential"] else "public")
         print(f"{c['client_id']:<28} {(c.get('client_name') or '-')[:24]:<24} {kind:<12} "
               f"{c.get('source', '?'):<6} {c['active_access_tokens']:>6}  {created}")
     return 0
@@ -429,8 +484,9 @@ def _cmd_token_revoke(args: argparse.Namespace) -> int:
     if result is None:
         print("Error: no matching token or client id.", file=sys.stderr)
         return 1
-    print(f"Revoked {result['access_tokens']} access token(s) and "
-          f"{result['refresh_tokens']} refresh token(s) "
+    print(f"Revoked {result['access_tokens']} access token(s), "
+          f"{result['refresh_tokens']} refresh token(s) and "
+          f"{result['url_keys']} URL key(s) "
           f"({result['kind']}, client {result['client_id']}).")
     return 0
 
