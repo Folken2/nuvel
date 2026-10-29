@@ -23,9 +23,10 @@ description: >-
    - A `Returns:` section describing the response shape.
 6. Use type hints for **every** parameter — the framework inspects them to build the tool schema sent to the model.
 7. Access session state via `tool_context.state["key"]` for reading and writing.
-8. To escalate (exit a LoopAgent early): `tool_context.actions.escalate = True`.
+8. To escalate (exit a legacy LoopAgent early): `tool_context.actions.escalate = True`. In a `Workflow`, exit a cycle through a routed edge instead (see `adk-workflow-graphs`).
 9. To skip LLM summarisation of the tool result: `tool_context.actions.skip_summarization = True`.
 10. Wrap the function: `my_tool_instance = FunctionTool(func=my_tool)`.
+11. For long-running work, check `tool_context.is_aborted` between steps and return early — it turns `True` when the run is cancelled (`abort_signal`, or the HTTP client disconnecting from `/run_sse`).
 
 ## Quick-Start Template
 
@@ -110,6 +111,54 @@ runs — the model should see a normal tool-error response it can react to,
 not a crash. Load `adk-long-horizon-guardrails` for the command-safety
 classifier and `exfil_guard`, and `adk-cron-isolation` for the headless
 denial policy.
+
+## Consulting a stronger model mid-task (`ModelConsultTool`)
+
+Since `google-adk` 2.11, an agent on a fast, cheap model can escalate the hard
+step of a turn to a stronger "advisor" model instead of running every turn on
+the expensive one. Add `ModelConsultTool` next to your own tools; the model
+gets a `model_consult(question=..., context=...)` tool plus an escalation
+policy in its system instruction.
+
+```python
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.tools import ModelConsultTool
+
+agent = LlmAgent(
+    name="support_executor",
+    model=LiteLlm(model="openrouter/google/gemini-2.5-flash"),
+    instruction="...",
+    tools=[
+        lookup_order_tool,
+        ModelConsultTool(
+            # Always pass the advisor: the default is a Gemini model name,
+            # which a generated agent (OpenRouter via LiteLlm) can't resolve.
+            model=LiteLlm(model="openrouter/anthropic/claude-opus-4"),
+            max_uses=2,          # consults per turn
+            session_max_uses=5,  # consults per session
+        ),
+    ],
+)
+```
+
+- The advisor reads the session (instructions, tool calls and results) with
+  **tool calling disabled** — it returns guidance only; the executor still
+  makes every tool call, so tool guards and approval gates still apply.
+- It never raises into the agent loop: it returns `status` `"ok"`
+  (with `guidance`), `"limit_reached"`, `"error"`, or `"invalid_request"`.
+- The default policy makes the executor consult before committing to a
+  decision, when stuck, and before declaring a task done, so most turns use
+  one consult. Override it with `executor_instruction=`.
+- **Advisor spend is invisible to `CostGuardPlugin`.** The advisor call
+  bypasses the model callbacks, so the generated agent's per-session
+  `COST_GUARD_BUDGET` never counts it. Bound it with `max_uses` /
+  `session_max_uses`, and add ADK's `ModelConsultObservabilityPlugin`
+  (`google.adk.tools.model_consult`, register it first) if you need the
+  advisor's tokens and cost reported.
+- A weak executor may skip consulting. `ForceEscalationPlugin`
+  (`google.adk.tools.model_consult`) forces a consult on the first model turn
+  and on repeated identical calls; add it to the App's plugins only if evals
+  show the executor under-consults.
 
 ## References
 

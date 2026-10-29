@@ -376,6 +376,25 @@ async def test_skill_curator_llm_call_does_not_block_event_loop(
     assert during >= 5, f"event loop starved: only {during} ticks in 0.3s"
 
 
+async def test_skill_curator_ignores_cancelled_tool_calls(plugins_pkg):
+    """google-adk >=2.13 reports a cancelled tool call to on_tool_error_callback.
+
+    A cancellation (client disconnect, abort_signal) is not a skill failure, so
+    it must not feed the curator's tool-error signal.
+    """
+    plugin = _mod(plugins_pkg, "skill_curator_plugin").SkillCuratorPlugin()
+    inv = _inv("sess-cancel")
+    await plugin.before_run_callback(invocation_context=inv)
+    ctx = _tool_ctx(inv, "call-1")
+    await plugin.on_tool_error_callback(
+        tool=_tool(), tool_args={}, tool_context=ctx, error=asyncio.CancelledError()
+    )
+    await plugin.on_tool_error_callback(
+        tool=_tool(), tool_args={}, tool_context=ctx, error=RuntimeError("boom")
+    )
+    assert plugin._run_for(inv.invocation_id).tool_errors == {_tool().name: 1}
+
+
 # ── ToolEventsPlugin ─────────────────────────────────────────────────
 
 _PNG_B64 = "iVBORw0KGgo" + "A" * 2000

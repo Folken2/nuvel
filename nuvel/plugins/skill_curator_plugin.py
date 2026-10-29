@@ -202,6 +202,11 @@ class SkillCuratorPlugin(BasePlugin):
         tool_context: "ToolContext",
         error: Exception,
     ) -> None:
+        # google-adk >=2.13 also calls this with asyncio.CancelledError when a
+        # tool call is cancelled (client disconnect, abort_signal). That says
+        # nothing about the skill, so it must not count as a tool failure.
+        if isinstance(error, asyncio.CancelledError):
+            return None
         run = self._run_for(getattr(tool_context, "invocation_id", None))
         name = getattr(tool, "name", "?") or "?"
         run.tool_errors[name] = run.tool_errors.get(name, 0) + 1

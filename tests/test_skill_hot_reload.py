@@ -235,7 +235,7 @@ def test_template_documents_why_the_wrapper_stays():
     source = TEMPLATE.read_text(encoding="utf-8")
     assert "class LazySkillToolset" in source
     for marker in (
-        "google-adk 2.10.0",
+        "google-adk 2.13.0",
         "revalidate_skills",
         "ADK_ENABLE_SKILL_LIFECYCLE",
         "test_skill_hot_reload.py",

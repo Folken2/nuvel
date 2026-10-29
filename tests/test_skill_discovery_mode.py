@@ -1,11 +1,13 @@
-"""Pins google-adk 2.10's skill-disclosure surface, and why nuvel leaves it alone.
+"""Pins google-adk's skill-disclosure surface, and why nuvel leaves it alone.
+
+Re-verified against google-adk 2.13.0; line numbers below are from that release.
 
 Wave 3 evaluated ADK 2.10's ``SkillDiscoveryMode`` and the ``max_active_skills``
 cap for nuvel's 15 ADK knowledge skills. The outcome was *don't adopt*, for two
 measured reasons that these tests pin so a future ADK bump trips on them:
 
 1. ``SkillDiscoveryMode.LAZY`` is already the constructor default
-   (``google/adk/tools/skill_toolset.py``:1730) and is already the on-demand
+   (``google/adk/tools/skill_toolset.py``:2128) and is already the on-demand
    disclosure nuvel wants: the catalog stays out of the system instruction and
    reaches the model only when it calls ``list_skills``. The alternative,
    ``EAGER``, injects the catalog into every request — measured at roughly 7k
@@ -14,11 +16,11 @@ measured reasons that these tests pin so a future ADK bump trips on them:
    ``test_lazy_is_the_adk_default`` fails.
 2. The active-skill cap only reclaims context when the experimental
    ``ADK_ENABLE_SKILL_LIFECYCLE`` flag is on, because the transcript rewrite
-   that drops a released skill's instructions
-   (``SkillToolset._prune_unloaded_skills``:2374-2377) is gated on it. With the
-   flag off the cap still evicts skills — capability lost, nothing reclaimed.
-   A generated agent must not depend on an experimental flag, so the cap stays
-   out.
+   that drops a released skill's instructions (``_prune_unloaded_skills``,
+   called from ``SkillToolset.process_llm_request``:2794-2795) is gated on it.
+   With the flag off the cap still evicts skills — capability lost, nothing
+   reclaimed. A generated agent must not depend on an experimental flag, so the
+   cap stays out.
 
 Also pinned here: ``LazySkillToolset`` in ``{{agent_package}}/agent.py.tmpl``
 forwards ``process_llm_request``. The flow calls that on whatever sits in

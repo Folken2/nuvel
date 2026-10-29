@@ -61,9 +61,9 @@ Without a cooldown, a burst of quick user turns can launch a fork on every singl
 
 ## The skill curator
 
-`NUVEL_SKILL_CURATOR` (`plugins/skill_curator_plugin.py:51,74`, default **off** — the gate is `os.environ.get(ENV_ENABLED, "").strip() in {"1","true","yes","on"}`, so an unset value is off) lets `SkillCuratorPlugin` propose new or patched `SKILL.md` files from what it observed during a run: tool-call volume, event count, and repeated tool errors on the same tool.
+`NUVEL_SKILL_CURATOR` (`plugins/skill_curator_plugin.py:56,79`, default **off** — the gate is `os.environ.get(ENV_ENABLED, "").strip() in {"1","true","yes","on"}`, so an unset value is off) lets `SkillCuratorPlugin` propose new or patched `SKILL.md` files from what it observed during a run: tool-call volume, event count, and repeated tool errors on the same tool.
 
-It runs at *Runner scope*, not per-turn — `before_run_callback` resets counters, `after_tool_callback`/`on_event_callback`/`on_tool_error_callback` accumulate signal across the whole run (including sub-agents), and `after_run_callback` evaluates once at the end. A run only reaches the LLM call if it's "complex enough" by any of three thresholds:
+It runs at *Runner scope*, not per-turn — `before_run_callback` resets counters, `after_tool_callback`/`on_event_callback`/`on_tool_error_callback` accumulate signal across the whole run (including sub-agents; a cancelled tool call, which google-adk 2.13+ also reports to `on_tool_error_callback` as `asyncio.CancelledError`, is not counted as an error), and `after_run_callback` evaluates once at the end. A run only reaches the LLM call if it's "complex enough" by any of three thresholds:
 
 | Env var | Default | Constant | Trips when |
 |---|---|---|---|
@@ -107,12 +107,12 @@ To measure what any of this is actually costing you: `CostGuardPlugin` (wired in
 | `NUVEL_MEMORY_FORK_COOLDOWN` | `120` sec | `throttle.py:27,30` (`DEFAULT_COOLDOWN_SECONDS`) |
 | `NUVEL_MEMORY_FORK_CAP` | `50` | `throttle.py:28,31` (`DEFAULT_PER_SESSION_CAP`) |
 | `NUVEL_MEMORY_SIBLING_DRAIN_TIMEOUT` | `4.0` sec (cap `4.5`) | `sibling_runner.py:34-36` |
-| `NUVEL_SKILL_CURATOR` | off | `skill_curator_plugin.py:51,74` |
-| `NUVEL_SKILL_CURATOR_MIN_TOOLS` | `5` | `skill_curator_plugin.py:52,59` |
-| `NUVEL_SKILL_CURATOR_MIN_EVENTS` | `12` | `skill_curator_plugin.py:53,60` |
-| `NUVEL_SKILL_CURATOR_MIN_ERRORS` | `3` | `skill_curator_plugin.py:54,61` |
-| `NUVEL_SKILL_CURATOR_MODEL` | `gemini-2.0-flash` | `skill_curator_plugin.py:57,62` |
-| `NUVEL_SKILL_PROPOSALS_DIR` | `~/.nuvel/skill-proposals` | `skill_curator_plugin.py:55,100-103` |
-| `NUVEL_SKILLS_DIR` | `<package>/skills/` | `skill_curator_plugin.py:56,236-239` |
+| `NUVEL_SKILL_CURATOR` | off | `skill_curator_plugin.py:56,79` |
+| `NUVEL_SKILL_CURATOR_MIN_TOOLS` | `5` | `skill_curator_plugin.py:57,64` |
+| `NUVEL_SKILL_CURATOR_MIN_EVENTS` | `12` | `skill_curator_plugin.py:58,65` |
+| `NUVEL_SKILL_CURATOR_MIN_ERRORS` | `3` | `skill_curator_plugin.py:59,66` |
+| `NUVEL_SKILL_CURATOR_MODEL` | `gemini-2.0-flash` | `skill_curator_plugin.py:62,67` |
+| `NUVEL_SKILL_PROPOSALS_DIR` | `~/.nuvel/skill-proposals` | `skill_curator_plugin.py:60,104-108` |
+| `NUVEL_SKILLS_DIR` | `<package>/skills/` | `skill_curator_plugin.py:61,266` |
 
 Deeper dive: `references/fork-lifecycle.md` (trigger point, throttle check order, what a fork sees, write-back, drain-at-shutdown, failure handling). Related skills: `adk-org-memory-retrieval` (the optional embedding-ranked backend preload retrieves through), `adk-skill-creation` (what a curator/judge proposal needs to become a real skill), `adk-prompt-engineering` (the stable/session/volatile prompt tiers a fork must not mutate).

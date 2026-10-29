@@ -1,20 +1,21 @@
 ---
 name: adk-agent-patterns
 description: >
-  Agent architecture patterns for Google ADK 2.0 — when to reach for a single
-  LlmAgent, a Workflow graph (new default for multi-step orchestration), or the
-  shortcut classes SequentialAgent / LoopAgent / ParallelAgent. Load this skill
-  when deciding the agent's top-level shape.
+  Agent architecture patterns for Google ADK 2.x — when to reach for a single
+  LlmAgent, a Workflow graph (the default for multi-step orchestration), or the
+  deprecated SequentialAgent / LoopAgent / ParallelAgent classes. Load this
+  skill when deciding the agent's top-level shape.
 ---
 
 # ADK Agent Architecture Patterns
 
-**Version 2.0** | Updated for `google-adk>=2.0.0`
+**Version 2.1** | Updated for `google-adk>=2.13.0`
 
 Select the right architecture for any task using Google ADK primitives. ADK 2.0
 introduced a graph-based **`Workflow`** model that subsumes Sequential / Loop /
-Parallel into a single primitive. The old classes still exist as convenience
-wrappers, but `Workflow` is the new idiomatic default for anything multi-step.
+Parallel into a single primitive. The old classes are **deprecated** in favor
+of `Workflow` (they emit a `DeprecationWarning` and will be removed in a future
+release), so `Workflow` is the default for anything multi-step.
 
 For the full graph API (nodes, edges, routing, fan-out, dynamic nodes,
 human-in-the-loop), load the **`adk-workflow-graphs`** skill.
@@ -30,23 +31,19 @@ Is the task multi-step with branching, cycles, or fan-out?
   YES → Workflow graph                       [Pattern 2 — preferred]
   NO  ↓  (i.e., strictly linear, no branching)
 
-Strictly fixed-order pipeline, ≤ ~3 steps, no routing?
-  YES → SequentialAgent shortcut             [Pattern 3a]
-
-Iterate-until-good-enough with a clear exit signal?
-  YES → LoopAgent shortcut                   [Pattern 3b]
-
-Independent tasks to run concurrently, no routing between them?
-  YES → ParallelAgent shortcut               [Pattern 3c]
+Strictly linear, looped, or parallel steps?
+  YES → Workflow graph too                   [Pattern 2]
+        (a coordinator LLM calls it as a tool: tools=[workflow])
 
 Specialized sub-agents picked dynamically by a router LLM?
   YES → Multi-agent hierarchy                [Pattern 4]
 ```
 
-**Rule of thumb in ADK 2.0:** if you need any of {conditional branching,
-revision loops, fan-in joins, dynamic node scheduling, mixing LLM steps with
-plain Python steps}, **use `Workflow`**. The shortcut classes are fine when the
-shape is trivially linear or trivially parallel and you want a one-liner.
+**Rule of thumb in ADK 2.x:** multi-step means **`Workflow`** — it covers
+conditional branching, revision loops, fan-in joins, dynamic node scheduling,
+and plain Python steps mixed with LLM steps. Write new code against
+`Workflow` even when the shape is trivially linear; the deprecated classes are
+for existing code and for the one case `Workflow` can't cover yet (below).
 
 ## Pattern 1: Single LlmAgent
 
@@ -114,10 +111,19 @@ agent = Workflow(
 steps, anything where you'd otherwise nest Sequential inside Loop inside
 something. For the full reference, load `adk-workflow-graphs`.
 
-## Pattern 3: Convenience shortcut classes (still supported in 2.0)
+## Pattern 3: Deprecated shortcut classes
 
-These remain in ADK 2.0 as shortcuts; under the hood they compile to the same
-graph machinery. Reach for them when the shape is trivially one of these three.
+`SequentialAgent`, `LoopAgent`, and `ParallelAgent` still run, but they are
+deprecated in favor of `Workflow` and will be removed in a future release.
+Write the equivalent `Workflow` shown under each class instead, and migrate
+existing ones with the `workflow-migration.md` reference in `adk-task-delegation`.
+
+**`Workflow` cannot be an `LlmAgent` sub-agent** — `sub_agents=[workflow]`
+fails validation. To put a pipeline under a coordinator LLM, pass it as a
+tool: `LlmAgent(tools=[workflow])` wraps it in a `NodeTool` the model calls
+by the workflow's `name`, with the `description` as the tool description. Only
+when the coordinator must *transfer* control to the pipeline (rather than call
+it and get a result back) do you still need one of the deprecated classes.
 
 ### 3a. SequentialAgent — strictly linear pipeline
 
@@ -201,14 +207,18 @@ For `AgentTool` and advanced hierarchies, see `references/multi-agent-patterns.m
 ## Combining patterns
 
 ```
-coordinator (LlmAgent with sub_agents)
-  ├── simple_agent (LlmAgent)
-  ├── analysis_pipeline (Workflow)
-  │     ├── classifier (LlmAgent node)
-  │     ├── sql_writer / chart_maker (routed branches)
-  │     └── format_answer (FunctionNode)
-  └── research_loop (LoopAgent or a Workflow cycle)
+coordinator (LlmAgent)
+  ├── sub_agents:
+  │     └── simple_agent (LlmAgent)          ← transfer target
+  └── tools:
+        ├── analysis_pipeline (Workflow)     ← called as a NodeTool
+        │     ├── classifier (ClassifierNode or LlmAgent node)
+        │     ├── sql_writer / chart_maker (routed branches)
+        │     └── format_answer (FunctionNode)
+        └── research_loop (Workflow with a routed cycle)
 ```
+
+A `Workflow` goes in `tools`, never `sub_agents` — see Pattern 3.
 
 **Rules:**
 1. Start simple. Single `LlmAgent` first; reach for `Workflow` when you actually
@@ -218,14 +228,15 @@ coordinator (LlmAgent with sub_agents)
 3. Every sub-agent has one clear job.
 4. Pass state between nodes via node output (auto-wired) or `output_key` /
    session state for cross-cutting values.
-5. Bound every cycle — `max_iterations` on `LoopAgent`, or a route that
-   eventually leaves the cycle in a `Workflow`.
+5. Bound every cycle — a route that eventually leaves the cycle in a
+   `Workflow` (or `max_iterations` on a legacy `LoopAgent`).
 
 ## Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
-| Reaching for SequentialAgent for any multi-step task | If there's any branching, fan-out, or cycle, use `Workflow` |
+| Reaching for SequentialAgent for any multi-step task | It is deprecated — write a `Workflow` with linear edges |
+| `LlmAgent(sub_agents=[some_workflow])` | Fails validation — pass it as `tools=[some_workflow]` (wrapped as a `NodeTool`) |
 | Using ParallelAgent then needing to aggregate | `ParallelAgent` has no join — use `Workflow` with fan-out + fan-in |
 | Nesting `LoopAgent` inside `SequentialAgent` inside `ParallelAgent` | Collapse to a single `Workflow` with routed cycles and tuple fan-out |
 | LoopAgent or workflow cycle without an exit | Always set `max_iterations` or ensure at least one route leaves the cycle |

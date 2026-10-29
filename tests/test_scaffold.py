@@ -218,7 +218,7 @@ class TestAdkDependencyConstraint(unittest.TestCase):
     """Guard the google-adk constraint in the template and committed agents."""
 
     REPO_ROOT = Path(__file__).resolve().parents[1]
-    CONSTRAINT = "google-adk>=2.0.0,<3.0.0"
+    CONSTRAINT = "google-adk>=2.13.0,<3.0.0"
 
     def test_scaffolded_requirements_carry_adk_2x_constraint(self):
         tmpdir = tempfile.mkdtemp()
@@ -258,6 +258,32 @@ class TestAdkDependencyConstraint(unittest.TestCase):
                         f"{requirements.relative_to(self.REPO_ROOT)}: {line.strip()}"
                     )
         self.assertEqual(offenders, [], f"stale google-adk pins: {offenders}")
+
+    def test_litellm_range_excludes_compromised_releases(self):
+        """1.82.7/1.82.8 and 1.107.0 shipped credential stealers.
+
+        google-adk 2.13 caps its own litellm extras below 1.106.3 for the same
+        reason; every requirements file nuvel ships or scaffolds must too.
+        """
+        from packaging.requirements import Requirement
+
+        files = [
+            self.REPO_ROOT / "requirements.txt",
+            self.REPO_ROOT / "nuvel" / "backends" / "adk" / "templates" / "requirements.txt",
+            *sorted((self.REPO_ROOT / "generated-agents").glob("*/requirements.txt")),
+        ]
+        for requirements in files:
+            lines = [
+                ln.split("#", 1)[0].strip()
+                for ln in requirements.read_text().splitlines()
+                if ln.startswith("litellm")
+            ]
+            for line in lines:
+                spec = Requirement(line).specifier
+                for bad in ("1.82.7", "1.82.8", "1.107.0"):
+                    self.assertNotIn(
+                        bad, spec, f"{requirements}: {line} allows litellm {bad}"
+                    )
 
 
 if __name__ == "__main__":
