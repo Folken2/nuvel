@@ -21,9 +21,9 @@ Tools:
     record_feedback      Record the outcome of using a skill in the local feedback store.
     check_skill_health   Health report for a skill from the local feedback store.
     record_run_trace     Record one content-free ``nuvel.skill_run/1`` run trace.
-    record_recipe_signal Record one content-free ``nuvel.recipe_signal/1`` event.
-    share_recipe         Share one ``nuvel.recipe/2`` recipe; its free text is masked
-                         server-side before it is stored, relayed or logged.
+    record_recipe_signal Record one content-free ``nuvel.recipe_signal/2`` weekly snapshot.
+    share_recipe         Share one ``nuvel.recipe/3`` recipe; its optional free text is
+                         masked server-side before it is stored, relayed or logged.
 """
 
 from __future__ import annotations
@@ -283,18 +283,22 @@ def _describe_failure(exc: BaseException) -> str:
 def _masked_recipe(recipe: object) -> dict:
     """The stored form of a client recipe (spec §5), or ``ToolInputError(paths)``.
 
-    validate ``nuvel.recipe/2`` → ``mask_recipe`` → ``invariant_hits`` on the
+    validate ``nuvel.recipe/3`` → ``mask_recipe`` → ``invariant_hits`` on the
     masked output (before any server field is added) → re-validate the masked
     output → stamp ``masking``. The caller stamps ``tenant``. The result is
     built by the masker from the schema's keys, so it shares nothing with
-    *recipe*. A masker failure is logged by exception type only.
+    *recipe*. A recipe without ``text`` loads no lexicon: it goes through the
+    same allowlist and invariant with ``lexicon=None`` and is stamped
+    ``{"lexicon": None, "masked": 0, "words": 0, "dropped": []}``. A masker
+    failure is logged by exception type only.
     """
     errors = recipes.validate_recipe(recipe)
     if errors:
         raise ToolInputError(errors)
     try:
         abbreviations = masking.ABBREVIATIONS
-        lexicon = masking.load_lexicon(recipe["language"])
+        text = recipe.get("text")
+        lexicon = masking.load_lexicon(text["language"]) if text is not None else None
         masked, info = masking.mask_recipe(recipe, lexicon, abbreviations)
         hits = masking.invariant_hits(masked, abbreviations, dropped=info["dropped"])
     except Exception as exc:  # noqa: BLE001 - its text may quote the input
@@ -1037,9 +1041,11 @@ class SkillsMCPServer:
                 {
                     "name": "record_recipe_signal",
                     "description": (
-                        "Record one content-free nuvel.recipe_signal/1 event each "
-                        "time a recipe is created, used, succeeded, corrected or "
-                        "retired, when the learn skill tells you to. Every field "
+                        "Record one content-free nuvel.recipe_signal/2 weekly snapshot "
+                        "(status plus the uses, successes, corrections and "
+                        "days_used counters) per recipe that changed since the "
+                        "last weekly review, when the weekly review tells you "
+                        "to. Every field "
                         "is an enum, a UUID, a version, a timestamp, a count or a "
                         "short lowercase identifier; never put names, subjects, "
                         "addresses, message text or any other user content in a "
@@ -1051,7 +1057,7 @@ class SkillsMCPServer:
                         "type": "object",
                         "properties": {
                             "signal": self._doc_input_schema(
-                                recipes.SIGNAL_RESOURCE, "One nuvel.recipe_signal/1 signal object."
+                                recipes.SIGNAL_RESOURCE, "One nuvel.recipe_signal/2 snapshot object."
                             )
                         },
                         "required": ["signal"],
@@ -1060,29 +1066,34 @@ class SkillsMCPServer:
                 {
                     "name": "share_recipe",
                     "description": (
-                        "Share one nuvel.recipe/2 recipe, when the learn skill tells "
-                        "you to. A recipe is structure (steps with an action from the "
-                        "catalogue, a tool kind and placeholder slots), short notes "
-                        "(title, when_to_use, step notes, pitfalls) and a narrative: "
-                        "the original wording of what was asked and how it was "
-                        "solved. In every free-text field write a {type} placeholder "
-                        "(for example {person}, {company}, {amount}, {date}, {email}) "
-                        "instead of names, companies, products, places, amounts, "
-                        "dates, contacts (emails, phone numbers), URLs or file names. "
-                        "All free text is masked server-side before anything is "
-                        "stored: every word that is not a common word of the "
-                        "recipe's language becomes {?}, and a field that is mostly "
-                        "masked is dropped. The reply gives the masked and word "
-                        "counts and the dropped field paths; a schema error returns "
-                        "the failing field paths only. Do not send 'tenant' or "
-                        "'masking' (the server sets them). Re-sending the same "
+                        "Share one nuvel.recipe/3 recipe, when the plugin's sharing "
+                        "procedure tells you to. A recipe is structure, always: a "
+                        "category, steps (an action from the catalogue, a tool kind "
+                        "and placeholder slots, nothing else) and usage stats "
+                        "(uses, successes, corrections, days_used). Free text is "
+                        "optional and goes only in 'text', only when the user turned "
+                        "text sharing on: its language plus short notes (title, "
+                        "when_to_use, step_notes with one note per step, pitfalls) "
+                        "and a narrative, the original wording of what was asked and "
+                        "how it was solved. In every free-text field write a {type} "
+                        "placeholder (for example {person}, {company}, {amount}, "
+                        "{date}, {email}) instead of names, companies, products, "
+                        "places, amounts, dates, contacts (emails, phone numbers), "
+                        "URLs or file names. All free text is masked server-side "
+                        "before anything is stored: every word that is not a common "
+                        "word of the text's language becomes {?}, and a field that "
+                        "is mostly masked is dropped. A recipe without 'text' is "
+                        "stored as structure only. The reply gives the masked and "
+                        "word counts and the dropped field paths; a schema error "
+                        "returns the failing field paths only. Do not send 'tenant' "
+                        "or 'masking' (the server sets them). Re-sending the same "
                         "recipe_id and version returns 'duplicate'."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "recipe": self._doc_input_schema(
-                                recipes.RECIPE_RESOURCE, "One nuvel.recipe/2 recipe object."
+                                recipes.RECIPE_RESOURCE, "One nuvel.recipe/3 recipe object."
                             )
                         },
                         "required": ["recipe"],

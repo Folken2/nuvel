@@ -6,9 +6,9 @@
 <h1 class="ed-h1">
   {% if candidates %}Recipe candidates. <span class="accent">{{ total_uses }}</span> uses.{% else %}No recipe signals yet.{% endif %}
 </h1>
-<div class="ed-sub">By category · counters from each recipe's latest signal · masked, shared copies only</div>
+<div class="ed-sub">By category · counters from each recipe's latest weekly snapshot · shared structure; text only when the user opted in, masked</div>
 
-{% if skipped_v1 %}<div class="ed-sub">{{ skipped_v1 }} older recipe file{{ '' if skipped_v1 == 1 else 's' }} (pre-masking format) not shown</div>{% endif %}
+{% if skipped_old %}<div class="ed-sub">{{ skipped_old }} older-schema recipe file{{ '' if skipped_old == 1 else 's' }} not shown</div>{% endif %}
 {% if candidates %}
 <style>
 .chip{display:inline-block;padding:0 .35em;border-radius:.6em;font-family:monospace;font-size:.85em;border:1px solid currentColor}
@@ -16,7 +16,7 @@
 .chip-masked{background:#fdecc8;color:#8a5a00}
 </style>
 <table class="ed-steps">
-  <thead><tr><th>Category</th><th>Recipes</th><th>Tenants</th><th>Uses</th><th>Success</th><th>Corrections</th><th>Latest masked version</th></tr></thead>
+  <thead><tr><th>Category</th><th>Recipes</th><th>Tenants</th><th>Uses</th><th>Success</th><th>Corrections</th><th>Status</th><th>Latest shared version</th></tr></thead>
   <tbody>
   {% for c in candidates %}
     <tr>
@@ -26,10 +26,16 @@
       <td>{{ c.uses }}</td>
       <td>{{ '%.0f' % (c.success_rate * 100) }}%</td>
       <td>{{ c.corrections }}</td>
+      <td>{% for st, n in c.statuses.items() %}{{ st }}{% if n > 1 %} ×{{ n }}{% endif %}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</td>
       <td>
         {% if c.latest %}
+          {% if c.latest.has_text %}
+          <span class="chip">text shared</span>
           <strong>{% if (c.latest.get('title') or '') | trim %}{{ c.latest.get('title') | chips }}{% else %}(title masked){% endif %}</strong>
-          <div>{{ c.latest.get('when_to_use', '') | chips }}</div>
+          {% if c.latest.when_to_use %}<div>{{ c.latest.when_to_use | chips }}</div>{% endif %}
+          {% else %}
+          <strong>Structure only</strong>
+          {% endif %}
           {% if c.latest.actions %}
           <div class="recipe-actions"><code>{{ c.latest.actions | join(' → ') }}</code></div>
           {% endif %}
@@ -45,7 +51,7 @@
           <div>Pitfalls:</div>
           <ul>{% for p in c.latest.pitfalls %}<li>{{ p | chips }}</li>{% endfor %}</ul>
           {% endif %}
-          <div>Masked: {% if c.latest.mask_ratio is none %}—{% else %}{{ '%.0f' % (c.latest.mask_ratio * 100) }}%{% endif %}</div>
+          {% if c.latest.has_text %}<div>Masked: {% if c.latest.mask_ratio is none %}—{% else %}{{ '%.0f' % (c.latest.mask_ratio * 100) }}%{% endif %}</div>{% endif %}
           {% if c.latest.narrative %}
           <details><summary>Masked narrative</summary><p>{{ c.latest.narrative | chips }}</p></details>
           {% endif %}

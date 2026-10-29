@@ -134,29 +134,38 @@ Two further tools store recipe data next to the traces, both in the HTTP default
 set, both tenant-stamped by the server from the OAuth `client_id` (a client-sent
 `tenant` is rejected):
 
-- **`record_recipe_signal`** stores a `nuvel.recipe_signal/1` event. Content-free:
-  `signal_id`, `recipe_id`, `install_id` (UUIDs), `plugin` (`name`, `version`),
-  `category` (identifier), `event` (`created`, `used`, `succeeded`, `corrected`,
-  `retired`), `at`, and the cumulative counters `uses`, `successes`, `corrections`.
-- **`share_recipe`** stores a `nuvel.recipe/2`: the structure of a recipe plus free
-  text that the server masks before anything is kept. See
-  [Shared recipes (`nuvel.recipe/2`)](#shared-recipes-nuvelrecipe2) below.
+- **`record_recipe_signal`** stores a `nuvel.recipe_signal/2`: a weekly, content-free
+  snapshot of one recipe, not a stream of events. Fields: `signal_id`, `recipe_id`,
+  `install_id` (UUIDs), `plugin` (`name`, `version`), `category` (identifier), `status`
+  (`draft`, `active` or `retired`), `at`, and the cumulative counters `uses`,
+  `successes`, `corrections` and `days_used` (none above `uses`). The plugin sends one
+  per recipe that changed since its last weekly review.
+- **`share_recipe`** stores a `nuvel.recipe/3`: the **structure** of a recipe (steps and
+  usage stats), plus free text only when the user opted in, masked by the server before
+  anything is kept. See [Shared recipes (`nuvel.recipe/3`)](#shared-recipes-nuvelrecipe3)
+  below.
 
-The JSON Schemas are `recipe_signal.v1.schema.json` and `recipe.v2.schema.json` in
-`nuvel_mcp/schemas/`. `nuvel.recipe/1` and its schema were removed (never released);
-a `/1` call is rejected as `/schema`.
+The JSON Schemas are `recipe_signal.v2.schema.json` and `recipe.v3.schema.json` in
+`nuvel_mcp/schemas/`. `nuvel.recipe_signal/1` (per-event signals, with an `event` field),
+`nuvel.recipe/2` and `nuvel.recipe/1` and their schemas are removed; a call with an old
+schema id is rejected as `/schema`.
 
-### Shared recipes (`nuvel.recipe/2`)
+### Shared recipes (`nuvel.recipe/3`)
 
-A shared recipe has a closed **structure** and a few **free-text** fields. The schema is
-closed at every level: a key it does not list is rejected, and `tenant` and `masking`
-are stamped by the server and rejected from clients.
+A shared recipe is its **structure**; **free text** is optional and lives only under
+`text`. The schema is closed at every level: a key it does not list is rejected, and
+`tenant` and `masking` are stamped by the server and rejected from clients.
 
 | field | content |
 |---|---|
-| `schema`, `recipe_id`, `install_id`, `plugin`, `version`, `category`, `language` | identifiers. `plugin.name` and `category` come from closed lists; `plugin.version` matches `^\d{1,2}\.\d{1,2}\.\d{1,2}$`; `version` is 1 to 1000; `language` is two lowercase letters. |
-| `steps` | 1 to 15 of `{action, tool_kind, slots, note?}`. `action` is one of 26 verbs (`search`, `read`, `summarise`, ... `other`); `tool_kind` one of `email`, `calendar`, `chat`, `docs`, `storage`, `tasks`, `web`, `none`; `slots` 0 to 4 different placeholder types (`person`, `company`, `team`, `product`, `project`, `document`, `file`, `folder`, `amount`, `number`, `date`, `time`, `period`, `place`, `email`, `phone`, `url`, `id`, `topic`, `other`). |
-| free text | `title` (80), `when_to_use` (200), each `note` (160), `pitfalls` (5 of 160) and `narrative` (2000), the user's own wording of what was asked and how it was solved. |
+| `schema`, `recipe_id`, `install_id`, `plugin`, `version`, `category` | identifiers. `plugin.name` and `category` come from closed lists; `plugin.version` matches `^\d{1,2}\.\d{1,2}\.\d{1,2}$`; `version` is 1 to 1000. |
+| `steps` | 1 to 15 of `{action, tool_kind, slots}`; there is no note in a step. `action` is one of 26 verbs (`search`, `read`, `summarise`, ... `other`); `tool_kind` one of `email`, `calendar`, `chat`, `docs`, `storage`, `tasks`, `web`, `none`; `slots` 0 to 4 different placeholder types (`person`, `company`, `team`, `product`, `project`, `document`, `file`, `folder`, `amount`, `number`, `date`, `time`, `period`, `place`, `email`, `phone`, `url`, `id`, `topic`, `other`). |
+| `stats` | `uses`, `successes`, `corrections`, `days_used`: integers 0 to 100000, with `successes`, `corrections` and `days_used` not above `uses`. |
+| `text` (optional) | `language` (two lowercase letters, required inside `text`) and at least one of `title` (80), `when_to_use` (200), `step_notes` (up to 15 of 160, never more than `steps`), `pitfalls` (5 of 160) and `narrative` (2000), the user's own wording of what was asked and how it was solved. |
+
+A recipe without `text` is the default: it skips masking altogether and is stored with
+`masking: {"lexicon": null, "masked": 0, "words": 0, "dropped": []}`. The plugin sends
+`text` only when the user said yes to sharing it.
 
 **Masking.** Raw free text never reaches disk, the relay, a log line, an exception
 message or a response. `share_recipe` validates the shape, then masks every free-text
@@ -175,9 +184,11 @@ stamps, stores and relays the masked copy:
   the action verbs ("send", "read"), English months and weekdays, the most frequent
   Spanish words, and the reviewed Spanish business nouns ("reunión"). They pass only in
   lowercase, so a capitalised one mid-sentence ("met May", "con Rosa") is still masked.
-- A field with more than 40 % of its words masked is dropped whole: `title` and
-  `when_to_use` become `""`, `note`, `pitfalls` and `narrative` are removed. A field with
-  no words is never dropped.
+- A field with more than 40 % of its words masked is dropped whole: a dropped
+  `title`, `when_to_use`, pitfall or `narrative` is removed (not set to `""`), and a dropped step
+  note becomes `""` so the later notes stay on their steps (a dropped last note is
+  trimmed). A field with no words is never dropped. If every field of `text` is dropped,
+  the recipe is stored without `text`. Dropped pointers sit under `/text/`.
 - The masker never raises on text. If anything inside it fails, the free text is
   dropped and the structure is kept.
 
@@ -190,7 +201,7 @@ MPL sources are not used. Each source's URL, licence and check date are in
 `nuvel_mcp/lexicon/SOURCES.md`.
 
 **Other languages.** A language with no lexicon (`pt` or any other) is shared as
-**structure only**: the recipe is recorded, every free-text field is dropped and
+**structure only**: the recipe is recorded, its `text` is dropped and each field is
 listed in `dropped`. Clients should still send these recipes.
 
 **What masking does not catch.** The masker keeps every word in its everyday vocabulary, so it can
@@ -216,23 +227,28 @@ holdout, 0.92 holdout2); Spanish and English have one such leak each on holdout2
 The default `LocalRecipeStore` writes under `{feedback_dir}/_recipes/`:
 
 ```
-_recipes/signals/{YYYY-MM-DD}.jsonl                         one signal per line
+_recipes/signals/{YYYY-MM-DD}.jsonl                         one snapshot per line
 _recipes/recipes/{tenant_key}/{recipe_id}/v{version}.json   one file per recipe version
 ```
 
 Records carry the server-set `tenant` when there is one, and `at` is truncated to the
 UTC minute. Writers in different processes can leave duplicate signal lines; readers
-take the latest signal per `(tenant, recipe_id)` (below), which makes duplicate
+take the latest snapshot per `(tenant, recipe_id)` (below), which makes duplicate
 lines harmless.
 
 The stored recipe is the masked copy, with the server-set `tenant` and a `masking`
 block (`lexicon` version, `masked`, `words`, `dropped`).
 
 Because counters are cumulative, `nuvel traces recipes` and the dashboard's
-`/recipes` page take, per `(tenant, recipe_id)`, the signal with the latest `at` (the
-later line wins a tie) and sum those per category. `success_rate` is
+`/recipes` page take, per `(tenant, recipe_id)`, the `nuvel.recipe_signal/2` snapshot
+with the latest `at` (the later line wins a tie; other schemas are ignored) and sum
+those per category, with a count of recipes by status. The counter totals skip recipes
+whose latest snapshot is `retired`, because a weekly merge already summed a retired
+duplicate's counters into the recipe it kept; retired recipes still count by status.
+`success_rate` is
 `successes / uses` (0 when there are no uses). The latest recipe shown for a category
-is its most recently modified recipe file. Unreadable or malformed lines and files are
+is its most recently modified `nuvel.recipe/3` file (older-schema files are skipped
+and counted). A recipe without `text` shows its steps only, with no narrative. Unreadable or malformed lines and files are
 skipped, and tenant values are never displayed, only counts. Turning a candidate into
 a skill is manual.
 

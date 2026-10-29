@@ -1,4 +1,4 @@
-"""nuvel_mcp.masking: the allowlist masker for recipe free text (spec §4).
+"""nuvel_mcp.masking: the allowlist masker for recipe free text (``text`` of nuvel.recipe/3).
 
 Every test injects a tiny Lexicon; none reads package data.
 """
@@ -180,48 +180,83 @@ RID = "123e4567-e89b-42d3-a456-426614174000"
 IID = "0b8f7a2c-1d3e-4f5a-9b6c-7d8e9f0a1b2c"
 
 
+TEXT_KEYS = frozenset({"language", "title", "when_to_use", "step_notes", "pitfalls", "narrative"})
+
+
 def _recipe(**over):
+    """A ``nuvel.recipe/3`` recipe; overrides named in ``TEXT_KEYS`` go into ``text``."""
     doc = {
-        "schema": "nuvel.recipe/2",
+        "schema": "nuvel.recipe/3",
         "recipe_id": RID,
         "install_id": IID,
         "plugin": {"name": "chief-of-staff", "version": "0.4.0"},
         "version": 1,
         "category": "invoicing",
-        "language": "es",
-        "title": "a bb",
-        "when_to_use": "a bb",
-        "steps": [{"action": "search", "tool_kind": "email", "slots": ["person"], "note": "a bb"},
+        "steps": [{"action": "search", "tool_kind": "email", "slots": ["person"]},
                   {"action": "draft", "tool_kind": "docs", "slots": []}],
-        "pitfalls": ["a bb", "a bb"],
-        "narrative": "a bb",
+        "stats": {"uses": 3, "successes": 2, "corrections": 0, "days_used": 2},
+        "text": {
+            "language": "es",
+            "title": "a bb",
+            "when_to_use": "a bb",
+            "step_notes": ["a bb"],
+            "pitfalls": ["a bb", "a bb"],
+            "narrative": "a bb",
+        },
     }
-    doc.update(over)
+    for key, value in over.items():
+        (doc["text"] if key in TEXT_KEYS else doc)[key] = value
     return doc
 
 
 def test_drop_rule():
     five = "uno dos tres cuatro cinco"
     out, info = mask_recipe(_recipe(narrative=five), lex({"a", "bb", "uno", "dos"}))
-    assert "narrative" not in out
-    assert info["dropped"] == ["/narrative"]
+    assert "narrative" not in out["text"]
+    assert info["dropped"] == ["/text/narrative"]
     out, info = mask_recipe(_recipe(narrative=five), lex({"a", "bb", "uno", "dos", "tres"}))
-    assert out["narrative"] == "uno dos tres {?}"
+    assert out["text"]["narrative"] == "uno dos tres {?}"
     assert info["dropped"] == []
     assert info["masked"] == 2 and info["lexicon"] == "es-2026.10.1"
 
 
 def test_drop_rule_every_field():
     bad = "x y z a"
-    rec = _recipe(title=bad, when_to_use=bad, pitfalls=["a bb", bad, "a"], narrative=bad)
-    rec["steps"][0]["note"] = bad
+    rec = _recipe(title=bad, when_to_use=bad, step_notes=[bad, "a bb"], pitfalls=["a bb", bad, "a"],
+                  narrative=bad)
     out, info = mask_recipe(rec, lex({"a", "bb"}))
-    assert out["title"] == "" and out["when_to_use"] == ""
-    assert "note" not in out["steps"][0]
-    assert out["pitfalls"] == ["a bb", "a"]
-    assert "narrative" not in out
-    assert info["dropped"] == ["/title", "/when_to_use", "/steps/0/note", "/pitfalls/1", "/narrative"]
+    text = out["text"]
+    assert "title" not in text and "when_to_use" not in text and "narrative" not in text
+    assert text["step_notes"] == ["", "a bb"]  # a dropped note keeps the next one on its step
+    assert text["pitfalls"] == ["a bb", "a"]
+    assert info["dropped"] == ["/text/title", "/text/when_to_use", "/text/step_notes/0",
+                               "/text/pitfalls/1", "/text/narrative"]
     assert out["steps"][0]["slots"] == ["person"] and out["steps"][1]["action"] == "draft"
+
+
+def test_dropped_trailing_step_notes_are_trimmed():
+    out, info = mask_recipe(_recipe(step_notes=["a bb", "x y z"]), lex({"a", "bb"}))
+    assert out["text"]["step_notes"] == ["a bb"] and info["dropped"] == ["/text/step_notes/1"]
+    out, info = mask_recipe(_recipe(step_notes=["x y z"]), lex({"a", "bb"}))
+    assert "step_notes" not in out["text"] and info["dropped"] == ["/text/step_notes/0"]
+
+
+def test_text_with_nothing_left_is_removed():
+    rec = _recipe()
+    rec["text"] = {"language": "es", "narrative": "x y z", "pitfalls": ["x y z"]}
+    out, info = mask_recipe(rec, lex({"a", "bb"}))
+    assert "text" not in out
+    assert info["dropped"] == ["/text/narrative", "/text/pitfalls/0"]
+    assert invariant_hits(out, dropped=info["dropped"]) == []
+
+
+def test_structure_only_recipe_needs_no_lexicon():
+    rec = _recipe()
+    del rec["text"]
+    out, info = mask_recipe(rec, None)
+    assert out == rec and out is not rec
+    assert info == {"lexicon": None, "masked": 0, "words": 0, "dropped": []}
+    assert invariant_hits(out, dropped=info["dropped"]) == []
 
 
 def test_mask_recipe_does_not_mutate_input():
@@ -234,7 +269,7 @@ def test_mask_recipe_does_not_mutate_input():
 def test_zero_word_field_not_dropped():
     rec = _recipe(title="", narrative="{person} {email}, {date}.")
     out, info = mask_recipe(rec, lex({"a", "bb"}))
-    assert out["title"] == "" and out["narrative"] == "{person} {email}, {date}."
+    assert out["text"]["title"] == "" and out["text"]["narrative"] == "{person} {email}, {date}."
     assert info["dropped"] == []
     r = mask_text("{person} {email}", lex())
     assert (r.masked, r.words) == (0, 0)
@@ -244,22 +279,22 @@ def test_zero_word_field_not_dropped():
 def test_no_lexicon_drops_all_text():
     rec = _recipe()
     out, info = mask_recipe(rec, None)
-    assert out["title"] == "" and out["when_to_use"] == ""
-    assert "note" not in out["steps"][0] and "narrative" not in out
-    assert out["pitfalls"] == []
+    assert "text" not in out
     assert info == {"lexicon": None, "masked": 0, "words": 0,
-                    "dropped": ["/title", "/when_to_use", "/steps/0/note",
-                                "/pitfalls/0", "/pitfalls/1", "/narrative"]}
-    assert out["steps"][1] == rec["steps"][1] and out["recipe_id"] == RID
+                    "dropped": ["/text/title", "/text/when_to_use", "/text/step_notes/0",
+                                "/text/pitfalls/0", "/text/pitfalls/1", "/text/narrative"]}
+    assert out["steps"][1] == rec["steps"][1] and out["recipe_id"] == RID and out["stats"] == rec["stats"]
 
 
 def test_non_string_free_text_is_dropped():
-    rec = _recipe(title={"x": "pedro"}, pitfalls=["a bb", 3], narrative=["pedro"])
-    rec["steps"][0]["note"] = 7
+    rec = _recipe(title={"x": "pedro"}, step_notes=[7], pitfalls=["a bb", 3], narrative=["pedro"])
     out, info = mask_recipe(rec, lex({"a", "bb"}))
-    assert out["title"] == "" and out["pitfalls"] == ["a bb"]
-    assert "narrative" not in out and "note" not in out["steps"][0]
-    assert info["dropped"] == ["/title", "/steps/0/note", "/pitfalls/1", "/narrative"]
+    assert "title" not in out["text"] and out["text"]["pitfalls"] == ["a bb"]
+    assert "narrative" not in out["text"] and "step_notes" not in out["text"]
+    assert info["dropped"] == ["/text/title", "/text/step_notes/0", "/text/pitfalls/1", "/text/narrative"]
+    rec = _recipe(step_notes="pedro", pitfalls={"pedro": 1})
+    out, info = mask_recipe(rec, lex({"a", "bb"}))
+    assert info["dropped"] == ["/text/step_notes", "/text/pitfalls"] and "pedro" not in json.dumps(out)
 
 
 HOSTILE = [
@@ -305,7 +340,10 @@ def test_never_raises(text):
 
 
 @pytest.mark.parametrize("doc", [None, 3, "pedro", [], {"steps": "x"}, {"steps": [None, "pedro", {"note": None}]},
-                                 {"pitfalls": "pedro"}, {"title": None}])
+                                 {"pitfalls": "pedro"}, {"title": None}, {"text": "pedro"},
+                                 {"text": {"pitfalls": "pedro"}}, {"text": {"title": None}},
+                                 {"text": {"step_notes": [None, "pedro"]}}, {"stats": "pedro"},
+                                 {"stats": {"uses": "pedro"}}])
 def test_mask_recipe_never_raises_on_odd_shapes(doc):
     out, info = mask_recipe(doc, lex({"a"}))
     assert isinstance(out, dict)
@@ -326,7 +364,7 @@ def test_internal_error_drops_field(monkeypatch):
     r = mask_text("hablé con pedro", lex({"hablé", "con"}))
     assert r == MaskResult("{?}", 1, 1)
     out, info = mask_recipe(_recipe(narrative="a pedro bb"), lex({"a", "bb"}))
-    assert "narrative" not in out and "/narrative" in info["dropped"]
+    assert "text" not in out and "/text/narrative" in info["dropped"]  # every field failed safe
     assert "pedro" not in json.dumps(out)
 
 
@@ -368,44 +406,50 @@ def test_invariant_clean_on_masker_output(which):
     language = lx.version.split("-")[0]
     for i, text in enumerate(texts):
         out = mask_text(text, lx).text
-        rec = {"language": language, "title": out, "when_to_use": out, "steps": [{"note": out}],
-               "pitfalls": [out], "narrative": out}
+        rec = {"text": {"language": language, "title": out, "when_to_use": out, "step_notes": [out],
+                        "pitfalls": [out], "narrative": out}}
         assert invariant_hits(rec) == [], f"line {i}"
-        masked_rec, _ = mask_recipe({"language": language, "narrative": text, "steps": [{"note": text}]},
+        masked_rec, _ = mask_recipe({"text": {"language": language, "narrative": text, "step_notes": [text]}},
                                     lx)
         assert invariant_hits(masked_rec) == [], f"line {i}"
 
 
 def test_invariant_flags_planted():
-    rec = {"title": "ok", "steps": [{"note": "fine"}], "pitfalls": ["fine"],
-           "narrative": "escribe a pedro@acme.com"}
-    assert invariant_hits(rec) == ["/narrative"]
+    rec = {"text": {"title": "ok", "step_notes": ["fine"], "pitfalls": ["fine"],
+                    "narrative": "escribe a pedro@acme.com"}}
+    assert invariant_hits(rec) == ["/text/narrative"]
 
 
 @pytest.mark.parametrize("field, value, path", [
-    ("title", "el informe de Rosa", "/title"),
-    ("when_to_use", "ver acme.es", "/when_to_use"),
-    ("narrative", "llama al +34 612 345 678", "/narrative"),
-    ("narrative", "el ceo Y yo", "/narrative"),
-    ("narrative", "iban ES91 2100 0418 4502 0005 1332", "/narrative"),
+    ("title", "el informe de Rosa", "/text/title"),
+    ("when_to_use", "ver acme.es", "/text/when_to_use"),
+    ("narrative", "llama al +34 612 345 678", "/text/narrative"),
+    ("narrative", "el ceo Y yo", "/text/narrative"),
+    ("narrative", "iban ES91 2100 0418 4502 0005 1332", "/text/narrative"),
 ])
 def test_invariant_flags_each_kind(field, value, path):
-    assert invariant_hits({field: value}) == [path]
+    assert invariant_hits({"text": {field: value}}) == [path]
 
 
 def test_invariant_paths_for_steps_and_pitfalls():
-    rec = {"steps": [{"note": "ok"}, {"note": "con Pedro"}], "pitfalls": ["ok", "x@y.com"],
-           "title": 3}
-    assert invariant_hits(rec) == ["/steps/1/note", "/pitfalls/1", "/title"]  # input order
+    rec = {"text": {"step_notes": ["ok", "con Pedro"], "pitfalls": ["ok", "x@y.com"], "title": 3}}
+    assert invariant_hits(rec) == ["/text/step_notes/1", "/text/pitfalls/1", "/text/title"]  # input order
+
+
+def test_invariant_flags_text_outside_text():
+    """v3 free text exists only under ``text``: anywhere else it is an unknown key."""
+    rec = {"narrative": "ok", "title": "ok", "steps": [{"note": "ok"}], "language": "es"}
+    assert invariant_hits(rec) == ["/narrative", "/title", "/steps/0/{?}", "/language"]
 
 
 def test_invariant_allows_sentence_starts_and_exceptions():
-    rec = {"language": "en", "narrative": "Hecho. El CEO revisa.\n- Hola: Mundo. I think {?} and {person}."}
+    rec = {"text": {"language": "en",
+                    "narrative": "Hecho. El CEO revisa.\n- Hola: Mundo. I think {?} and {person}."}}
     assert invariant_hits(rec) == []
 
 
 def test_invariant_does_not_use_capitalised_run():
-    assert invariant_hits({"narrative": "Hecho. El CEO revisa el informe"}) == []
+    assert invariant_hits({"text": {"narrative": "Hecho. El CEO revisa el informe"}}) == []
 
 
 # --- lexicon loading ---------------------------------------------------------
@@ -495,7 +539,7 @@ def unicodedata_nfkc(s):
 
 def test_disallowed_gap_counts_toward_drop():
     out, info = mask_recipe(_recipe(narrative="a 🇲🇽 🅿🅴🅳🆁🅾 ⠏⠑⠙ bb"), lex({"a", "bb"}))
-    assert "narrative" not in out and "/narrative" in info["dropped"]
+    assert "narrative" not in out["text"] and "/text/narrative" in info["dropped"]
 
 
 def test_mask_recipe_copies_only_allowlisted_keys():
@@ -503,32 +547,55 @@ def test_mask_recipe_copies_only_allowlisted_keys():
     rec["Pedro García"] = "secret"
     rec["plugin"] = {"name": "chief-of-staff", "version": "0.4.0", "owner": "Pedro"}
     rec["steps"][0]["text"] = "pedro@x.com"
+    rec["steps"][0]["note"] = "Pedro"
     rec["steps"][0]["slots"] = ["person", "Pedro", 3]
     rec["category"] = "Pedro García"
     rec["steps"][1]["action"] = "call pedro"
     rec["steps"][1]["tool_kind"] = "fax"
+    rec["stats"]["Pedro"] = 1
+    rec["text"]["Pedro García"] = "secret"
     out, info = mask_recipe(rec, lex({"a", "bb"}))
     blob = json.dumps([out, info], ensure_ascii=False)
     assert "Pedro" not in blob and "pedro" not in blob and "acme" not in blob
-    assert set(out) == {"schema", "recipe_id", "install_id", "plugin", "version", "language",
-                        "title", "when_to_use", "steps", "pitfalls", "narrative"}
+    assert set(out) == {"schema", "recipe_id", "install_id", "plugin", "version", "steps", "stats", "text"}
+    assert set(out["text"]) == TEXT_KEYS
     assert out["plugin"] == {"name": "chief-of-staff", "version": "0.4.0"}
-    assert out["steps"][0] == {"action": "search", "tool_kind": "email", "slots": ["person"], "note": "a bb"}
+    assert out["steps"][0] == {"action": "search", "tool_kind": "email", "slots": ["person"]}
     assert out["steps"][1] == {"slots": []}
+    assert out["stats"] == {"uses": 3, "successes": 2, "corrections": 0, "days_used": 2}
     assert info["dropped"] == [
-        "/plugin/{?}", "/category", "/steps/0/slots/1", "/steps/0/slots/2", "/steps/0/{?}",
-        "/steps/1/action", "/steps/1/tool_kind", "/{?}", "/{?}", "/{?}", "/{?}",
+        "/plugin/{?}", "/category", "/steps/0/slots/1", "/steps/0/slots/2", "/steps/0/text", "/steps/0/{?}",
+        "/steps/1/action", "/steps/1/tool_kind", "/stats/{?}", "/text/{?}", "/{?}", "/{?}", "/{?}", "/{?}",
     ]
     assert invariant_hits(out, dropped=info["dropped"]) == []
 
 
 @pytest.mark.parametrize("field, value", [
-    ("schema", "nuvel.other/2"), ("recipe_id", "pedro"), ("install_id", 5), ("version", True),
-    ("version", 0), ("language", "esp"), ("category", "612345678"), ("plugin", "x"),
+    ("schema", "nuvel.other/2"), ("schema", "nuvel.recipe/2"), ("recipe_id", "pedro"), ("install_id", 5),
+    ("version", True), ("version", 0), ("category", "612345678"), ("plugin", "x"), ("stats", "x"),
+    ("steps", "x"), ("text", "pedro"),
 ])
 def test_badly_shaped_structured_fields_dropped(field, value):
-    out, info = mask_recipe(_recipe(**{field: value}), lex({"a", "bb"}))
+    rec = _recipe()
+    rec[field] = value
+    out, info = mask_recipe(rec, lex({"a", "bb"}))
     assert field not in out and info["dropped"] == [f"/{field}"]
+
+
+@pytest.mark.parametrize("field, value", [
+    ("uses", -1), ("successes", 100_001), ("corrections", True), ("days_used", 1.0), ("uses", "3"),
+])
+def test_badly_shaped_stats_dropped(field, value):
+    rec = _recipe()
+    rec["stats"][field] = value
+    out, info = mask_recipe(rec, lex({"a", "bb"}))
+    assert field not in out["stats"] and info["dropped"] == [f"/stats/{field}"]
+    assert invariant_hits(rec) == [f"/stats/{field}"]
+
+
+def test_badly_shaped_language_dropped():
+    out, info = mask_recipe(_recipe(language="esp"), lex({"a", "bb"}))
+    assert "language" not in out["text"] and info["dropped"] == ["/text/language"]
 
 
 def test_mask_recipe_output_is_not_aliased_to_input():
@@ -543,11 +610,19 @@ def test_mask_recipe_output_is_not_aliased_to_input():
     ({"extra": "Pedro"}, ["/{?}"]),
     ({"Pedro García": "x"}, ["/{?}"]),
     ({"steps": "Pedro García pedro@x.com"}, ["/steps"]),
-    ({"steps": ["Pedro", {"note": "ok"}]}, ["/steps/0"]),
+    ({"steps": ["Pedro", {"action": "search"}]}, ["/steps/0"]),
+    ({"steps": [{"note": "ok"}]}, ["/steps/0/{?}"]),
     ({"steps": [{"slots": "person"}]}, ["/steps/0/slots"]),
     ({"steps": [{"slots": ["person", "Pedro"]}]}, ["/steps/0/slots/1"]),
-    ({"steps": [{"text": "x", "action": "Pedro"}]}, ["/steps/0/{?}", "/steps/0/action"]),
+    ({"steps": [{"text": "x", "action": "Pedro"}]}, ["/steps/0/text", "/steps/0/action"]),  # a fixed key name
     ({"pitfalls": "Pedro"}, ["/pitfalls"]),
+    ({"text": {"pitfalls": "Pedro"}}, ["/text/pitfalls"]),
+    ({"text": {"step_notes": [3]}}, ["/text/step_notes/0"]),
+    ({"text": "Pedro"}, ["/text"]),
+    ({"text": {"Pedro": "x"}}, ["/text/{?}"]),
+    ({"text": {"language": "Pedro"}}, ["/text/language"]),
+    ({"stats": "Pedro"}, ["/stats"]),
+    ({"stats": {"uses": 3, "Pedro": 1, "days_used": -1}}, ["/stats/{?}", "/stats/days_used"]),
     ({"plugin": {"name": "x", "owner": "Pedro"}}, ["/plugin/name", "/plugin/{?}"]),
     ({"recipe_id": "Pedro"}, ["/recipe_id"]),
     ({"tenant": "acme"}, ["/{?}"]),
@@ -566,7 +641,7 @@ def test_invariant_accepts_a_full_masked_recipe():
     "x​y",
 ])
 def test_invariant_independent_checks(text):
-    assert invariant_hits({"narrative": text}) == ["/narrative"]
+    assert invariant_hits({"text": {"narrative": text}}) == ["/text/narrative"]
 
 
 def test_invariant_takes_the_maskers_abbreviations(monkeypatch):
@@ -574,10 +649,10 @@ def test_invariant_takes_the_maskers_abbreviations(monkeypatch):
     iva = frozenset({"iva"})
     lx = lex({"con"})
     assert mask_text("con IVA", lx, abbreviations=iva).text == "con IVA"
-    assert invariant_hits({"narrative": "con IVA"}, abbreviations=iva) == []
-    assert invariant_hits({"narrative": "con IVA"}) == ["/narrative"]
-    out, _ = mask_recipe({"narrative": "con IVA"}, lx, abbreviations=iva)
-    assert out["narrative"] == "con IVA"
+    assert invariant_hits({"text": {"narrative": "con IVA"}}, abbreviations=iva) == []
+    assert invariant_hits({"text": {"narrative": "con IVA"}}) == ["/text/narrative"]
+    out, _ = mask_recipe({"text": {"narrative": "con IVA"}}, lx, abbreviations=iva)
+    assert out["text"]["narrative"] == "con IVA"
     assert invariant_hits(out, abbreviations=iva) == []
 
 
@@ -683,8 +758,10 @@ from nuvel_mcp import recipes  # noqa: E402
     ("/recipe_id", lambda r: r.update(recipe_id=RID.upper())),
     ("/install_id", lambda r: r.update(install_id="{" + IID + "}")),
     ("/version", lambda r: r.update(version=1001)),
-    ("/language", lambda r: r.update(language="ES")),
+    ("/text/language", lambda r: r["text"].update(language="ES")),
     ("/schema", lambda r: r.update(schema="nuvel.recipe/1")),
+    ("/schema", lambda r: r.update(schema="nuvel.recipe/2")),
+    ("/stats/uses", lambda r: r["stats"].update(uses=612345678)),
 ])
 def test_identifier_fields_are_closed_sets(path, mutate):
     rec = _recipe()
@@ -692,9 +769,10 @@ def test_identifier_fields_are_closed_sets(path, mutate):
     out, info = mask_recipe(rec, lex({"a", "bb"}))
     assert info["dropped"] == [path]
     assert "pedro" not in json.dumps(out) and "612" not in json.dumps(out)
-    if path == "/language":  # no known language left: the invariant fails closed on lone letters
+    if path == "/text/language":  # no known language left: the invariant fails closed on lone letters
         assert set(invariant_hits(out, dropped=info["dropped"])) <= {
-            "/title", "/when_to_use", "/steps/0/note", "/pitfalls/0", "/pitfalls/1", "/narrative"}
+            "/text/title", "/text/when_to_use", "/text/step_notes/0", "/text/pitfalls/0", "/text/pitfalls/1",
+            "/text/narrative"}
         assert path in invariant_hits(rec)
         return
     assert invariant_hits(out, dropped=info["dropped"]) == []
@@ -736,15 +814,17 @@ def test_dropped_pointers_name_only_schema_keys():
 
 
 @pytest.mark.parametrize("dropped, hits", [
-    (["", "/title", "/steps/3/note", "/{?}", "/plugin/{?}", "/pitfalls/0"], []),
+    (["", "/text/title", "/text/step_notes/3", "/{?}", "/plugin/{?}", "/text/pitfalls/0", "/stats/{?}",
+      "/text/{?}", "/stats/days_used"], []),
     (["/pedro_garcia"], ["/masking/dropped/0"]),
-    (["/title", "/steps/0/llamar"], ["/masking/dropped/1"]),
-    (["title"], ["/masking/dropped/0"]),
+    (["/text/title", "/steps/0/llamar"], ["/masking/dropped/1"]),
+    (["/text/rosa"], ["/masking/dropped/0"]),
+    (["text/title"], ["/masking/dropped/0"]),
     ([3], ["/masking/dropped/0"]),
-    ("/title", ["/masking/dropped"]),
+    ("/text/title", ["/masking/dropped"]),
 ])
 def test_invariant_checks_dropped(dropped, hits):
-    assert invariant_hits({"title": "ok"}, dropped=dropped) == hits
+    assert invariant_hits({"text": {"title": "ok"}}, dropped=dropped) == hits
 
 
 @pytest.mark.parametrize("language", ["ca", "en", "es", "xx"])
@@ -755,7 +835,7 @@ def test_invariant_checks_dropped(dropped, hits):
 def test_chained_elisions_masked_in_every_language(language, text):
     lx = lex({"con", "t", "i", "m", "s", "d", "l", "informe"}, language=language)
     assert masked(text, lx) == "con {?}"
-    assert invariant_hits({"narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("language", ["en", "es", "xx"])
@@ -794,7 +874,7 @@ def test_elisions_per_language(language, text, expected):
     lx = lex({"con", "s", "am", "i", "n", "an", "m", "t", "d", "l", "informe", "avui", "it",
               "here", "go", "don"}, language=language)
     assert masked(text, lx) == expected
-    assert invariant_hits({"language": language, "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": language, "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -814,14 +894,14 @@ def test_elisions_per_language(language, text, expected):
 def test_punctuation_runs(text, expected):
     lx = lex({"con", "rosa", "y"})
     assert masked(text, lx) == expected
-    assert invariant_hits({"language": "es", "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": "es", "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("text", [
     "con .--. . -.. .-. ---", "con |||| ||", "con | rosa", "con rosa .... y", "con rosa . . . . y",
 ])
 def test_invariant_flags_punctuation_runs(text):
-    assert invariant_hits({"narrative": text}) == ["/narrative"]
+    assert invariant_hits({"text": {"narrative": text}}) == ["/text/narrative"]
 
 
 # --- Task 4: corpus-gate rules ------------------------------------------------
@@ -837,7 +917,7 @@ def test_invariant_flags_punctuation_runs(text):
 def test_letter_prefixed_ids_are_one_token(text, expected):
     lx = lex({"el", "pedido", "la", "factura", "hoy", "po", "acme", "x", "sin", "numero"})
     assert masked(text, lx) == expected
-    assert invariant_hits({"narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"narrative": masked(text, lx)}}) == []
 
 
 def test_letter_prefixed_id_regex_is_bounded():
@@ -879,19 +959,19 @@ def test_name_initials_masked(language, text, expected):
     lx = lex({"m", "d", "j", "a", "y", "o", "send", "it", "to", "reviews", "will", "call", "ask",
               "today", "revisa", "habla", "con", "the", "plan", "then", "rosa"}, language=language)
     assert masked(text, lx) == expected
-    assert invariant_hits({"language": language, "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": language, "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("text", [
     "M. {?} reviews it", "send it to m. jones", "ask j. {person}", "con J.García", "plan a.\nNext",
 ])
 def test_invariant_flags_initials(text):
-    assert invariant_hits({"narrative": text}) == ["/narrative"]
+    assert invariant_hits({"text": {"narrative": text}}) == ["/text/narrative"]
 
 
 @pytest.mark.parametrize("text", ["plan a.", "it is a. ", "con {?}. Hola", "I. "])
 def test_invariant_allows_single_letter_without_following_word(text):
-    assert invariant_hits({"language": "en", "narrative": text}) == []
+    assert invariant_hits({"text": {"language": "en", "narrative": text}}) == []
 
 
 # --- Task 4 fix round 2: standalone one-letter words --------------------------
@@ -914,7 +994,7 @@ def test_standalone_single_letters(language, text, expected):
     lx = lex({"we", "spoke", "with", "m", "send", "it", "to", "see", "is", "a", "plan", "i", "think",
               "s", "t", "d", "l", "don", "informe", "la", "rosa", "e", "o", "y"}, language=language)
     assert masked(text, lx) == expected
-    assert invariant_hits({"language": language, "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": language, "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("language, text", [
@@ -922,8 +1002,8 @@ def test_standalone_single_letters(language, text, expected):
     ("xx", "rosa y"), (None, "rosa y"),
 ])
 def test_invariant_flags_lone_letters_outside_the_standalone_set(language, text):
-    rec = {"narrative": text} if language is None else {"language": language, "narrative": text}
-    assert "/narrative" in invariant_hits(rec)
+    text_tree = {"narrative": text} if language is None else {"language": language, "narrative": text}
+    assert "/text/narrative" in invariant_hits({"text": text_tree})
 
 
 # --- Catalan clitics (spec addendum 2026-10-28) --------------------------------
@@ -942,7 +1022,7 @@ CA_CLITIC_LEXICON = {"envia", "fes", "recorda", "dona", "porta", "compara", "con
 def test_ca_clitics_pass(text):
     lx = lex(CA_CLITIC_LEXICON | {"porta"}, language="ca")
     assert masked(text, lx) == text
-    assert invariant_hits({"language": "ca", "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": "ca", "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("text", [
@@ -973,13 +1053,13 @@ def test_ca_clitics_are_catalan_only(language):
     "con envia'ls'hi i tot",
 ])
 def test_invariant_flags_ca_clitic_chains(text):
-    assert "/narrative" in invariant_hits({"language": "ca", "narrative": text})
+    assert "/text/narrative" in invariant_hits({"text": {"language": "ca", "narrative": text}})
 
 
 @pytest.mark.parametrize("text", ["envia'l", "fes-ho", "dona-me-la", "porta-me'l", "pere-li"])
 def test_invariant_allows_ca_clitics(text):
     # The invariant checks shape only: "pere-li" is caught by the masker's lexicon.
-    assert invariant_hits({"language": "ca", "narrative": text}) == []
+    assert invariant_hits({"text": {"language": "ca", "narrative": text}}) == []
 
 
 # --- Dates: weekdays joined by a comma or "dia", Catalan "u" and elided numbers --
@@ -1038,7 +1118,7 @@ CA_FIXED = ["n'hi", "s'hi", "m'hi", "t'hi", "l'hi", "s'ho", "m'ho", "t'ho", "l'h
 def test_ca_fixed_pronoun_combinations_pass(word):
     lx = lex({"ha", "molts", "va"}, language="ca")
     assert masked(f"{word} ha molts", lx) == f"{word} ha molts"
-    assert invariant_hits({"language": "ca", "narrative": f"{word} ha molts"}) == []
+    assert invariant_hits({"text": {"language": "ca", "narrative": f"{word} ha molts"}}) == []
 
 
 def test_ca_fixed_combinations_case_and_scope():
@@ -1059,14 +1139,14 @@ def test_ca_fixed_combinations_case_and_scope():
 def test_ca_clitic_separators(text, expected):
     lx = lex(CA_CLITIC_LEXICON, language="ca")
     assert masked(text, lx) == expected
-    assert invariant_hits({"language": "ca", "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": "ca", "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("language", ["es", "en"])
 @pytest.mark.parametrize("text", ["envia'l'm'n", "fes-me-li-ho-ne", "a-li"])
 def test_invariant_clitic_rule_is_off_outside_catalan(language, text):
-    assert invariant_hits({"language": language, "narrative": text}) == []
-    assert "/narrative" in invariant_hits({"language": "ca", "narrative": text})
+    assert invariant_hits({"text": {"language": language, "narrative": text}}) == []
+    assert "/text/narrative" in invariant_hits({"text": {"language": "ca", "narrative": text}})
 
 
 @pytest.mark.parametrize("language", ["es", "en"])
@@ -1092,7 +1172,7 @@ CA_PREFIX_LEXICON = {"abans", "enviar", "escriure", "anar", "endur", "envia", "i
 def test_ca_prefix_clitics_pass(text):
     lx = lex(CA_PREFIX_LEXICON, language="ca")
     assert masked(text, lx) == text
-    assert invariant_hits({"language": "ca", "narrative": masked(text, lx)}) == []
+    assert invariant_hits({"text": {"language": "ca", "narrative": masked(text, lx)}}) == []
 
 
 @pytest.mark.parametrize("text", [
@@ -1111,7 +1191,7 @@ def test_ca_prefix_clitics_pass(text):
 def test_ca_prefix_clitic_chains_masked_and_flagged(text):
     lx = lex(CA_PREFIX_LEXICON | {"fes", "me", "li", "hi"}, language="ca")
     assert masked("con " + text, lx) == "con {?}"
-    assert "/narrative" in invariant_hits({"language": "ca", "narrative": text})
+    assert "/text/narrative" in invariant_hits({"text": {"language": "ca", "narrative": text}})
 
 
 @pytest.mark.parametrize("text", [

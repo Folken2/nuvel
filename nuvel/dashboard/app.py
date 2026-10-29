@@ -184,7 +184,7 @@ def build_app(loader: TraceLoader, watcher: object | None = None) -> FastAPI:
             {
                 "candidates": cands,
                 "total_uses": sum(c.uses for c in cands),
-                "skipped_v1": cands.skipped_v1,
+                "skipped_old": cands.skipped_old,
                 "live": watcher is not None,
             },
         )

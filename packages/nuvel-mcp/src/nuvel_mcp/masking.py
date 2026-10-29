@@ -1,4 +1,4 @@
-"""Allowlist masker for recipe free text (``nuvel.recipe/2``, spec §4).
+"""Allowlist masker for recipe free text (the ``text`` subtree of ``nuvel.recipe/3``).
 
 Stdlib only, deterministic, no I/O apart from reading the packaged lexicons.
 Every word that is not on the lexicon for the recipe's language becomes
@@ -31,6 +31,7 @@ from .recipes import (
     PII_PATTERNS,
     PLUGIN_NAMES,
     RECIPE_SCHEMA_ID,
+    TEXT_FIELDS,
     TOOL_KINDS,
     URL_RE,
 )
@@ -908,24 +909,32 @@ def _recipe_version(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1000
 
 
+def _counter(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100_000
+
+
 _TOP_FIELDS = {
     "schema": _in((SCHEMA_ID,)),
     "recipe_id": _match(_UUID_RE),
     "install_id": _match(_UUID_RE),
     "version": _recipe_version,
     "category": _in(CATEGORIES),
-    "language": _match(_LANGUAGE_RE),
 }
 _PLUGIN_FIELDS = {"name": _in(PLUGIN_NAMES), "version": _match(_SEMVER_RE)}
 _STEP_FIELDS = {"action": _in(ACTIONS), "tool_kind": _in(_TOOL_KINDS)}
+_STATS_FIELDS = ("uses", "successes", "corrections", "days_used")
 _slot = _in(PLACEHOLDER_TYPES)
+_text_language = _match(_LANGUAGE_RE)
+# Free text: single strings and lists of strings, all under ``/text``.
+_TEXT_STRINGS = ("title", "when_to_use", "narrative")
+_TEXT_LISTS = ("step_notes", "pitfalls")  # together: recipes.TEXT_FIELDS (a test checks)
 
 # The only key names a JSON pointer may contain (``dropped`` and invariant
 # paths are stored and returned). Any other key is client text: ``{?}``.
 POINTER_KEYS = frozenset({
     "schema", "recipe_id", "install_id", "plugin", "name", "version", "category",
-    "language", "title", "when_to_use", "steps", "action", "tool_kind", "slots",
-    "note", "pitfalls", "narrative",
+    "steps", "action", "tool_kind", "slots", "stats", *_STATS_FIELDS,
+    "text", "language", *TEXT_FIELDS,
 })
 
 
@@ -951,7 +960,7 @@ def _mask_recipe(recipe: object, lexicon: Lexicon | None, abbreviations) -> tupl
         dropped.append("")
         return {}, info
 
-    def text(value: object) -> str | None:
+    def masked_text(value: object) -> str | None:
         result = _mask_field(value, lexicon, abbreviations)
         if result is None:
             return None
@@ -959,21 +968,53 @@ def _mask_recipe(recipe: object, lexicon: Lexicon | None, abbreviations) -> tupl
         info["words"] += result.words
         return result.text
 
+    def mask_text_tree(value: object) -> dict | None:
+        """The masked ``text`` subtree, or ``None`` when no free text is left."""
+        if not isinstance(value, dict):
+            dropped.append("/text")
+            return None
+        kept: dict = {}
+        for k, v in value.items():
+            sub = "/text/" + _key(k)
+            if k == "language":
+                if _text_language(v):
+                    kept[k] = v
+                else:
+                    dropped.append(sub)
+            elif k in _TEXT_STRINGS:
+                masked = masked_text(v)
+                if masked is None:
+                    dropped.append(sub)
+                else:
+                    kept[k] = masked
+            elif k in _TEXT_LISTS:
+                if not isinstance(v, list):
+                    dropped.append(sub)
+                    continue
+                items = []
+                for i, item in enumerate(v):
+                    masked = masked_text(item)
+                    if masked is None:
+                        dropped.append(f"{sub}/{i}")
+                        if k == "step_notes":
+                            items.append("")  # keeps every later note on its own step
+                    else:
+                        items.append(masked)
+                if k == "step_notes":
+                    while items and items[-1] == "":
+                        items.pop()
+                if items:
+                    kept[k] = items
+            else:
+                dropped.append(sub)
+        # A text with no free-text field left is not stored at all (its
+        # dropped fields are already listed).
+        return kept if any(k in kept for k in TEXT_FIELDS) else None
+
     out: dict = {}
     for key, value in recipe.items():
         path = "/" + _key(key)
-        if key in ("title", "when_to_use"):
-            masked = text(value)
-            out[key] = "" if masked is None else masked  # required / kept empty
-            if masked is None:
-                dropped.append(path)
-        elif key == "narrative":
-            masked = text(value)
-            if masked is None:
-                dropped.append(path)
-            else:
-                out[key] = masked
-        elif key in _TOP_FIELDS:
+        if key in _TOP_FIELDS:
             if _TOP_FIELDS[key](value):
                 out[key] = value
             else:
@@ -1017,28 +1058,25 @@ def _mask_recipe(recipe: object, lexicon: Lexicon | None, abbreviations) -> tupl
                             else:
                                 dropped.append(f"{sub}/{j}")
                         kept[k] = slots
-                    elif k == "note":
-                        masked = text(v)
-                        if masked is None:
-                            dropped.append(sub)
-                        else:
-                            kept[k] = masked
                     else:
-                        dropped.append(sub)
+                        dropped.append(sub)  # v3 steps carry no text, not even a note
                 steps.append(kept)
             out[key] = steps
-        elif key == "pitfalls":
-            if not isinstance(value, list):
+        elif key == "stats":
+            if not isinstance(value, dict):
                 dropped.append(path)
                 continue
-            pitfalls = []
-            for i, item in enumerate(value):
-                masked = text(item)
-                if masked is None:
-                    dropped.append(f"/pitfalls/{i}")
+            stats = {}
+            for k, v in value.items():
+                if k in _STATS_FIELDS and _counter(v):
+                    stats[k] = v
                 else:
-                    pitfalls.append(masked)
-            out[key] = pitfalls
+                    dropped.append(f"{path}/{_key(k)}")
+            out[key] = stats
+        elif key == "text":
+            text = mask_text_tree(value)
+            if text is not None:
+                out[key] = text
         else:
             dropped.append(path)  # unknown key: never copied
     return out, info
@@ -1049,14 +1087,17 @@ def mask_recipe(recipe: dict, lexicon: Lexicon | None,
     """A masked copy of *recipe* and ``{"lexicon", "masked", "words", "dropped"}``.
 
     The copy is built from an allowlist, never by copying the input: schema
-    fields with the expected shape, plus the masked free-text fields
-    (``title``, ``when_to_use``, ``steps[].note``, ``pitfalls[]``,
-    ``narrative``). A free-text field more than ``DROP_THRESHOLD`` masked, or
-    any when *lexicon* is ``None``, is dropped: ``title`` and ``when_to_use``
-    become ``""``, the others are removed. Unknown keys and badly shaped
-    values are dropped too. ``dropped`` lists JSON pointers into the input
-    (keys that are not plain identifiers appear as ``{?}``). ``masked`` and
-    ``words`` count the kept fields. Never raises; the input is not modified.
+    fields with the expected shape, plus the masked free-text fields, which
+    exist only under ``text`` (``title``, ``when_to_use``, ``step_notes[]``,
+    ``pitfalls[]``, ``narrative``). A free-text field more than
+    ``DROP_THRESHOLD`` masked, or any when *lexicon* is ``None``, is dropped:
+    a dropped step note becomes ``""`` so later notes stay on their steps,
+    the others are removed, and a ``text`` left with no free-text field is
+    removed whole. A recipe without ``text`` needs no lexicon. Unknown keys
+    and badly shaped values are dropped too. ``dropped`` lists JSON pointers
+    into the input (keys that are not plain identifiers appear as ``{?}``).
+    ``masked`` and ``words`` count the kept fields. Never raises; the input
+    is not modified.
     """
     try:
         return _mask_recipe(recipe, lexicon, abbreviations)
@@ -1213,16 +1254,36 @@ def _inv_text_hit(text: object, abbreviations: frozenset[str], lone_letters: str
     return any(not (c.isspace() or c in _INV_ALLOWED) for c in tail) or _inv_too_much_punctuation(tail)
 
 
-def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
-    language = recipe.get("language")
+def _inv_text_hits(text: object, abbreviations: frozenset[str]) -> Iterator[str]:
+    if not isinstance(text, dict):
+        yield "/text"
+        return
+    language = text.get("language")
     lone = _INV_LONE_LETTERS.get(language, "") if isinstance(language, str) else ""
     clitics = language == "ca"
+    for k, v in text.items():
+        sub = "/text/" + _key(k)
+        if k == "language":
+            if not _text_language(v):
+                yield sub
+        elif k in _TEXT_STRINGS:
+            if _inv_text_hit(v, abbreviations, lone, clitics):
+                yield sub
+        elif k in _TEXT_LISTS:
+            if not isinstance(v, list):
+                yield sub
+                continue
+            for i, item in enumerate(v):
+                if _inv_text_hit(item, abbreviations, lone, clitics):
+                    yield f"{sub}/{i}"
+        else:
+            yield sub
+
+
+def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
     for key, value in recipe.items():
         path = "/" + _key(key)
-        if key in ("title", "when_to_use", "narrative"):
-            if _inv_text_hit(value, abbreviations, lone, clitics):
-                yield path
-        elif key in _TOP_FIELDS:
+        if key in _TOP_FIELDS:
             if not _TOP_FIELDS[key](value):
                 yield path
         elif key == "plugin":
@@ -1252,18 +1313,17 @@ def _inv_hits(recipe: dict, abbreviations: frozenset[str]) -> Iterator[str]:
                             for j, slot in enumerate(v):
                                 if not _slot(slot):
                                     yield f"{sub}/{j}"
-                    elif k == "note":
-                        if _inv_text_hit(v, abbreviations, lone, clitics):
-                            yield sub
                     else:
                         yield sub
-        elif key == "pitfalls":
-            if not isinstance(value, list):
+        elif key == "stats":
+            if not isinstance(value, dict):
                 yield path
                 continue
-            for i, item in enumerate(value):
-                if _inv_text_hit(item, abbreviations, lone, clitics):
-                    yield f"/pitfalls/{i}"
+            for k, v in value.items():
+                if not (k in _STATS_FIELDS and _counter(v)):
+                    yield f"{path}/{_key(k)}"
+        elif key == "text":
+            yield from _inv_text_hits(value, abbreviations)
         else:
             yield path
 
@@ -1293,7 +1353,8 @@ def _dropped_hits(dropped: object) -> Iterator[str]:
 def invariant_hits(recipe: dict, abbreviations: frozenset[str] | None = None,
                    dropped: list | None = None) -> list[str]:
     """JSON-pointer paths of a masked recipe that break the masking guarantees
-    (spec §4.5). Every value at every depth is checked: free text must hold no
+    (spec §4.5). Every value at every depth is checked: free text (only under
+    ``text``; ``text.language`` picks the lone-letter and clitic rules) must hold no
     digit, no character outside letters, whitespace, the punctuation allowlist
     and ``{type}``/``{?}`` placeholders, no run of four or more punctuation
     marks, no typed-PII match and no capitalised word outside a sentence

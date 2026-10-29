@@ -846,6 +846,15 @@ def _print_recent_errors(records: list[tuple[Path, dict]], n: int) -> int:
     return 0
 
 
+def _latest_label(latest: dict | None) -> str:
+    """Title of the newest shared recipe: a structure-only one has none."""
+    if not latest:
+        return "-"
+    if not latest.get("has_text"):
+        return "(structure only)"
+    return _short(str(latest.get("title") or "").strip() or "(title masked)", 50)
+
+
 def _cmd_recipes(args: argparse.Namespace) -> int:
     from nuvel.recipes_view import load_recipe_candidates
 
@@ -862,7 +871,7 @@ def _cmd_recipes(args: argparse.Namespace) -> int:
             str(c.uses),
             f"{c.success_rate * 100:.0f}%",
             str(c.corrections),
-            _short(str(c.latest.get("title") or "").strip() or "(title masked)", 50) if c.latest else "-",
+            _latest_label(c.latest),
         )
         for c in cands
     ]
@@ -873,9 +882,9 @@ def _cmd_recipes(args: argparse.Namespace) -> int:
         actions = c.latest.get("actions") if c.latest else None
         if actions:
             print(f"  {c.category}: {' → '.join(actions)}")
-    skipped = getattr(cands, "skipped_v1", 0)
+    skipped = getattr(cands, "skipped_old", 0)
     if skipped:
-        print(f"({skipped} older recipe file(s) in pre-masking format skipped)")
+        print(f"({skipped} older-schema recipe file(s) skipped)")
     return 0
 
 
@@ -935,7 +944,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_recipes = sub.add_parser(
         "recipes",
-        help="List recipe candidates (signals and shared recipes) by category.",
+        help="List recipe candidates (weekly snapshots and shared recipes) by category.",
     )
     p_recipes.add_argument(
         "--source", "-s", action="append", default=None,

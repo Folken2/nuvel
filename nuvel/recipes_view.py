@@ -2,17 +2,20 @@
 
 Layout (written by ``nuvel_mcp.recipes.LocalRecipeStore``)::
 
-    {root}/_recipes/signals/{YYYY-MM-DD}.jsonl            nuvel.recipe_signal/1
-    {root}/_recipes/recipes/{tenant_key}/{recipe_id}/v{N}.json   nuvel.recipe/2
+    {root}/_recipes/signals/{YYYY-MM-DD}.jsonl            nuvel.recipe_signal/2
+    {root}/_recipes/recipes/{tenant_key}/{recipe_id}/v{N}.json   nuvel.recipe/3
 
-Recipes are ``nuvel.recipe/2``: the closed structure (action sequence, slots) and
-the free text the server already masked (``narrative`` with ``{?}`` and
-``{type}`` placeholders). A recipe file of any other schema (an old ``/1``) is
-skipped and counted, never shown.
+Recipes are ``nuvel.recipe/3``: the closed structure (action sequence, slots)
+and, only when the user opted in, the free text the server already masked
+(``narrative`` with ``{?}`` and ``{type}`` placeholders). A recipe file or
+signal of any other schema (an old ``/1`` or ``/2``) is skipped and counted,
+never shown.
 
-Signal counters are cumulative, so per ``(tenant, recipe_id)`` only the signal
-with the greatest ``at`` counts (ties: the later line wins). Unreadable or
-malformed lines and files are skipped. Tenant values are used for grouping only
+Signals are weekly snapshots whose counters are cumulative, so per
+``(tenant, recipe_id)`` only the snapshot with the greatest ``at`` counts (ties:
+the later line wins). Counter totals add up only recipes whose latest snapshot
+is not ``retired`` (a merge already summed them into the recipe it kept);
+retired recipes still count in ``recipes`` and ``statuses``. Unreadable or malformed lines and files are skipped. Tenant values are used for grouping only
 and never appear in the result.
 """
 
@@ -27,13 +30,15 @@ from pathlib import Path
 RECIPES_DIRNAME = "_recipes"
 _MAX_DEPTH = 3
 UNKNOWN_CATEGORY = "unknown"
-RECIPE_SCHEMA = "nuvel.recipe/2"
+RECIPE_SCHEMA = "nuvel.recipe/3"
+SIGNAL_SCHEMA = "nuvel.recipe_signal/2"
+STATUSES = ("draft", "active", "retired")
 
 
 class CandidateList(list):
-    """A plain list of candidates plus the count of skipped non-/2 recipe files."""
+    """A plain list of candidates plus the count of skipped old-schema recipe files."""
 
-    skipped_v1: int = 0
+    skipped_old: int = 0
 
 
 @dataclass
@@ -44,6 +49,8 @@ class RecipeCandidate:
     uses: int
     successes: int
     corrections: int
+    days_used: int
+    statuses: dict
     success_rate: float
     latest: dict | None
 
@@ -134,39 +141,46 @@ def _mask_ratio(masking: object) -> float | None:
 
 
 def _view_doc(doc: dict) -> dict | None:
-    """Reduce a stored /2 recipe to the display shape; None if malformed."""
+    """Reduce a stored /3 recipe to the display shape; None if malformed.
+
+    ``text`` is optional: a structure-only recipe has no title, narrative or
+    notes, and ``has_text`` is False (the view shows no narrative block)."""
     steps = doc.get("steps")
     if not isinstance(steps, list):
         return None
+    text = doc.get("text") if isinstance(doc.get("text"), dict) else {}
+    notes = text.get("step_notes") if isinstance(text.get("step_notes"), list) else []
     clean: list[dict] = []
     slots: list[str] = []
-    for st in steps:
+    for i, st in enumerate(steps):
         if not isinstance(st, dict):
             continue
         s_slots = _str_list(st.get("slots"))
         for sl in s_slots:
             if sl not in slots:
                 slots.append(sl)
-        note = st.get("note")
+        note = notes[i] if i < len(notes) else ""
         clean.append({
             "action": st["action"] if isinstance(st.get("action"), str) else "",
             "tool_kind": st["tool_kind"] if isinstance(st.get("tool_kind"), str) else "",
             "slots": s_slots,
             "note": note if isinstance(note, str) else "",
         })
-    out = {k: v for k, v in doc.items() if k not in ("tenant", "install_id")}
+    out = {k: v for k, v in doc.items() if k not in ("tenant", "install_id", "text")}
     out["steps"] = clean
     out["actions"] = [st["action"] for st in clean if st["action"]]
     out["slots"] = slots
-    out["pitfalls"] = _str_list(doc.get("pitfalls"))
-    narrative = doc.get("narrative")
-    out["narrative"] = narrative if isinstance(narrative, str) else ""
-    out["mask_ratio"] = _mask_ratio(doc.get("masking"))
+    out["has_text"] = bool(text)
+    for key in ("title", "when_to_use", "narrative"):
+        value = text.get(key)
+        out[key] = value if isinstance(value, str) else ""
+    out["pitfalls"] = _str_list(text.get("pitfalls"))
+    out["mask_ratio"] = _mask_ratio(doc.get("masking")) if text else None
     return out
 
 
 def _latest_recipes(rdir: Path) -> tuple[dict[str, tuple[float, dict]], int]:
-    """Newest /2 recipe (by mtime) per category, plus the count of skipped non-/2 files."""
+    """Newest /3 recipe (by mtime) per category, plus the count of skipped old-schema files."""
     best: dict[str, tuple[float, dict]] = {}
     skipped = 0
     try:
@@ -195,45 +209,56 @@ def _latest_recipes(rdir: Path) -> tuple[dict[str, tuple[float, dict]], int]:
 
 def load_recipe_candidates(roots: list[Path]) -> CandidateList:
     """One candidate per category, sorted by ``uses`` descending."""
-    # (tenant, recipe_id) -> (at, category, uses, successes, corrections)
-    latest_sig: dict[tuple[object, str], tuple[datetime, str, int, int, int]] = {}
+    # (tenant, recipe_id) -> (at, category, status, uses, successes, corrections, days_used)
+    latest_sig: dict[tuple[object, str], tuple[datetime, str, str, int, int, int, int]] = {}
     latest_recipe: dict[str, tuple[float, dict]] = {}
-    skipped_v1 = 0
+    skipped_old = 0
 
     for rdir in _recipe_dirs(roots):
         for rec in _read_signals(rdir):
+            if rec.get("schema") != SIGNAL_SCHEMA:
+                continue
             rid = rec.get("recipe_id")
             at = _parse_at(rec.get("at"))
             uses = _count(rec.get("uses"))
             succ = _count(rec.get("successes"))
             corr = _count(rec.get("corrections"))
-            if not isinstance(rid, str) or at is None or None in (uses, succ, corr):
+            days = _count(rec.get("days_used"))
+            status = rec.get("status")
+            if (not isinstance(rid, str) or at is None or status not in STATUSES
+                    or None in (uses, succ, corr, days)):
                 continue
             tenant = rec.get("tenant") if isinstance(rec.get("tenant"), str) else None
             key = (tenant, rid)
             cur = latest_sig.get(key)
             if cur is None or at >= cur[0]:
-                latest_sig[key] = (at, _category(rec.get("category")), uses, succ, corr)
+                latest_sig[key] = (at, _category(rec.get("category")), status, uses, succ, corr, days)
         found, skipped = _latest_recipes(rdir)
-        skipped_v1 += skipped
+        skipped_old += skipped
         for cat, item in found.items():
             if cat not in latest_recipe or item[0] > latest_recipe[cat][0]:
                 latest_recipe[cat] = item
 
+    def blank() -> dict:
+        return {"recipes": 0, "tenants": set(), "uses": 0, "successes": 0,
+                "corrections": 0, "days_used": 0, "statuses": {}}
+
     agg: dict[str, dict] = {}
-    for (tenant, _rid), (_at, cat, uses, succ, corr) in latest_sig.items():
-        a = agg.setdefault(
-            cat, {"recipes": 0, "tenants": set(), "uses": 0, "successes": 0, "corrections": 0}
-        )
+    for (tenant, _rid), (_at, cat, status, uses, succ, corr, days) in latest_sig.items():
+        a = agg.setdefault(cat, blank())
         a["recipes"] += 1
         a["tenants"].add(tenant)
+        a["statuses"][status] = a["statuses"].get(status, 0) + 1
+        # A weekly merge sums a retired duplicate's counters into the recipe it
+        # keeps, so a retired snapshot's counters would be counted twice.
+        if status == "retired":
+            continue
         a["uses"] += uses
         a["successes"] += succ
         a["corrections"] += corr
+        a["days_used"] += days
     for cat in latest_recipe:
-        agg.setdefault(
-            cat, {"recipes": 0, "tenants": set(), "uses": 0, "successes": 0, "corrections": 0}
-        )
+        agg.setdefault(cat, blank())
 
     out = CandidateList(
         RecipeCandidate(
@@ -243,11 +268,13 @@ def load_recipe_candidates(roots: list[Path]) -> CandidateList:
             uses=a["uses"],
             successes=a["successes"],
             corrections=a["corrections"],
+            days_used=a["days_used"],
+            statuses=a["statuses"],
             success_rate=(a["successes"] / a["uses"]) if a["uses"] else 0.0,
             latest=latest_recipe[cat][1] if cat in latest_recipe else None,
         )
         for cat, a in agg.items()
     )
     out.sort(key=lambda c: (-c.uses, c.category))
-    out.skipped_v1 = skipped_v1
+    out.skipped_old = skipped_old
     return out

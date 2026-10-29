@@ -1,4 +1,4 @@
-"""nuvel.recipe_signal/1 and nuvel.recipe/2 schemas, validator keywords and the signal screen."""
+"""nuvel.recipe_signal/2 and nuvel.recipe/3 schemas, validator keywords and the signal screen."""
 
 import json
 import os
@@ -16,20 +16,30 @@ PLUGIN = {"name": "chief-of-staff", "version": "0.3.0"}
 FIXTURE = Path(__file__).parent / "fixtures" / "chief_of_staff" / "recipe.json"
 
 SIGNAL = {
-    "schema": "nuvel.recipe_signal/1", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
-    "plugin": PLUGIN, "category": "client-followup", "event": "used",
-    "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0,
+    "schema": "nuvel.recipe_signal/2", "signal_id": UUID_A, "recipe_id": UUID_B, "install_id": UUID_C,
+    "plugin": PLUGIN, "category": "client-followup", "status": "active",
+    "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0, "days_used": 2,
 }
-STEP = {"action": "draft", "tool_kind": "email", "slots": ["person", "topic"],
-        "note": "Redactar el resumen para {person}"}
-RECIPE = {
-    "schema": "nuvel.recipe/2", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
-    "version": 1, "category": "client-followup", "language": "es",
+STEP = {"action": "draft", "tool_kind": "email", "slots": ["person", "topic"]}
+STATS = {"uses": 3, "successes": 2, "corrections": 1, "days_used": 3}
+STRUCTURE = {
+    "schema": "nuvel.recipe/3", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
+    "version": 1, "category": "client-followup", "steps": [STEP], "stats": STATS,
+}
+TEXT = {
+    "language": "es",
     "title": "Seguimiento tras una reunión", "when_to_use": "Cuando hay que cerrar acuerdos con el cliente",
-    "steps": [STEP],
+    "step_notes": ["Redactar el resumen para {person}"],
     "pitfalls": ["No enviar sin revisar"],
     "narrative": "El usuario pidió un resumen de la reunión con {company}.",
 }
+RECIPE = STRUCTURE | {"text": TEXT}
+
+
+def _text(**over):
+    """RECIPE with its text fields replaced (``None`` removes one)."""
+    text = {k: v for k, v in (TEXT | over).items() if v is not None}
+    return RECIPE | {"text": text}
 SKILL_RUN = {
     "schema": "nuvel.skill_run/1", "run_id": UUID_A, "install_id": UUID_C, "plugin": PLUGIN,
     "skill": {"name": "brief", "version": "0.3.0"}, "host": "claude-code", "mode": "interactive",
@@ -60,17 +70,106 @@ def test_signal_valid():
     assert recipes.validate_signal(SIGNAL) == []
 
 
+def test_signal_v2_valid_snapshot():
+    for status in ("draft", "active", "retired"):
+        assert recipes.validate_signal(SIGNAL | {"status": status}) == []
+    assert recipes.validate_signal(SIGNAL | {"plugin": PLUGIN | {"version": "0.4.0"}}) == []
+
+
+def test_signal_v2_rejects_event_key():
+    assert recipes.validate_signal(SIGNAL | {"event": "used"}) == ["/*"]
+
+
+def test_signal_v2_status_enum():
+    assert recipes.validate_signal(SIGNAL | {"status": "paused"}) == ["/status"]
+
+
+@pytest.mark.parametrize("over, path", [
+    ({"successes": 5, "uses": 3}, "/successes"),
+    ({"days_used": 4, "uses": 3}, "/days_used"),
+    ({"corrections": 9, "uses": 3}, "/corrections"),
+])
+def test_signal_v2_stats_consistency(over, path):
+    assert recipes.validate_signal(SIGNAL | over) == [path]
+
+
+def test_signal_v1_is_gone():
+    from importlib import resources
+    assert recipes.validate_signal(SIGNAL | {"schema": "nuvel.recipe_signal/1"}) == ["/schema"]
+    assert not resources.files("nuvel_mcp").joinpath("schemas/recipe_signal.v1.schema.json").is_file()
+    assert resources.files("nuvel_mcp").joinpath("schemas/recipe_signal.v2.schema.json").is_file()
+
+
 def test_recipe_valid():
     assert recipes.validate_recipe(RECIPE) == []
-    minimal = {k: v for k, v in RECIPE.items() if k not in ("pitfalls", "narrative")}
-    minimal["steps"] = [{"action": "draft", "tool_kind": "email", "slots": []}]
+    minimal = STRUCTURE | {"steps": [{"action": "draft", "tool_kind": "email", "slots": []}]}
     assert recipes.validate_recipe(minimal) == []
+    for field in recipes.TEXT_FIELDS:  # any one text field is enough
+        assert recipes.validate_recipe(STRUCTURE | {"text": {"language": "es", field: TEXT[field]}}) == []
+
+
+def test_v3_structure_only_is_valid():
+    assert recipes.validate_recipe(STRUCTURE) == []
+
+
+def test_v3_structure_is_required():
+    for field in ("category", "steps", "stats", "plugin", "install_id"):
+        doc = {k: v for k, v in RECIPE.items() if k != field}
+        assert recipes.validate_recipe(doc) == [f"/{field}"]
+    for field in STATS:
+        assert recipes.validate_recipe(RECIPE | {"stats": {k: v for k, v in STATS.items() if k != field}}) \
+            == [f"/stats/{field}"]
+
+
+def test_v3_rejects_step_note():
+    note = STEP | {"note": "x"}
+    errors = recipes.validate_recipe(RECIPE | {"steps": [note]})
+    assert "/steps/0/*" in errors and "note" not in "".join(errors)
+
+
+def test_v3_text_needs_more_than_language():
+    errors = recipes.validate_recipe(STRUCTURE | {"text": {"language": "es"}})
+    assert errors and all(e.startswith("/text") for e in errors)
+    assert errors == ["/text"]
+    assert recipes.validate_recipe(STRUCTURE | {"text": {"title": "Hola"}}) == ["/text/language"]
+
+
+def test_v3_step_notes_not_longer_than_steps():
+    errors = recipes.validate_recipe(_text(step_notes=["uno", "dos"]))
+    assert "/text/step_notes" in errors
+    assert recipes.validate_recipe(_text(step_notes=["uno"])) == []
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP] * 2} | {"text": TEXT | {"step_notes": ["uno"]}}) == []
+
+
+@pytest.mark.parametrize("over, path", [
+    ({"successes": 5, "uses": 3}, "/stats/successes"),
+    ({"days_used": 4, "uses": 3}, "/stats/days_used"),
+    ({"corrections": 9, "uses": 3}, "/stats/corrections"),
+])
+def test_v3_stats_consistency(over, path):
+    assert path in recipes.validate_recipe(RECIPE | {"stats": STATS | over})
+    assert recipes.validate_recipe(RECIPE | {"stats": STATS | over}) == [path]
+
+
+@pytest.mark.parametrize("value, ok", [(0, True), (100000, True), (100001, False), (-1, False),
+                                       (True, False), (1.5, False), ("3", False)])
+def test_v3_stats_counters(value, ok):
+    stats = {k: value for k in STATS}
+    assert recipes.validate_recipe(RECIPE | {"stats": stats}) == ([] if ok else [f"/stats/{k}" for k in STATS])
+
+
+def test_v2_schema_is_gone():
+    from importlib import resources
+    assert recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/3"
+    assert not resources.files("nuvel_mcp").joinpath("schemas/recipe.v2.schema.json").is_file()
+    assert resources.files("nuvel_mcp").joinpath("schemas/recipe.v3.schema.json").is_file()
+    assert recipes.validate_recipe(RECIPE | {"schema": "nuvel.recipe/2"}) == ["/schema"]
 
 
 def test_schema_ids():
-    assert recipes.SIGNAL_SCHEMA_ID == "nuvel.recipe_signal/1"
-    assert recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/2"
-    assert recipes.RECIPE_RESOURCE == "schemas/recipe.v2.schema.json"
+    assert recipes.SIGNAL_SCHEMA_ID == "nuvel.recipe_signal/2"
+    assert recipes.RECIPE_SCHEMA_ID == "nuvel.recipe/3"
+    assert recipes.RECIPE_RESOURCE == "schemas/recipe.v3.schema.json"
     assert _schema()["properties"]["schema"]["const"] == recipes.RECIPE_SCHEMA_ID == masking.SCHEMA_ID
 
 
@@ -80,7 +179,7 @@ def test_v1_schema_removed():
     assert not hasattr(recipes, "screen_recipe")
 
 
-def test_v2_schema_accepts_fixture():
+def test_v3_schema_accepts_fixture():
     assert recipes.validate_recipe(json.loads(FIXTURE.read_text())) == []
 
 
@@ -124,6 +223,12 @@ def test_schema_enums_match_code_constants():
     assert _step_schema()["action"]["enum"] == list(recipes.ACTIONS)
     assert _step_schema()["slots"]["items"]["enum"] == list(masking.PLACEHOLDER_TYPES)
     assert "tenant" not in props and "masking" not in props
+    assert list(props["stats"]["properties"]) == list(masking._STATS_FIELDS)
+    text = props["text"]["properties"]
+    assert set(text) - {"language"} == set(recipes.TEXT_FIELDS)
+    assert set(recipes.TEXT_FIELDS) == set(masking._TEXT_STRINGS + masking._TEXT_LISTS)
+    assert masking.POINTER_KEYS >= set(props) | set(text) | set(props["stats"]["properties"])
+    assert "note" not in _step_schema()
 
 
 def test_server_fields_rejected_by_schema():
@@ -143,6 +248,8 @@ def test_recipe_rejects_nested_extra():
     plugin = PLUGIN | {"extra": 1}
     assert recipes.validate_recipe(RECIPE | {"plugin": plugin}) == ["/plugin/*"]
     assert recipes.validate_recipe(RECIPE | {"pedro": 1, "acme.sl": 2}) == ["/*"]
+    assert recipes.validate_recipe(_text(pedro="x")) == ["/text/*"]
+    assert recipes.validate_recipe(RECIPE | {"stats": STATS | {"acme.sl": 1}}) == ["/stats/*"]
     assert recipes.validate_signal(SIGNAL | {"pedro": 1}) == ["/*"]
 
 
@@ -166,13 +273,13 @@ def test_plugin_semver(version, ok):
 
 
 def test_signal_bad_event_and_counter():
-    assert recipes.validate_signal(SIGNAL | {"event": "exploded"}) == ["/event"]
+    assert recipes.validate_signal(SIGNAL | {"status": "exploded"}) == ["/status"]
     assert recipes.validate_signal(SIGNAL | {"uses": 100001}) == ["/uses"]
 
 
 def test_recipe_title_too_long():
-    assert "/title" in recipes.validate_recipe(RECIPE | {"title": "x" * 81})
-    assert recipes.validate_recipe(RECIPE | {"title": "x" * 80}) == []
+    assert "/text/title" in recipes.validate_recipe(_text(title="x" * 81))
+    assert recipes.validate_recipe(_text(title="x" * 80)) == []
 
 
 def test_recipe_needs_a_step():
@@ -182,13 +289,17 @@ def test_recipe_needs_a_step():
 def test_recipe_limits():
     assert recipes.validate_recipe(RECIPE | {"steps": [STEP] * 15}) == []
     assert recipes.validate_recipe(RECIPE | {"steps": [STEP] * 16}) == ["/steps"]
-    assert recipes.validate_recipe(RECIPE | {"pitfalls": ["a"] * 6}) == ["/pitfalls"]
-    assert recipes.validate_recipe(RECIPE | {"pitfalls": ["a" * 161]}) == ["/pitfalls/0"]
-    assert recipes.validate_recipe(RECIPE | {"when_to_use": "a" * 201}) == ["/when_to_use"]
-    assert recipes.validate_recipe(RECIPE | {"narrative": "a" * 2000}) == []
-    assert recipes.validate_recipe(RECIPE | {"narrative": "a" * 2001}) == ["/narrative"]
-    assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"note": "a" * 161}]}) == ["/steps/0/note"]
-    assert recipes.validate_recipe(RECIPE | {"language": "ESP"}) == ["/language"]
+    assert recipes.validate_recipe(_text(pitfalls=["a"] * 6)) == ["/text/pitfalls"]
+    assert recipes.validate_recipe(_text(pitfalls=["a" * 161])) == ["/text/pitfalls/0"]
+    assert recipes.validate_recipe(_text(when_to_use="a" * 201)) == ["/text/when_to_use"]
+    assert recipes.validate_recipe(_text(narrative="a" * 2000)) == []
+    assert recipes.validate_recipe(_text(narrative="a" * 2001)) == ["/text/narrative"]
+    assert recipes.validate_recipe(_text(step_notes=["a" * 161])) == ["/text/step_notes/0"]
+    assert recipes.validate_recipe(_text(step_notes=[3])) == ["/text/step_notes/0"]
+    assert recipes.validate_recipe(RECIPE | {"steps": [STEP] * 16} | {"text": TEXT | {"step_notes": ["a"] * 16}}) \
+        == ["/steps", "/text/step_notes"]
+    assert recipes.validate_recipe(_text(language="ESP")) == ["/text/language"]
+    assert recipes.validate_recipe(RECIPE | {"text": "pedro"}) == ["/text"]
     assert recipes.validate_recipe(RECIPE | {"version": 0}) == ["/version"]
     assert recipes.validate_recipe(RECIPE | {"steps": [STEP | {"tool_kind": "fax"}]}) == ["/steps/0/tool_kind"]
 

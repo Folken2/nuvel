@@ -96,6 +96,22 @@ def test_package_license_matches_the_repository_license():
     assert (pkg / "LICENSE").read_text() == repo_license.read_text()
 
 
+def test_wheel_carries_the_current_schemas_only(tmp_path):
+    pkg = pathlib.Path(__file__).parents[1]
+    schema_dir = pkg / "src" / "nuvel_mcp" / "schemas"
+    shipped = {p.name for p in schema_dir.glob("*.json")}
+    assert "recipe.v3.schema.json" in shipped
+    assert not {"recipe.v1.schema.json", "recipe.v2.schema.json"} & shipped
+    # Build from a clean copy: a local build/ directory keeps files deleted
+    # from the source (old schemas) and setuptools would ship them again.
+    clean = tmp_path / "pkg"
+    shutil.copytree(pkg, clean, ignore=shutil.ignore_patterns("build", "tests", "*.egg-info", "__pycache__"))
+    _build_wheel(clean, tmp_path)
+    names = set(zipfile.ZipFile(next(tmp_path.glob("nuvel_mcp-*.whl"))).namelist())
+    assert {n for n in names if n.startswith("nuvel_mcp/schemas/")} == {
+        f"nuvel_mcp/schemas/{n}" for n in shipped}
+
+
 def test_wheel_carries_the_lexicons(tmp_path):
     pkg = pathlib.Path(__file__).parents[1]
     lexicon_dir = pkg / "src" / "nuvel_mcp" / "lexicon"

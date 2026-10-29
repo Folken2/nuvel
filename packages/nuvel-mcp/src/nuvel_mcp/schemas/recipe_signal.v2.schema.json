@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "nuvel.recipe_signal/1",
-  "description": "One content-free recipe lifecycle signal. Closed at every level. 'tenant' is stamped by the server and rejected from clients.",
+  "title": "nuvel.recipe_signal/2",
+  "description": "One weekly, content-free snapshot of a recipe's status and usage counters. Closed at every level. 'tenant' is stamped by the server and rejected from clients.",
   "type": "object",
   "properties": {
     "schema": {
       "type": "string",
-      "const": "nuvel.recipe_signal/1"
+      "const": "nuvel.recipe_signal/2"
     },
     "signal_id": {
       "type": "string",
@@ -42,13 +42,11 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_.:-]{0,79}$"
     },
-    "event": {
+    "status": {
       "type": "string",
       "enum": [
-        "created",
-        "used",
-        "succeeded",
-        "corrected",
+        "draft",
+        "active",
         "retired"
       ]
     },
@@ -70,6 +68,11 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100000
+    },
+    "days_used": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
     }
   },
   "required": [
@@ -79,11 +82,12 @@
     "install_id",
     "plugin",
     "category",
-    "event",
+    "status",
     "at",
     "uses",
     "successes",
-    "corrections"
+    "corrections",
+    "days_used"
   ],
   "additionalProperties": false
 }

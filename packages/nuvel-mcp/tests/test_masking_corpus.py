@@ -43,9 +43,9 @@ FORBIDDEN = re.compile(r"(?i)^(CC-BY-SA|CC-BY-NC|CC-BY-ND|GPL|LGPL|AGPL|MPL)")
 
 def _drop_path(text: str) -> str:
     """What is stored for *text* when the language has no lexicon."""
-    out, info = mask_recipe({"narrative": text}, None)
-    assert info["dropped"] == ["/narrative"]
-    return out.get("narrative", "")
+    out, info = mask_recipe({"text": {"narrative": text}}, None)
+    assert info["dropped"] == ["/text/narrative"]
+    return out.get("text", {}).get("narrative", "")
 
 
 def _mask_fn(lang: str):
@@ -115,7 +115,7 @@ def test_invariant_clean_on_corpus(lang, split):
     lexicon = load_lexicon(lang)
     bad = 0
     for case in load_corpus(split, lang):
-        masked, info = mask_recipe({"language": lang, "narrative": case.text}, lexicon)
+        masked, info = mask_recipe({"text": {"language": lang, "narrative": case.text}}, lexicon)
         bad += bool(masking.invariant_hits(masked, dropped=info["dropped"]))
     assert bad == 0, f"{lang}/{split}: {bad} lines hit the invariant"
 
