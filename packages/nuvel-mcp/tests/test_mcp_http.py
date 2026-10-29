@@ -453,7 +453,8 @@ def test_healthz(client):
     assert body["skills"] == 3 and body["themes"] == 2
     # Counts only: unauthenticated callers learn nothing about the catalog.
     assert body["tools"] == len(HTTP_DEFAULT_TOOLS)
-    assert set(body) == {"status", "transport", "skills", "themes", "tools"}
+    assert set(body) == {"status", "transport", "storage", "skills", "themes", "tools"}
+    assert body["storage"] == "files"
     for name in ("rollback", "onboarding", "hr", "search_skills"):
         assert name not in data.decode()
 

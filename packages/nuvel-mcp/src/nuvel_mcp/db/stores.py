@@ -167,8 +167,9 @@ class PostgresOAuthStore:
         self.path = db.describe()  # shown where the file store shows its path
         self._state = db.table("oauth_state")
         self._lock = threading.RLock()
-        self._cache: dict | None = None
-        self._version: int | None = None
+        # (data, version) as ONE attribute: a reader takes it in a single load,
+        # so it can never pair one version's data with another's counter.
+        self._cached: tuple[dict, int] | None = None
 
     def _load(self, conn) -> dict:
         data: dict = {"version": 1}
@@ -199,14 +200,20 @@ class PostgresOAuthStore:
         with self._errors(), self.db.connection() as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             version = self._counter(conn)
-            cache = self._cache
-            if cache is not None and version == self._version:
-                return cache
+            cached = self._cached
+            if cached is not None and cached[1] == version:
+                return cached[0]
             data = self._load(conn)
-        with self._lock:
-            if self._version is None or version >= self._version:
-                self._cache, self._version = data, version
+        self._remember(data, version)
         return data
+
+    def _remember(self, data: dict, version: int) -> None:
+        # Only ever move the cache forward: a slow reader or writer finishing
+        # late must not replace a newer snapshot with an older one.
+        with self._lock:
+            cached = self._cached
+            if cached is None or version >= cached[1]:
+                self._cached = (data, version)
 
     @contextlib.contextmanager
     def reading(self):
@@ -219,8 +226,9 @@ class PostgresOAuthStore:
         block succeeds."""
         with self._lock, self._errors(), self.db.connection() as conn:
             version = self._counter(conn, lock=True)
-            if self._cache is not None and version == self._version:
-                base = self._cache
+            cached = self._cached
+            if cached is not None and cached[1] == version:
+                base = cached[0]
             else:
                 base = self._load(conn)
             data = copy.deepcopy(base)
@@ -231,7 +239,7 @@ class PostgresOAuthStore:
                     "RETURNING version").fetchone()[0]
             # The commit happens when the connection block exits.
             committed = (data, version)
-        self._cache, self._version = committed
+        self._remember(*committed)
 
     def _write_changes(self, conn, base: dict, data: dict) -> bool:
         changed = False

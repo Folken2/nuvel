@@ -448,6 +448,7 @@ class McpHTTPServer(ThreadingHTTPServer):
         # Every HTTP server runs in remote mode with the gated default tool
         # set (unless the caller chose an explicit allow-list).
         mcp.enable_remote_mode()
+        mcp.transport = "http"
         self.mcp = mcp
         self.config = config
         self.oauth = oauth_provider
@@ -1011,9 +1012,16 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.SERVICE_UNAVAILABLE,
                             {"status": "error", "transport": "http", "error": "skills hub unavailable"})
             return
+        storage = "postgres" if mcp.database is not None else "files"
+        if mcp.database is not None and not mcp.database.ping():
+            self._send_json(HTTPStatus.SERVICE_UNAVAILABLE,
+                            {"status": "error", "transport": "http", "storage": storage,
+                             "error": "database unavailable"})
+            return
         self._send_json(HTTPStatus.OK, {
             "status": "ok",
             "transport": "http",
+            "storage": storage,
             "skills": len(entries),
             "themes": len({theme for theme, _ in entries}),
             "tools": len(mcp.handle_tools_list({})["tools"]),

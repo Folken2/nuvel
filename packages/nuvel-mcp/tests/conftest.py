@@ -28,6 +28,14 @@ def pg_db():
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_database(monkeypatch):
+    # A developer's own NUVEL_MCP_DATABASE_URL must never reach the CLI under
+    # test; database tests set it explicitly (from NUVEL_MCP_TEST_DATABASE_URL).
+    for name in ("NUVEL_MCP_DATABASE_URL", "NUVEL_MCP_DATABASE_SCHEMA"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _drop_test_schemas():
     # Every schema (and pool) a test opened is dropped when it ends, so a long
     # run never piles up connections.

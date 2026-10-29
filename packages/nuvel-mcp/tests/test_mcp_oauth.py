@@ -211,7 +211,8 @@ def test_public_url_sets_issuer_and_resource(launch, store_path):
 def test_healthz_leaks_no_catalog(anon):
     status, _, data = anon.request("GET", "/healthz")
     body = json.loads(data)
-    assert status == 200 and set(body) == {"status", "transport", "skills", "themes", "tools"}
+    assert status == 200 and set(body) == {"status", "transport", "storage", "skills", "themes", "tools"}
+    assert body["storage"] in ("files", "postgres")
     assert all(isinstance(body[k], int) for k in ("skills", "themes", "tools"))
     for leak in ("rollback", "onboarding", "installer", "search_skills"):
         assert leak not in data.decode()
