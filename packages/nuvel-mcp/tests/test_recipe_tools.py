@@ -23,15 +23,20 @@ SIGNAL = {
     "plugin": PLUGIN, "category": "client-followup", "event": "used",
     "at": "2026-10-27T10:00:00Z", "uses": 3, "successes": 2, "corrections": 0,
 }
-RECIPE = {
-    "schema": "nuvel.recipe/2", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
-    "version": 1, "category": "client-followup", "language": "es",
+STRUCTURE = {
+    "schema": "nuvel.recipe/3", "recipe_id": UUID_B, "install_id": UUID_C, "plugin": PLUGIN,
+    "version": 1, "category": "client-followup",
+    "steps": [{"action": "draft", "tool_kind": "email", "slots": ["person"]}],
+    "stats": {"uses": 4, "successes": 3, "corrections": 1, "days_used": 2},
+}
+TEXT = {
+    "language": "es",
     "title": "Seguimiento tras una reunión", "when_to_use": "Cuando hay que cerrar acuerdos con el cliente",
-    "steps": [{"action": "draft", "tool_kind": "email", "slots": ["person"],
-               "note": "Redactar el resumen para {person}"}],
+    "step_notes": ["Redactar el resumen para {person}"],
     "pitfalls": ["No enviar sin revisar"],
     "narrative": "El usuario pidió el resumen de la reunión con {company} y preparé el borrador para el cliente.",
 }
+RECIPE = STRUCTURE | {"text": TEXT}
 WORDS = """
 seguimiento tras una reunión cuando hay que cerrar acuerdos con el cliente redactar
 resumen para no enviar sin revisar usuario pidió de la y preparé borrador hablé sobre
@@ -40,7 +45,12 @@ contrato
 SECRETS = ("pedro", "acme")
 SECRET_NARRATIVE = "Hablé con pedro sobre el contrato de Acme S.L. y preparé el borrador para el cliente."
 SIGNAL_FILE = "_recipes/signals/2026-10-27.jsonl"
-FREE_TEXT = ["/title", "/when_to_use", "/steps/0/note", "/pitfalls/0", "/narrative"]
+FREE_TEXT = ["/text/title", "/text/when_to_use", "/text/step_notes/0", "/text/pitfalls/0", "/text/narrative"]
+
+
+def with_text(**over):
+    """RECIPE with some ``text`` fields replaced."""
+    return {**RECIPE, "text": {**TEXT, **over}}
 
 
 def _lexicon():
@@ -163,8 +173,8 @@ def test_share_recipe_recorded_and_duplicate(tmp_path):
 
 def test_share_recipe_schema_rejection(tmp_path):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
-    res, body = call_recipe(s, {**RECIPE, "title": "x" * 200})
-    assert res["isError"] is True and body == {"status": "rejected", "errors": ["/title"]}
+    res, body = call_recipe(s, with_text(title="x" * 200))
+    assert res["isError"] is True and body == {"status": "rejected", "errors": ["/text/title"]}
     res, body = call_recipe(s, {**RECIPE, "steps": RECIPE["steps"] * 16})
     assert body == {"status": "rejected", "errors": ["/steps"]}
     assert not (tmp_path / "_recipes").exists()
@@ -180,12 +190,12 @@ def test_client_cannot_send_server_fields(tmp_path):
     assert not (tmp_path / "_recipes").exists()
 
     narrative = "El usuario pidió el resumen {?} de la reunión con el cliente y preparé el borrador."
-    _, clean = call_recipe(s, {**RECIPE, "version": 3, "narrative": narrative.replace(" {?}", "")})
-    _, body = call_recipe(s, {**RECIPE, "version": 4, "narrative": narrative})
+    _, clean = call_recipe(s, {**with_text(narrative=narrative.replace(" {?}", "")), "version": 3})
+    _, body = call_recipe(s, {**with_text(narrative=narrative), "version": 4})
     assert body["status"] == "recorded" and body["dropped"] == []
     assert body["masked"] == clean["masked"] + 1  # the client {?} counts as a masked token
     stored = json.loads(next(p for p in stored_files(tmp_path) if p.name == "v4.json").read_text())
-    assert "{?}" in stored["narrative"] and stored["masking"]["masked"] == body["masked"]
+    assert "{?}" in stored["text"]["narrative"] and stored["masking"]["masked"] == body["masked"]
 
 
 def test_share_masks_before_store(tmp_path, monkeypatch):
@@ -193,12 +203,12 @@ def test_share_masks_before_store(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr(server_mod, "_relay_feedback", lambda url, payload: sent.append(json.dumps(payload)) or {})
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
-    res, body = call_recipe(s, {**RECIPE, "narrative": SECRET_NARRATIVE})
+    res, body = call_recipe(s, with_text(narrative=SECRET_NARRATIVE))
     assert res["isError"] is False and body["status"] == "recorded"
-    assert body["masked"] >= 2 and "/narrative" not in body["dropped"]
+    assert body["masked"] >= 2 and "/text/narrative" not in body["dropped"]
     [path] = stored_files(tmp_path)
     stored = path.read_text()
-    assert not has_secret(stored) and "{?}" in json.loads(stored)["narrative"]
+    assert not has_secret(stored) and "{?}" in json.loads(stored)["text"]["narrative"]
     assert len(sent) == 1 and not has_secret(sent[0])
     relayed = json.loads(sent[0])
     assert relayed["type"] == "recipe" and relayed["record"] == json.loads(stored)
@@ -207,27 +217,91 @@ def test_share_masks_before_store(tmp_path, monkeypatch):
 
 def test_share_unknown_language_drops_text(tmp_path):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
-    res, body = call_recipe(s, {**RECIPE, "language": "pt"})
+    res, body = call_recipe(s, with_text(language="pt"))
     assert res["isError"] is False and body["status"] == "recorded"
     assert sorted(body["dropped"]) == sorted(FREE_TEXT)
     assert body["masked"] == 0 and body["words"] == 0
     record = json.loads(stored_files(tmp_path)[0].read_text())
-    assert record["title"] == "" and record["when_to_use"] == ""
-    assert "narrative" not in record and record["pitfalls"] == []
+    assert "text" not in record  # nothing but the language left: the whole text goes
     assert record["steps"] == [{"action": "draft", "tool_kind": "email", "slots": ["person"]}]
+    assert record["stats"] == STRUCTURE["stats"]
     assert record["masking"] == {"lexicon": None, "masked": 0, "words": 0, "dropped": body["dropped"]}
+
+
+def test_share_dropped_pointers_under_text(tmp_path):
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    _, body = call_recipe(s, with_text(language="pt"))
+    assert body["status"] == "recorded" and body["dropped"]
+    assert all(p.startswith("/text/") for p in body["dropped"])
+    stored = json.loads(stored_files(tmp_path)[0].read_text())
+    assert stored["masking"]["dropped"] == body["dropped"]
+
+
+def test_share_structure_only_skips_masker(tmp_path, monkeypatch):
+    def no_lexicon(language):
+        raise AssertionError("a text-free recipe must not load a lexicon")
+
+    monkeypatch.setattr(masking, "load_lexicon", no_lexicon)
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    res, body = call_recipe(s, STRUCTURE)
+    assert res["isError"] is False
+    assert body == {"status": "recorded", "recipe_id": UUID_B, "version": 1,
+                    "masked": 0, "words": 0, "dropped": []}
+    record = json.loads(stored_files(tmp_path)[0].read_text())
+    assert record["masking"] == {"lexicon": None, "masked": 0, "words": 0, "dropped": []}
+    assert record["masking"]["lexicon"] is None
+    assert {k: v for k, v in record.items() if k != "masking"} == STRUCTURE
+
+
+def test_share_text_is_masked_under_text(tmp_path):
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    res, body = call_recipe(s, with_text(narrative=SECRET_NARRATIVE))
+    assert res["isError"] is False and body["status"] == "recorded"
+    record = json.loads(stored_files(tmp_path)[0].read_text())
+    assert "{?}" in record["text"]["narrative"] and not has_secret(json.dumps(record))
+    assert record["masking"]["lexicon"].startswith("es-")
+    assert set(record) == set(RECIPE) | {"masking"}  # nothing moved out of text
+
+
+def test_share_dropped_step_note_keeps_later_notes_on_their_steps(tmp_path):
+    steps = [{"action": "search", "tool_kind": "email", "slots": []},
+             {"action": "draft", "tool_kind": "email", "slots": ["person"]}]
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    recipe = {**with_text(step_notes=["pedro acme garcia lopez", "Redactar el resumen para {person}"]),
+              "steps": steps}
+    _, body = call_recipe(s, recipe)
+    assert body["status"] == "recorded" and body["dropped"] == ["/text/step_notes/0"]
+    record = json.loads(stored_files(tmp_path)[0].read_text())
+    assert record["text"]["step_notes"] == ["", "Redactar el resumen para {person}"]
+
+
+@pytest.mark.parametrize("recipe", [STRUCTURE, RECIPE])
+def test_stored_record_passes_every_check(tmp_path, recipe):
+    """The stored record (stamp included) re-validates, re-passes the invariant
+    with its dropped pointers, and its stamp has the fixed shape."""
+    from nuvel_mcp import recipes
+
+    s = SkillsMCPServer(None, feedback_dir=tmp_path)
+    call_recipe(s, recipe)
+    record = json.loads(stored_files(tmp_path)[0].read_text())
+    stamp = record.pop("masking")
+    assert recipes.validate_recipe(record) == []
+    assert masking.invariant_hits(record, frozenset({"ceo"}), dropped=stamp["dropped"]) == []
+    assert set(stamp) == {"lexicon", "masked", "words", "dropped"}
+    assert stamp["lexicon"] is None or stamp["lexicon"].startswith(record["text"]["language"] + "-")
+    assert all(type(stamp[k]) is int and stamp[k] >= 0 for k in ("masked", "words"))
 
 
 def test_invariant_hit_rejects(tmp_path, monkeypatch):
     def leaky(recipe, lexicon, abbreviations=None):
         out = json.loads(json.dumps(recipe))
-        out["narrative"] = "Escribir a ana@acme.com"
+        out["text"]["narrative"] = "Escribir a ana@acme.com"
         return out, {"lexicon": "es-test.1", "masked": 0, "words": 3, "dropped": []}
 
     monkeypatch.setattr(masking, "mask_recipe", leaky)
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     res, body = call_recipe(s, RECIPE)
-    assert res["isError"] is True and body == {"status": "rejected", "errors": ["/narrative"]}
+    assert res["isError"] is True and body == {"status": "rejected", "errors": ["/text/narrative"]}
     assert "acme" not in json.dumps(res)
     assert not (tmp_path / "_recipes").exists()
 
@@ -249,15 +323,15 @@ def test_invariant_checks_dropped_pointers(tmp_path, monkeypatch):
 def test_masked_output_revalidated(tmp_path, monkeypatch):
     real = masking.mask_recipe
 
-    def lose_title(recipe, lexicon, abbreviations=None):
+    def lose_stats(recipe, lexicon, abbreviations=None):
         out, info = real(recipe, lexicon, abbreviations)
-        del out["title"]
+        del out["stats"]
         return out, info
 
-    monkeypatch.setattr(masking, "mask_recipe", lose_title)
+    monkeypatch.setattr(masking, "mask_recipe", lose_stats)
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     res, body = call_recipe(s, RECIPE)
-    assert res["isError"] is True and body == {"status": "rejected", "errors": ["/title"]}
+    assert res["isError"] is True and body == {"status": "rejected", "errors": ["/stats"]}
     assert not (tmp_path / "_recipes").exists()
 
 
@@ -271,10 +345,10 @@ def test_same_abbreviations_for_mask_and_invariant(tmp_path, monkeypatch):
                         or real_hits(r, abbreviations, dropped=dropped))
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
     narrative = "El CEO pidió el resumen de la reunión con el cliente y preparé el borrador."
-    _, body = call_recipe(s, {**RECIPE, "narrative": narrative})
+    _, body = call_recipe(s, with_text(narrative=narrative))
     assert body["status"] == "recorded"
     assert seen == [frozenset({"ceo"})] * 2
-    assert "CEO" in json.loads(stored_files(tmp_path)[0].read_text())["narrative"]
+    assert "CEO" in json.loads(stored_files(tmp_path)[0].read_text())["text"]["narrative"]
 
 
 def test_missing_argument_rejected(tmp_path):
@@ -294,12 +368,13 @@ def test_tools_listed_with_descriptions(tmp_path):
     assert rec["inputSchema"]["required"] == ["recipe"]
     assert "content-free" in sig["description"]
     assert "tenant" in sig["description"]
-    for word in ("nuvel.recipe/2", "structure", "slots", "notes", "narrative", "placeholder",
-                 "masked", "server", "tenant", "masking", "duplicate"):
+    for word in ("nuvel.recipe/3", "structure", "slots", "stats", "'text'", "step_notes", "narrative",
+                 "placeholder", "masked", "server", "tenant", "masking", "duplicate"):
         assert word in rec["description"]
-    assert "nuvel.recipe/1" not in rec["description"]
+    assert "nuvel.recipe/1" not in rec["description"] and "nuvel.recipe/2" not in rec["description"]
     props = rec["inputSchema"]["properties"]["recipe"]["properties"]
-    assert "narrative" in props and "slots" in props["steps"]["items"]["properties"]
+    assert "narrative" in props["text"]["properties"] and "slots" in props["steps"]["items"]["properties"]
+    assert "stats" in props and "narrative" not in props
 
 
 def test_tools_served_in_remote_mode(tmp_path):
@@ -359,7 +434,7 @@ def test_no_raw_text_on_failure_paths(tmp_path, monkeypatch, capsys, case):
     messages = []
     monkeypatch.setattr(server_mod, "log", lambda *a: messages.append(" ".join(map(str, a))))
 
-    response = _rpc(s, {**RECIPE, "narrative": SECRET_NARRATIVE})
+    response = _rpc(s, with_text(narrative=SECRET_NARRATIVE))
 
     captured = capsys.readouterr()
     assert messages, "the failure must be logged"
@@ -417,6 +492,8 @@ def test_relay_failure_swallowed(tmp_path, monkeypatch):
     (lambda r: r["steps"][0].update({"garcia-lopez": 1}), ["/steps/0/*"]),
     (lambda r: r["plugin"].update({"acme.sl": 1}), ["/plugin/*"]),
     (lambda r: r.update({"pedro": 1, "ana:612345678": 2}), ["/*"]),
+    (lambda r: r["text"].update({"pedro": 1}), ["/text/*"]),
+    (lambda r: r["stats"].update({"acme.sl": 1}), ["/stats/*"]),
 ])
 def test_share_rejection_never_echoes_client_keys(tmp_path, mutate, expected):
     recipe = json.loads(json.dumps(RECIPE))
@@ -446,9 +523,9 @@ def test_signal_rejection_never_echoes_client_keys(tmp_path, mutate, expected):
 
 def test_known_paths_kept_in_rejections(tmp_path):
     s = SkillsMCPServer(None, feedback_dir=tmp_path)
-    bad = {**RECIPE, "steps": [{**RECIPE["steps"][0], "slots": ["person", "pedro"]}], "title": "x" * 81}
+    bad = {**with_text(title="x" * 81), "steps": [{**RECIPE["steps"][0], "slots": ["person", "pedro"]}]}
     _, body = call_recipe(s, bad)
-    assert body["errors"] == ["/title", "/steps/0/slots/1"]
+    assert body["errors"] == ["/steps/0/slots/1", "/text/title"]
 
 
 def test_stdio_serve_survives_any_parse_error(capsys):

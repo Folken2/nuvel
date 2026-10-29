@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "nuvel.recipe/2",
-  "description": "One shared recipe: closed structure (actions, tool kinds, placeholder slots) plus free text (title, when_to_use, step notes, pitfalls, narrative) that the server masks with a per-language allowlist before anything is stored, relayed or logged. Closed at every level. 'tenant' and 'masking' are stamped by the server and rejected from clients.",
+  "title": "nuvel.recipe/3",
+  "description": "One shared recipe. Structure is required and closed: category, steps (an action, a tool kind and placeholder slots each) and usage stats. Free text is optional and lives only under 'text' (title, when_to_use, step_notes, pitfalls, narrative); the server masks it with a per-language allowlist before anything is stored, relayed or logged. Closed at every level. 'tenant' and 'masking' are stamped by the server and rejected from clients.",
   "type": "object",
   "properties": {
     "schema": {
       "type": "string",
-      "const": "nuvel.recipe/2"
+      "const": "nuvel.recipe/3"
     },
     "recipe_id": {
       "type": "string",
@@ -68,18 +68,6 @@
         "weekly-planning",
         "other"
       ]
-    },
-    "language": {
-      "type": "string",
-      "pattern": "^[a-z]{2}$"
-    },
-    "title": {
-      "type": "string",
-      "maxLength": 80
-    },
-    "when_to_use": {
-      "type": "string",
-      "maxLength": 200
     },
     "steps": {
       "type": "array",
@@ -161,10 +149,6 @@
                 "other"
               ]
             }
-          },
-          "note": {
-            "type": "string",
-            "maxLength": 160
           }
         },
         "required": [
@@ -175,17 +159,78 @@
         "additionalProperties": false
       }
     },
-    "pitfalls": {
-      "type": "array",
-      "maxItems": 5,
-      "items": {
-        "type": "string",
-        "maxLength": 160
-      }
+    "stats": {
+      "type": "object",
+      "properties": {
+        "uses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "successes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "corrections": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "days_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        }
+      },
+      "required": [
+        "uses",
+        "successes",
+        "corrections",
+        "days_used"
+      ],
+      "additionalProperties": false
     },
-    "narrative": {
-      "type": "string",
-      "maxLength": 2000
+    "text": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string",
+          "pattern": "^[a-z]{2}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "when_to_use": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "step_notes": {
+          "type": "array",
+          "maxItems": 15,
+          "items": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "pitfalls": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "narrative": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "language"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
@@ -195,10 +240,8 @@
     "plugin",
     "version",
     "category",
-    "language",
-    "title",
-    "when_to_use",
-    "steps"
+    "steps",
+    "stats"
   ],
   "additionalProperties": false
 }

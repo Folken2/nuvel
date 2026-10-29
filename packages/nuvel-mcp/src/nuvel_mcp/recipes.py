@@ -1,12 +1,13 @@
-"""Recipe signals (``nuvel.recipe_signal/1``) and shared recipes (``nuvel.recipe/2``).
+"""Recipe signals (``nuvel.recipe_signal/1``) and shared recipes (``nuvel.recipe/3``).
 
 Stdlib-only. Shapes live in the packaged schemas ``recipe_signal.v1.schema.json``
-and ``recipe.v2.schema.json``; validation reuses :mod:`nuvel_mcp.traces`.
-Errors are JSON-pointer paths only, never values.
+and ``recipe.v3.schema.json``; validation reuses :mod:`nuvel_mcp.traces`, plus
+the cross-field rules the schema keywords cannot express. Errors are
+JSON-pointer paths only, never values.
 
-A recipe's free text is not screened here: ``share_recipe`` masks it with
-:mod:`nuvel_mcp.masking` (allowlist) and re-checks it with
-``masking.invariant_hits`` before anything is stored. ``screen_signal`` keeps
+A recipe's free text (its optional ``text`` subtree) is not screened here:
+``share_recipe`` masks it with :mod:`nuvel_mcp.masking` (allowlist) and
+re-checks it with ``masking.invariant_hits`` before anything is stored. ``screen_signal`` keeps
 the content-free signal's identifier fields to their closed lists.
 """
 
@@ -25,9 +26,9 @@ from typing import Protocol, runtime_checkable
 from . import traces
 
 SIGNAL_SCHEMA_ID = "nuvel.recipe_signal/1"
-RECIPE_SCHEMA_ID = "nuvel.recipe/2"
+RECIPE_SCHEMA_ID = "nuvel.recipe/3"
 SIGNAL_RESOURCE = "schemas/recipe_signal.v1.schema.json"
-RECIPE_RESOURCE = "schemas/recipe.v2.schema.json"
+RECIPE_RESOURCE = "schemas/recipe.v3.schema.json"
 
 
 _UNKNOWN_SEGMENT = "*"
@@ -74,16 +75,42 @@ def validate_signal(doc: object) -> list[str]:
     return _validate_known_keys(doc, SIGNAL_RESOURCE)
 
 
+# Free-text fields of ``text``; it must hold at least one besides ``language``.
+TEXT_FIELDS = ("title", "when_to_use", "step_notes", "pitfalls", "narrative")
+# Counters that can never exceed ``stats.uses``.
+_BOUNDED_BY_USES = ("successes", "corrections", "days_used")
+
+
+def _cross_field_errors(doc: dict) -> list[str]:
+    """Rules the schema keywords cannot express, on a schema-valid recipe."""
+    errors = []
+    stats = doc["stats"]
+    errors += [f"/stats/{k}" for k in _BOUNDED_BY_USES if stats[k] > stats["uses"]]
+    text = doc.get("text")
+    if text is not None:
+        if not any(k in text for k in TEXT_FIELDS):
+            errors.append("/text")
+        if len(text.get("step_notes", ())) > len(doc["steps"]):
+            errors.append("/text/step_notes")
+    return errors
+
+
 def validate_recipe(doc: object) -> list[str]:
-    """Paths of fields failing ``nuvel.recipe/2`` (empty list = valid).
-    Keys that are not in the schema are reported as ``*``."""
-    return _validate_known_keys(doc, RECIPE_RESOURCE)
+    """Paths of fields failing ``nuvel.recipe/3`` (empty list = valid).
+    Keys that are not in the schema are reported as ``*``. A schema-valid
+    recipe is then held to the cross-field rules: ``stats`` successes,
+    corrections and days_used not above ``uses``; a ``text`` with at least one
+    field besides ``language``; no more ``text.step_notes`` than ``steps``."""
+    errors = _validate_known_keys(doc, RECIPE_RESOURCE)
+    if errors:
+        return errors
+    return _cross_field_errors(doc)
 
 
 
 # Closed lists. CATEGORIES mirrors plugins/chief-of-staff/references/recipe-categories.md
 # (nuvel-plugins); PLUGIN_NAMES and ACTIONS grow with server releases. The
-# recipe.v2 schema enums are a copy of these (a test checks they are equal).
+# recipe.v3 schema enums are a copy of these (a test checks they are equal).
 CATEGORIES = (
     "client-proposal", "client-onboarding", "client-followup", "meeting-prep",
     "meeting-followup", "sales-pipeline", "partner-relations", "investor-update",

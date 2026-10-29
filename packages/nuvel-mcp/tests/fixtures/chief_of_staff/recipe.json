@@ -1,5 +1,5 @@
 {
-  "schema": "nuvel.recipe/2",
+  "schema": "nuvel.recipe/3",
   "recipe_id": "c2a8f5b1-7d36-4e90-8b24-1f6e9a3d7c05",
   "install_id": "7b1e5d42-0a9f-4e3b-8c16-5f2a7d9e4b80",
   "plugin": {
@@ -8,43 +8,68 @@
   },
   "version": 2,
   "category": "client-proposal",
-  "language": "es",
-  "title": "Preparar una propuesta para un cliente",
-  "when_to_use": "Cuando un cliente pide una propuesta con alcance, plazos y condiciones.",
   "steps": [
     {
       "action": "search",
       "tool_kind": "email",
-      "slots": ["email", "person"],
-      "note": "Buscar el último {email} de {person} con la petición del cliente."
+      "slots": [
+        "email",
+        "person"
+      ]
     },
     {
       "action": "read",
       "tool_kind": "docs",
-      "slots": ["document"],
-      "note": "Leer una propuesta anterior parecida para reutilizar su estructura."
+      "slots": [
+        "document"
+      ]
     },
     {
       "action": "check",
       "tool_kind": "calendar",
-      "slots": ["team", "period"]
+      "slots": [
+        "team",
+        "period"
+      ]
     },
     {
       "action": "draft",
       "tool_kind": "none",
-      "slots": ["document", "amount", "date"],
-      "note": "Redactar alcance, plazos y condiciones en un borrador claro."
+      "slots": [
+        "document",
+        "amount",
+        "date"
+      ]
     },
     {
       "action": "ask",
       "tool_kind": "none",
-      "slots": ["person"],
-      "note": "Pedir al socio que revise el borrador antes de enviarlo."
+      "slots": [
+        "person"
+      ]
     }
   ],
-  "pitfalls": [
-    "No prometer fechas sin confirmar la disponibilidad del equipo.",
-    "No reutilizar condiciones de otro cliente sin revisarlas."
-  ],
-  "narrative": "El usuario pidió preparar una propuesta para {company}. Busqué el último {email} de {person}, hablé con marta sobre el alcance y preparé un borrador con el importe de {amount} y la entrega el {date}."
+  "stats": {
+    "uses": 6,
+    "successes": 5,
+    "corrections": 1,
+    "days_used": 4
+  },
+  "text": {
+    "language": "es",
+    "title": "Preparar una propuesta para un cliente",
+    "when_to_use": "Cuando un cliente pide una propuesta con alcance, plazos y condiciones.",
+    "step_notes": [
+      "Buscar el último {email} de {person} con la petición del cliente.",
+      "Leer una propuesta anterior parecida para reutilizar su estructura.",
+      "",
+      "Redactar alcance, plazos y condiciones en un borrador claro.",
+      "Pedir al socio que revise el borrador antes de enviarlo."
+    ],
+    "pitfalls": [
+      "No prometer fechas sin confirmar la disponibilidad del equipo.",
+      "No reutilizar condiciones de otro cliente sin revisarlas."
+    ],
+    "narrative": "El usuario pidió preparar una propuesta para {company}. Busqué el último {email} de {person}, hablé con marta sobre el alcance y preparé un borrador con el importe de {amount} y la entrega el {date}."
+  }
 }
