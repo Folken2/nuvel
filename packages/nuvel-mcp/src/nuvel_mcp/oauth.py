@@ -13,6 +13,12 @@ everything that isn't HTTP plumbing:
                                                            refresh_token, client_credentials)
     RFC 8707  resource indicators            tokens are bound to this server's origin
 
+Operator-issued URL keys (``nuvel-mcp client create --url-key``) are the one
+credential carried in the URL (``/mcp/k/<key>``), for MCP clients that can only
+be given a URL. Each key maps to its own client, so the tenant is that client's
+``client_id``. ``NUVEL_OAUTH_LOGIN=none`` turns off the interactive login (no
+/authorize, no registration), leaving URL keys and client_credentials.
+
 Scopes: ``skills:read`` (every MCP method and the read-only tools) and
 ``skills:write`` (the tools that write: ``install_skill``,
 ``propose_improvement``, ``record_feedback``, and any unknown tool, so it fails
@@ -84,7 +90,15 @@ FORBIDDEN = -32004
 _PKCE_VERIFIER = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
 _PKCE_CHALLENGE = re.compile(r"[A-Za-z0-9\-_]{43}")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
-_TABLES = ("clients", "codes", "access_tokens", "refresh_tokens")
+_TABLES = ("clients", "codes", "access_tokens", "refresh_tokens", "url_keys")
+
+URL_KEY_PREFIX = "nvuk_"
+URL_KEY_PATH = "/mcp/k/"
+# A URL key as it appears in a pasted connector URL: the segment after /k/.
+_URL_KEY_IN_URL = re.compile(r"/k/([^/?#\s]+)")
+
+# Accepted values of NUVEL_OAUTH_LOGIN ("" = choose from the credentials set).
+LOGIN_SETTINGS = ("", "none")
 
 
 class OAuthError(Exception):
@@ -243,6 +257,9 @@ class OAuthConfig:
     github_client_id: str | None = None
     github_client_secret: str | None = None
     dev_login: bool = False
+    # NUVEL_OAUTH_LOGIN: "none" turns the interactive login off; "" picks it
+    # from the credentials. Other values are refused at startup by the CLI.
+    login: str = ""
     # None = any authenticated user may log in (warned at startup).
     allowed_users: frozenset[str] | None = None
     redirect_allowlist: frozenset[str] = frozenset()
@@ -263,12 +280,15 @@ class OAuthConfig:
             github_client_secret=(
                 os.environ.get("NUVEL_OAUTH_GITHUB_CLIENT_SECRET", "").strip() or None),
             dev_login=os.environ.get("NUVEL_OAUTH_DEV_LOGIN", "").strip() == "1",
+            login=os.environ.get("NUVEL_OAUTH_LOGIN", "").strip().lower(),
             allowed_users=frozenset(u.lower() for u in users) if users else None,
             redirect_allowlist=frozenset(_split_env("NUVEL_OAUTH_REDIRECT_ALLOWLIST")),
         )
 
     @property
     def login_mode(self) -> str | None:
+        if self.login == "none":
+            return "none"
         if self.github_client_id and self.github_client_secret:
             return "github"
         if self.dev_login:
@@ -451,7 +471,16 @@ class OAuthProvider:
         }
 
     @staticmethod
-    def authorization_server_metadata(origin: str) -> dict:
+    def authorization_server_metadata(origin: str, login_mode: str | None = None) -> dict:
+        if login_mode == "none":  # no interactive login: operator-issued clients only
+            return {
+                "issuer": origin,
+                "token_endpoint": f"{origin}/token",
+                "scopes_supported": list(SCOPES),
+                "grant_types_supported": ["client_credentials"],
+                "token_endpoint_auth_methods_supported": [
+                    "client_secret_basic", "client_secret_post"],
+            }
         return {
             "issuer": origin,
             "authorization_endpoint": f"{origin}/authorize",
@@ -537,9 +566,29 @@ class OAuthProvider:
             response["client_secret_expires_at"] = 0
         return response
 
-    def create_client(self, name: str, redirect_uris: list[str] | None = None) -> tuple[dict, str]:
-        """Operator-issued confidential client (``nuvel mcp client create``)."""
+    def create_client(self, name: str, redirect_uris: list[str] | None = None, *,
+                      url_key: bool = False) -> tuple[dict, str]:
+        """Operator-issued client (``nuvel mcp client create``).
+
+        Returns ``(record, credential)``: a confidential client and its secret,
+        or with ``url_key`` a client that has no secret and no grant types (it
+        only names the tenant) and its URL key. Either is shown once; only its
+        hash is stored.
+        """
         redirect_uris = list(redirect_uris or [])
+        if url_key:
+            if redirect_uris:
+                raise ValueError("a URL-key client takes no redirect URIs")
+            key = URL_KEY_PREFIX + secrets.token_urlsafe(32)
+            with self.store.transaction() as data:
+                record, _ = self._new_client(
+                    data, name=name, redirect_uris=[], auth_method="none",
+                    grant_types=[], source="cli")
+                record["url_key"] = True
+                data["url_keys"][token_hash(key)] = {
+                    "client_id": record["client_id"], "issued_at": int(self.clock()),
+                    "revoked": False}
+            return record, key
         for uri in redirect_uris:
             if not _valid_absolute_uri(uri):
                 raise ValueError(f"redirect URI must be https://, or http:// on loopback: {uri!r}")
@@ -572,13 +621,18 @@ class OAuthProvider:
             if data["clients"].pop(client_id, None) is None:
                 return False
             self._revoke_where(data, lambda rec: rec.get("client_id") == client_id)
+            for key in [k for k, r in data["url_keys"].items()
+                        if r.get("client_id") == client_id]:
+                del data["url_keys"][key]
         return True
 
     # --- revocation ------------------------------------------------------------------
 
     @staticmethod
     def _revoke_where(data: dict, predicate) -> dict:
-        counts = {"access_tokens": 0, "refresh_tokens": 0}
+        """Revoke matching tokens and URL keys; ``url_keys`` only counts for a
+        client-wide predicate (grant ids never match a key record)."""
+        counts = {"access_tokens": 0, "refresh_tokens": 0, "url_keys": 0}
         for table in counts:
             for rec in data[table].values():
                 if not rec.get("revoked") and predicate(rec):
@@ -587,13 +641,24 @@ class OAuthProvider:
         return counts
 
     def revoke(self, value: str) -> dict | None:
-        """Revoke a token (access or refresh) or every token of a client id."""
+        """Revoke a token (access or refresh), a URL key (or a connector URL
+        carrying one), or every token and key of a client id."""
         value = value.strip()
+        in_url = _URL_KEY_IN_URL.search(value)
+        if in_url:
+            value = in_url.group(1)
         with self.store.transaction() as data:
             if value in data["clients"]:
                 counts = self._revoke_where(data, lambda r: r.get("client_id") == value)
                 return {"kind": "client", "client_id": value, **counts}
             digest = token_hash(value)
+            found = _find(data["url_keys"], digest)
+            if found is not None:
+                rec = found[1]
+                counts = {"access_tokens": 0, "refresh_tokens": 0,
+                          "url_keys": 0 if rec.get("revoked") else 1}
+                rec["revoked"] = True
+                return {"kind": "url_key", "client_id": rec.get("client_id"), **counts}
             for table in ("access_tokens", "refresh_tokens"):
                 found = _find(data[table], digest)
                 if found is None:
@@ -604,7 +669,7 @@ class OAuthProvider:
                     counts = self._revoke_where(data, lambda r: r.get("grant_id") == grant)
                 else:
                     counts = {"access_tokens": 0 if rec.get("revoked") else 1,
-                              "refresh_tokens": 0}
+                              "refresh_tokens": 0, "url_keys": 0}
                     rec["revoked"] = True
                 return {"kind": table[:-1], "client_id": rec.get("client_id"), **counts}
         return None
@@ -937,6 +1002,23 @@ class OAuthProvider:
             return TokenInfo(rec["client_id"], rec.get("subject", ""),
                              frozenset(rec.get("scope", ())), rec.get("resource", ""),
                              rec["expires_at"])
+
+    def validate_url_key(self, key: str | None) -> TokenInfo | None:
+        """The key's client as a principal, if the key is unrevoked and its client
+        still exists; else None. Same scopes as a client_credentials token."""
+        if not key or len(key) > 512:
+            return None
+        digest = token_hash(key)
+        with self.store.reading() as data:
+            found = _find(data["url_keys"], digest)
+            if found is None:
+                return None
+            rec = found[1]
+            client_id = rec.get("client_id")
+            if rec.get("revoked") or client_id not in data["clients"]:
+                return None
+            return TokenInfo(client_id, f"client:{client_id}", frozenset(SCOPES), "",
+                             float("inf"))
 
     def subject_allowed(self, info: TokenInfo) -> bool:
         """Re-check the user allowlist, so removing a login takes effect immediately."""

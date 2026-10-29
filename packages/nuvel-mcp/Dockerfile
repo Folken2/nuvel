@@ -24,8 +24,9 @@ RUN mkdir -p /data
 EXPOSE 8080
 
 # Shell form so $PORT (set by the platform) and the optional skills hub expand.
-# NUVEL_MCP_PUBLIC_URL and the GitHub OAuth credentials come from the platform's
-# variables; serve refuses to start on 0.0.0.0 without them.
+# NUVEL_MCP_PUBLIC_URL and either NUVEL_OAUTH_LOGIN=none (URL keys) or the GitHub
+# OAuth credentials come from the platform's variables; serve refuses to start
+# on 0.0.0.0 without them.
 CMD exec nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 \
     --port "${PORT:-8080}" \
     ${NUVEL_MCP_SKILLS_DIR:+--skills-dir "$NUVEL_MCP_SKILLS_DIR"}

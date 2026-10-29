@@ -29,6 +29,12 @@ Every MCP method on both transports requires an OAuth 2.1 bearer access token
 
 An unauthenticated request gets ``401`` with
 ``WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource"``.
+
+``/mcp/k/<key>`` is the Streamable HTTP endpoint for clients that can only be
+given a URL: the operator-issued URL key in the path takes the place of the
+bearer token (see :meth:`OAuthProvider.validate_url_key`). The legacy SSE
+transport has no key form. With ``NUVEL_OAUTH_LOGIN=none`` the interactive
+OAuth routes (/register, /authorize and the login callbacks) are not served.
 ``make_server(..., no_auth=True)`` (``--no-auth``) turns all of this off for
 loopback development.
 
@@ -39,8 +45,8 @@ is served, and without an explicit ``tools`` allow-list only
 ``nuvel_mcp.auth.current_principal`` set to the token's ``client_id``, the
 tenant that run traces are stamped and scoped with (``None`` with no auth).
 
-Diagnostics go to stderr; request bodies, query strings, tokens and codes are
-never logged.
+Diagnostics go to stderr; request bodies, query strings, URL keys, tokens and
+codes are never logged.
 """
 
 from __future__ import annotations
@@ -102,6 +108,10 @@ SERVER_BUSY = -32003
 
 _STREAM_CLOSED = object()  # queue sentinel: end the SSE stream
 _QUERY = re.compile(r"\?\S*")
+# A URL key: the segment after /k/ on any path, and any nvuk_ run wherever it
+# turns up (a key pasted into the wrong place).
+_KEY_SEGMENT = re.compile(r"(/k/)[^/?\s]+")
+_KEY_RUN = re.compile(re.escape(oauth.URL_KEY_PREFIX) + r"[A-Za-z0-9_\-]*")
 _HOST_HEADER = re.compile(r"[A-Za-z0-9.\-]+(:\d+)?|\[[0-9A-Fa-f:.]+\](:\d+)?")
 
 
@@ -169,6 +179,13 @@ class HttpConfig:
 
 def _normalize_origin(origin: str) -> str:
     return origin.strip().rstrip("/").lower()
+
+
+def _redact(text: str) -> str:
+    """Strip what must never reach a log: query strings and URL keys."""
+    text = _KEY_SEGMENT.sub(r"\1<redacted>", text)
+    text = _KEY_RUN.sub("<redacted>", text)
+    return _QUERY.sub("?<redacted>", text)
 
 
 def is_loopback_host(host: str) -> bool:
@@ -555,13 +572,14 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "nuvel-skills-mcp"
     sys_version = ""
+    _url_key: str | None = None  # set per request by _route on /mcp/k/<key>
 
     # --- plumbing ---------------------------------------------------------------
 
     def log_message(self, format, *args):  # noqa: A002 - BaseHTTPRequestHandler API
         # Request line + status only; query strings (session ids, OAuth codes and
-        # state) are redacted and bodies are never logged.
-        args = tuple(_QUERY.sub("?<redacted>", a) if isinstance(a, str) else a for a in args)
+        # state) and URL keys are redacted and bodies are never logged.
+        args = tuple(_redact(a) if isinstance(a, str) else a for a in args)
         sys.stderr.write(f"{self.address_string()} - {format % args}\n")
 
     def _path(self) -> str:
@@ -757,7 +775,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         return presented.strip()
 
     def _authenticate(self) -> TokenInfo | None:
-        """Require a valid access token (None when auth is off).
+        """Require a valid access token, or URL key on a key path (None when
+        auth is off).
 
         Every failure — missing, unknown, expired, revoked, another client's or
         another resource's token — is the same 401, so nothing leaks which.
@@ -765,6 +784,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         provider = self.server.oauth
         if provider is None:
             return None
+        if self._url_key is not None:
+            return self._authenticate_url_key(provider)
         all_scopes = oauth.format_scope(oauth.SCOPES)
         token = self._bearer()
         if token is None:
@@ -780,6 +801,21 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                           UNAUTHORIZED, self._challenge("invalid_token", all_scopes))
         if not provider.subject_allowed(info):
             raise _Reject(HTTPStatus.FORBIDDEN, "Forbidden", FORBIDDEN)
+        return info
+
+    def _authenticate_url_key(self, provider: OAuthProvider) -> TokenInfo:
+        """A key path: the key is the only credential. An Authorization header
+        alongside it is refused (one credential per request), and the 401 has
+        no resource_metadata, since OAuth discovery cannot fix a bad key."""
+        info = None
+        if not self.headers.get_all("Authorization"):
+            try:
+                info = provider.validate_url_key(self._url_key)
+            except OAuthStoreError as exc:
+                log(f"OAuth store error: {exc}")  # fail closed
+        if info is None:
+            raise _Reject(HTTPStatus.UNAUTHORIZED, "Unauthorized: invalid URL key",
+                          UNAUTHORIZED, {"WWW-Authenticate": 'Bearer error="invalid_token"'})
         return info
 
     def _check_scopes(self, info: TokenInfo | None, messages) -> None:
@@ -798,6 +834,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         """For long-lived SSE streams: re-check the token on every ping."""
         if info is None:
             return lambda: True
+        if self._url_key is not None:
+            key = self._url_key
+            return lambda: self.server.oauth.validate_url_key(key) is not None
         token, origin = self._bearer(), self._origin()
         return lambda: self.server.oauth.validate(token, origin) is not None
 
@@ -896,7 +935,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         except OAuthError as exc:
             self._send_json(exc.status, exc.body(), {**_NO_STORE, **exc.headers})
         except Exception as exc:  # noqa: BLE001 - answer, don't drop the connection
-            log(f"Internal error handling {self.command} {self._path()}: {type(exc).__name__}")
+            log(f"Internal error handling {self.command} {_redact(self._path())}: "
+                f"{type(exc).__name__}")
             self.close_connection = True
             try:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -906,22 +946,33 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     def _route(self, routes: dict) -> None:
         path = self._path()
+        # A keep-alive connection reuses this handler: the key is per request.
+        self._url_key = None
+        if path.startswith(oauth.URL_KEY_PATH) and self.server.oauth is not None:
+            key = path[len(oauth.URL_KEY_PATH):]
+            if key and "/" not in key:
+                self._url_key = key
+                path = "/mcp"  # the Streamable HTTP handlers, authenticated by key
         route = routes.get(path)
         if route is None and self.server.oauth is not None:
             route = self._oauth_routes().get((self.command, path))
         self._handle(route or self._not_found)
 
     def _oauth_routes(self) -> dict:
-        return {
+        routes = {
             ("GET", "/.well-known/oauth-protected-resource"): self._get_resource_metadata,
             ("GET", "/.well-known/oauth-authorization-server"): self._get_as_metadata,
-            ("POST", "/register"): self._post_register,
-            ("GET", "/authorize"): self._get_authorize,
-            ("POST", "/authorize"): self._post_authorize,
-            ("GET", "/oauth/callback"): self._get_callback,
-            ("POST", "/oauth/dev-login"): self._post_dev_login,
             ("POST", "/token"): self._post_token,
         }
+        if self.server.oauth.config.login_mode != "none":
+            routes.update({
+                ("POST", "/register"): self._post_register,
+                ("GET", "/authorize"): self._get_authorize,
+                ("POST", "/authorize"): self._post_authorize,
+                ("GET", "/oauth/callback"): self._get_callback,
+                ("POST", "/oauth/dev-login"): self._post_dev_login,
+            })
+        return routes
 
     def do_OPTIONS(self):  # noqa: N802
         def route():
@@ -1064,7 +1115,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.OK, OAuthProvider.protected_resource_metadata(self._origin()))
 
     def _get_as_metadata(self) -> None:
-        self._send_json(HTTPStatus.OK, OAuthProvider.authorization_server_metadata(self._origin()))
+        self._send_json(HTTPStatus.OK, OAuthProvider.authorization_server_metadata(
+            self._origin(), self.server.oauth.config.login_mode))
 
     def _post_register(self) -> None:
         body = self._read_body()
@@ -1229,8 +1281,9 @@ def serve_http(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFAU
     log(f"nuvel-skills MCP server starting (skills_dir={where})")
     log(f"Listening on {httpd.url}  (streamable: /mcp, legacy SSE: /sse, health: /healthz)")
     if httpd.oauth is not None:
-        log(f"OAuth 2.1: every MCP method needs a bearer token "
-            f"(login: {httpd.oauth.config.login_mode}, store: {httpd.oauth.store.path}).")
+        log(f"OAuth 2.1: every MCP method needs a bearer token or a URL key on "
+            f"/mcp/k/<key> (login: {httpd.oauth.config.login_mode}, "
+            f"store: {httpd.oauth.store.path}).")
     try:
         httpd.serve_forever()
     finally:

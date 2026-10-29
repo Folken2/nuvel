@@ -42,6 +42,11 @@ curl -s -u "$NUVEL_CLIENT_ID:$NUVEL_CLIENT_SECRET" \
 #    Authorization: Bearer $ACCESS_TOKEN
 ```
 
+For an MCP client that can only be given a URL (a Claude custom connector with
+no sign-in), `uvx nuvel-mcp client create --name alice --url-key` prints a
+per-client `connector_url` (`$NUVEL_MCP_PUBLIC_URL/mcp/k/<key>`) once. Set
+`NUVEL_OAUTH_LOGIN=none` to run a public server with no interactive login.
+
 The [deployment guide](https://folken2.github.io/nuvel/how-to/deploy-skills-mcp/)
 covers scopes and the interactive flow.
 
