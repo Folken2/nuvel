@@ -1,9 +1,11 @@
 """Copy the file stores into Postgres (``nuvel-mcp db import``).
 
-Idempotent: traces, signals and recipe versions go through the stores'
-dedupe, and an OAuth row is inserted only when its id is absent, so a
-re-run inserts nothing and a newer database row is never overwritten.
-Unreadable lines and files are counted as ``skipped``, never fatal.
+Traces, signals and recipe versions go through the stores' dedupe, so a
+re-run inserts nothing. OAuth is a one-time move: once the database has held any
+OAuth state it is the authority, and the file is not imported again (unless
+forced), because re-importing would bring back clients and keys revoked in the
+database since. Unreadable lines and files are counted as ``skipped``, never
+fatal.
 """
 
 from __future__ import annotations
@@ -34,19 +36,27 @@ def _jsonl(path: Path):
         yield record if isinstance(record, dict) else None
 
 
-def _import_oauth(db: Database, path: Path, counts: dict) -> None:
+def _import_oauth(db: Database, path: Path, counts: dict, force: bool) -> bool:
+    """Insert the file's OAuth rows; ``False`` when skipped because the
+    database already holds OAuth state and *force* is off."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         counts["skipped"] += 1
-        return
+        return True
     if not isinstance(data, dict):
         counts["skipped"] += 1
-        return
+        return True
     inserted = 0
     with db.connection() as conn:
         state = db.table("oauth_state")
-        conn.execute(f"SELECT version FROM {state} WHERE id = 1 FOR UPDATE")
+        # The lock also serialises against running servers' OAuth writes. Every
+        # OAuth write bumps the counter, so 0 means "never held OAuth state";
+        # emptiness is not enough (deleting the last client empties the tables).
+        version = conn.execute(
+            f"SELECT version FROM {state} WHERE id = 1 FOR UPDATE").fetchone()[0]
+        if version > 0 and not force:
+            return False
         for key, table in OAUTH_TABLES.items():
             rows = data.get(key)
             if not isinstance(rows, dict):
@@ -65,6 +75,7 @@ def _import_oauth(db: Database, path: Path, counts: dict) -> None:
         if inserted:
             # Running servers reload their OAuth snapshot on the next request.
             conn.execute(f"UPDATE {state} SET version = version + 1 WHERE id = 1")
+    return True
 
 
 def _append_all(records, append, counts: dict, table: str) -> None:
@@ -79,13 +90,19 @@ def _append_all(records, append, counts: dict, table: str) -> None:
             counts["skipped"] += 1
 
 
-def import_files(db: Database, *, oauth_store: Path | None, feedback_dir: Path) -> dict:
-    """Import what exists; return rows inserted per table plus ``skipped``."""
+def import_files(db: Database, *, oauth_store: Path | None, feedback_dir: Path,
+                 force_oauth: bool = False) -> dict:
+    """Import what exists; return rows inserted per table, ``skipped`` and
+    ``oauth_imported`` (``False`` when the database already had OAuth state).
+
+    *force_oauth* merges the file's OAuth rows in anyway (rows whose id is
+    already present are left alone; deleted ones come back)."""
     counts = {table: 0 for table in (*OAUTH_TABLES.values(), "skill_runs",
                                       "recipe_signals", "recipes")}
     counts["skipped"] = 0
+    oauth_imported = True
     if oauth_store is not None and oauth_store.is_file():
-        _import_oauth(db, oauth_store, counts)
+        oauth_imported = _import_oauth(db, oauth_store, counts, force_oauth)
 
     traces = PostgresTraceStore(db)
     for path in sorted((feedback_dir / RUNS_DIRNAME).glob("*/*.jsonl")):
@@ -103,4 +120,5 @@ def import_files(db: Database, *, oauth_store: Path | None, feedback_dir: Path) 
             doc = None
         docs.append(doc if isinstance(doc, dict) else None)
     _append_all(docs, recipes.put_recipe, counts, "recipes")
+    counts["oauth_imported"] = oauth_imported
     return counts

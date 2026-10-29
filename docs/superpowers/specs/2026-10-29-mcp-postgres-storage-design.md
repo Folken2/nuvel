@@ -208,9 +208,12 @@ per outcome — `success`, `partial`, `failure`, and `blocked`/`skipped` as
 - `nuvel-mcp db migrate` — apply pending migrations; print what ran.
 - `nuvel-mcp db status` — applied versions and row counts per table.
 - `nuvel-mcp db import [--oauth-store PATH] [--feedback-dir DIR]` — copy the
-  file stores into Postgres. Idempotent (re-running inserts nothing new); OAuth
-  rows are inserted only when the id is absent, so it never overwrites a newer
-  database row. Prints counts per table.
+  file stores into Postgres. Traces and recipes are deduped (re-running inserts
+  nothing new). OAuth is imported only while `oauth_state.version` is 0 (the
+  database has never held OAuth state): afterwards the database is the
+  authority, and re-importing would resurrect clients and keys revoked there.
+  `--force-oauth` merges anyway (ids already present are left alone). Prints
+  counts per table.
 
 ### Packaging and deploy
 

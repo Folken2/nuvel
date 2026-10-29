@@ -266,8 +266,19 @@ def test_import_copies_the_file_stores_once(db_env, capsys, tmp_path):
     assert _count(db_env, "recipes") == 2 and _count(db_env, "oauth_url_keys") == 1
 
     assert cli_main(args) == 0  # idempotent
-    assert "Imported 0 row(s)" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "Imported 0 row(s)" in captured.out
     assert _count(db_env, "skill_runs") == 2
+
+    # Once the database holds OAuth state it is the authority: a key revoked
+    # there does not come back from the stale file.
+    assert cli_main(["client", "delete", record["client_id"]]) == 0
+    capsys.readouterr()
+    assert cli_main(args) == 0
+    assert "OAuth: not imported" in capsys.readouterr().err
+    assert _count(db_env, "oauth_url_keys") == 0
+    assert cli_main(args + ["--force-oauth"]) == 0  # explicit merge restores it
+    assert _count(db_env, "oauth_url_keys") == 1
 
     # The imported key authenticates against the database store.
     db = Database(DatabaseSettings(url=_pg.DSN, schema=db_env))

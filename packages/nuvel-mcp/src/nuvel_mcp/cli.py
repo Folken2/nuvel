@@ -596,7 +596,8 @@ def add_db_commands(subparsers: argparse._SubParsersAction) -> None:
     p_status.set_defaults(func=_cmd_db_status)
     p_import = db_sub.add_parser(
         "import", help="Copy the file stores (OAuth JSON, traces, recipes) into the "
-                       "database. Idempotent: safe to re-run.")
+                       "database. Traces and recipes are deduped; OAuth is imported "
+                       "only while the database has no OAuth state.")
     p_import.add_argument(
         "--oauth-store", default=None, metavar="PATH",
         help="OAuth JSON file. Default: $NUVEL_MCP_OAUTH_STORE, then ~/.nuvel/oauth.json.")
@@ -604,6 +605,10 @@ def add_db_commands(subparsers: argparse._SubParsersAction) -> None:
         "--feedback-dir", default=None, metavar="DIR",
         help="Feedback dir holding _runs/ and _recipes/. Default: $NUVEL_FEEDBACK_DIR, "
              "then ~/.nuvel/feedback.")
+    p_import.add_argument(
+        "--force-oauth", action="store_true",
+        help="Import the OAuth file even though the database already has OAuth "
+             "state. Clients and keys deleted in the database since come back.")
     p_import.set_defaults(func=_cmd_db_import)
 
 
@@ -669,8 +674,13 @@ def _cmd_db_import(args: argparse.Namespace, db) -> int:
     oauth_store = Path(args.oauth_store).expanduser() if args.oauth_store else \
         OAuthConfig.from_env().store_path
     counts = import_files(db, oauth_store=oauth_store,
-                          feedback_dir=resolve_feedback_dir(args.feedback_dir))
+                          feedback_dir=resolve_feedback_dir(args.feedback_dir),
+                          force_oauth=args.force_oauth)
     skipped = counts.pop("skipped")
+    if not counts.pop("oauth_imported"):
+        print(f"OAuth: not imported from {oauth_store}: the database already has OAuth "
+              "state and is the authority (re-importing would restore revoked clients "
+              "and keys). Pass --force-oauth to merge it anyway.", file=sys.stderr)
     for table, count in counts.items():
         print(f"  {table:<22} +{count}")
     print(f"Imported {sum(counts.values())} row(s); {skipped} unreadable record(s) skipped.")
