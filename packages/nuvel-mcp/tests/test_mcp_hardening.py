@@ -152,8 +152,123 @@ def test_per_principal_caps_from_env(monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL",
-                                  "NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL"])
-def test_per_principal_caps_must_be_positive(monkeypatch, name):
+                                  "NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
+                                  "NUVEL_MCP_MAX_CONNECTIONS_PER_IP"])
+def test_per_caller_caps_must_be_positive(monkeypatch, name):
     monkeypatch.setenv(name, "0")
     with pytest.raises(ValueError, match=name):
         HttpConfig.from_env()
+
+
+# --- (2) per-IP connection cap, and the caller's IP behind a proxy -----------------------
+
+
+def _recv_all(sock) -> bytes:
+    chunks = []
+    try:
+        while True:
+            data = sock.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+    except (TimeoutError, ConnectionResetError):
+        pass
+    return b"".join(chunks)
+
+
+def test_per_ip_cap_refuses_extra_connections_from_one_peer(launch):
+    import socket
+    httpd = launch(max_connections_per_ip=2, read_timeout=5.0, request_deadline=5.0)
+    host, port = httpd.server_address[:2]
+    stalled = [socket.create_connection((host, port), timeout=TIMEOUT) for _ in range(2)]
+    try:
+        for sock in stalled:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\n")  # never finished: holds its slot
+        time.sleep(0.3)
+        with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+            data = _recv_all(sock)
+        assert data.startswith(b"HTTP/1.1 429"), data
+        assert b"Retry-After: " in data
+        stalled.pop().close()
+
+        def served():
+            try:
+                return Client(httpd).request("GET", "/healthz")[0] == 200
+            except ConnectionError:
+                return False
+
+        assert eventually(served)
+    finally:
+        for sock in stalled:
+            sock.close()
+
+
+def test_per_ip_cap_behind_a_trusted_proxy_keys_on_x_forwarded_for(launch):
+    # Every TCP peer is the "proxy" (127.0.0.1): only X-Forwarded-For tells
+    # callers apart, so the cap must not count the peer itself.
+    httpd = launch(max_connections_per_ip=1, trust_forwarded_for=True)
+    alice = authed(httpd)
+    stream, resp = alice.open_stream("/sse", {"X-Forwarded-For": "203.0.113.5"})
+    try:
+        assert resp.status == 200
+        read_frame(resp)  # the stream holds 203.0.113.5's one slot
+        status, headers, _ = alice.request("GET", "/healthz",
+                                           headers={"X-Forwarded-For": "203.0.113.5"})
+        assert status == 429 and int(headers["Retry-After"]) >= 1
+        # The proxy appends the real peer last; a forged left-hand entry is ignored.
+        status, _, _ = alice.request("GET", "/healthz",
+                                     headers={"X-Forwarded-For": "203.0.113.5, 198.51.100.7"})
+        assert status == 200
+        assert alice.request("GET", "/healthz")[0] == 200  # no header: the peer
+    finally:
+        stream.close()
+
+
+def test_forwarded_for_is_ignored_unless_trusted(launch):
+    import socket
+    httpd = launch(max_connections_per_ip=1)
+    alice = authed(httpd)
+    stream, resp = alice.open_stream("/sse", {"X-Forwarded-For": "203.0.113.5"})
+    try:
+        assert resp.status == 200
+        read_frame(resp)
+        # Same TCP peer, whatever the header claims: refused from the accept loop.
+        with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n"
+                         b"X-Forwarded-For: 198.51.100.7\r\n\r\n")
+            assert _recv_all(sock).startswith(b"HTTP/1.1 429")
+    finally:
+        stream.close()
+
+
+def test_register_rate_limit_keys_on_the_forwarded_client_ip(launch, store_path):
+    httpd = launch(make_provider(store_path, register_limit=1), trust_forwarded_for=True)
+    anon = Client(httpd)
+    body = {"client_name": "x", "redirect_uris": ["http://127.0.0.1:1/cb"],
+            "token_endpoint_auth_method": "none"}
+
+    def reg(ip):
+        return anon.request("POST", "/register", body, {"X-Forwarded-For": ip})[0]
+
+    assert reg("203.0.113.5") == 201
+    assert reg("203.0.113.5") == 429
+    assert reg("198.51.100.7") == 201
+
+
+def test_register_rate_limit_ignores_forwarded_for_unless_trusted(launch, store_path):
+    httpd = launch(make_provider(store_path, register_limit=1))
+    anon = Client(httpd)
+    body = {"client_name": "x", "redirect_uris": ["http://127.0.0.1:1/cb"],
+            "token_endpoint_auth_method": "none"}
+    assert anon.request("POST", "/register", body, {"X-Forwarded-For": "203.0.113.5"})[0] == 201
+    assert anon.request("POST", "/register", body, {"X-Forwarded-For": "198.51.100.7"})[0] == 429
+
+
+def test_per_ip_settings_from_env(monkeypatch):
+    assert HttpConfig().max_connections_per_ip == 16
+    assert HttpConfig.from_env().trust_forwarded_for is False
+    monkeypatch.setenv("NUVEL_MCP_MAX_CONNECTIONS_PER_IP", "5")
+    monkeypatch.setenv("NUVEL_MCP_TRUST_FORWARDED_FOR", "1")
+    cfg = HttpConfig.from_env()
+    assert cfg.max_connections_per_ip == 5 and cfg.trust_forwarded_for is True

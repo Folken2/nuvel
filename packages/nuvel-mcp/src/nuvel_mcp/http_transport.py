@@ -73,6 +73,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from nuvel_mcp import oauth
 from nuvel_mcp.auth import current_principal
+from nuvel_mcp.clientip import client_ip, trust_forwarded_for
 from nuvel_mcp.oauth import (
     FORBIDDEN,
     UNAUTHORIZED,
@@ -104,6 +105,7 @@ DEFAULT_REQUEST_DEADLINE = 30.0
 DEFAULT_MAX_CONNECTIONS = 128
 DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 8
 DEFAULT_MAX_STREAMS_PER_PRINCIPAL = 4
+DEFAULT_MAX_CONNECTIONS_PER_IP = 16
 # Retry-After on a per-caller 429: a slot frees when the caller ends a session
 # or stream, which the server cannot predict; a few seconds avoids a hot loop.
 PER_CALLER_RETRY_AFTER = 5
@@ -158,6 +160,15 @@ class HttpConfig:
     # cannot take every global slot. Over either cap is 429. Must be >= 1.
     max_sessions_per_principal: int = DEFAULT_MAX_SESSIONS_PER_PRINCIPAL
     max_streams_per_principal: int = DEFAULT_MAX_STREAMS_PER_PRINCIPAL
+    # Per caller IP (see trust_forwarded_for): connections held at once,
+    # refused with 429 from the accept loop. Behind a trusted proxy every TCP
+    # peer is the proxy, so the cap counts in-flight requests (SSE streams
+    # included) by X-Forwarded-For instead. Must be >= 1.
+    max_connections_per_ip: int = DEFAULT_MAX_CONNECTIONS_PER_IP
+    # NUVEL_MCP_TRUST_FORWARDED_FOR: take the caller's IP from the right-most
+    # X-Forwarded-For entry (our proxy's). Only behind a proxy that sets it,
+    # or callers could pick their own IP.
+    trust_forwarded_for: bool = False
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
     # The origin clients reach this server at (NUVEL_MCP_PUBLIC_URL). It is the
     # OAuth issuer and resource; unset, the origin is derived from Host.
@@ -170,7 +181,7 @@ class HttpConfig:
                 env = "NUVEL_MCP_" + name.upper()
                 raise ValueError(f"{env} must be a number of seconds greater than 0 (got {value})")
         for name in ("max_connections", "max_sessions_per_principal",
-                     "max_streams_per_principal"):
+                     "max_streams_per_principal", "max_connections_per_ip"):
             value = getattr(self, name)
             if value < 1:
                 raise ValueError(f"NUVEL_MCP_{name.upper()} must be at least 1 (got {value})")
@@ -189,6 +200,9 @@ class HttpConfig:
                                                 DEFAULT_MAX_SESSIONS_PER_PRINCIPAL),
             max_streams_per_principal=_env_int("NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
                                                DEFAULT_MAX_STREAMS_PER_PRINCIPAL),
+            max_connections_per_ip=_env_int("NUVEL_MCP_MAX_CONNECTIONS_PER_IP",
+                                            DEFAULT_MAX_CONNECTIONS_PER_IP),
+            trust_forwarded_for=trust_forwarded_for(),
             allowed_origins=frozenset(
                 o for o in (_normalize_origin(x) for x in origins.split(",")) if o
             ),
@@ -517,25 +531,45 @@ class McpHTTPServer(ThreadingHTTPServer):
         self.principal_streams = KeyedLimiter(config.max_streams_per_principal)
         self.stopping = threading.Event()
         self._slots = threading.BoundedSemaphore(config.max_connections)
+        # Per caller IP: connections by TCP peer here in the accept loop, or,
+        # behind a trusted proxy, in-flight requests by X-Forwarded-For (see
+        # McpRequestHandler._ip_slot).
+        self.per_ip = KeyedLimiter(config.max_connections_per_ip)
         super().__init__(address, McpRequestHandler)
 
+    def _peer_key(self, client_address) -> str | None:
+        """The per-IP key counted at accept time, or None behind a trusted
+        proxy (where the peer is the proxy, shared by every caller)."""
+        return None if self.config.trust_forwarded_for else client_address[0]
+
+    def _refuse(self, request, status: bytes) -> None:
+        """Answer from the accept loop (one short write) without a thread."""
+        try:
+            request.settimeout(1.0)
+            request.sendall(b"HTTP/1.1 " + status + b"\r\nRetry-After: 1\r\n"
+                            b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            request.shutdown(socket.SHUT_WR)
+            _drain_pending(request)
+        except OSError:
+            pass
+        self.shutdown_request(request)
+
     def process_request(self, request, client_address) -> None:
-        # Cap handler threads: when full, answer 503 from the accept loop
-        # (one short write) without spawning a thread.
+        # Cap handler threads: when full, answer 503 without spawning one.
         if not self._slots.acquire(blocking=False):
-            try:
-                request.settimeout(1.0)
-                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\n"
-                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
-                request.shutdown(socket.SHUT_WR)
-                _drain_pending(request)
-            except OSError:
-                pass
-            self.shutdown_request(request)
+            self._refuse(request, b"503 Service Unavailable")
+            return
+        # One peer over its share: 429, as cheaply.
+        peer = self._peer_key(client_address)
+        if peer is not None and not self.per_ip.acquire(peer):
+            self._slots.release()
+            self._refuse(request, b"429 Too Many Requests")
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
+            if peer is not None:
+                self.per_ip.release(peer)
             self._slots.release()
             raise
 
@@ -543,6 +577,9 @@ class McpHTTPServer(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
+            peer = self._peer_key(client_address)
+            if peer is not None:
+                self.per_ip.release(peer)
             self._slots.release()
 
     @property
@@ -993,7 +1030,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self._client_wants_close = self.close_connection
         self.close_connection = True
         self._body_length = 0
+        ip_slot = None
         try:
+            ip_slot = self._ip_slot()
             self._body_length = self._check_framing()
             if self._body_length == 0:
                 self.close_connection = self._client_wants_close
@@ -1012,6 +1051,26 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                                 error_response(None, INTERNAL_ERROR, "Internal error"))
             except OSError:
                 pass
+        finally:
+            if ip_slot is not None:
+                self.server.per_ip.release(ip_slot)
+
+    def _client_ip(self) -> str:
+        return client_ip(self.headers, self.client_address[0],
+                         self.server.config.trust_forwarded_for)
+
+    def _ip_slot(self) -> str | None:
+        """Behind a trusted proxy, hold the caller IP's slot for this request
+        (an SSE stream holds it while open), or 429. Without one the accept
+        loop already counted the TCP peer: None."""
+        if not self.server.config.trust_forwarded_for:
+            return None
+        ip = self._client_ip()
+        if not self.server.per_ip.acquire(ip):
+            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
+                          "Too many connections from this address; try again later",
+                          SERVER_BUSY, {"Retry-After": "1"})
+        return ip
 
     def _route(self, routes: dict) -> None:
         path = self._path()
@@ -1234,7 +1293,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             metadata = json.loads(body.decode("utf-8"))
         except (ValueError, RecursionError):  # bad JSON or UTF-8, or nested too deep
             raise OAuthError("invalid_client_metadata", "Body must be JSON")
-        response = self.server.oauth.register_client(metadata, self.client_address[0])
+        # Keyed on the caller, not the TCP peer: behind Railway's proxy every
+        # peer is the proxy, and one shared bucket would let anyone lock out all.
+        response = self.server.oauth.register_client(metadata, self._client_ip())
         self._send_json(HTTPStatus.CREATED, response, _NO_STORE)
 
     def _login_cookie(self) -> str | None:
