@@ -1137,7 +1137,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         lookup = self.server.mcp.country_lookup
         if lookup is None or self.server.mcp.usage is None:
             return None
-        return lookup(client_ip(self.headers, self.client_address[0], trust_forwarded_for()))
+        return lookup(self._client_ip())
 
     def _dispatch_each(self, messages) -> list:
         responses = []
