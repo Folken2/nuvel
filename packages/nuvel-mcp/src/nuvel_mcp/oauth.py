@@ -46,6 +46,7 @@ import secrets
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -91,9 +92,15 @@ FORBIDDEN = -32004
 _PKCE_VERIFIER = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
 _PKCE_CHALLENGE = re.compile(r"[A-Za-z0-9\-_]{43}")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
-# C0, DEL and C1 controls: refused in display fields a registrant chooses.
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_CLIENT_NAME = 100
+
+
+def _unprintable(text: str) -> bool:
+    """True if ``text`` holds a control character (C0, DEL, C1: category Cc)
+    or a format character (Cf: bidi overrides such as U+202E, zero-width
+    characters, BOM), which could rewrite or visually spoof what an operator
+    sees in a terminal. Refused in display fields a registrant chooses."""
+    return any(unicodedata.category(c) in ("Cc", "Cf") for c in text)
 _TABLES = ("clients", "codes", "access_tokens", "refresh_tokens", "url_keys")
 
 URL_KEY_PREFIX = "nvuk_"
@@ -574,7 +581,7 @@ class OAuthProvider:
         if (not isinstance(uris, list) or not uris
                 or not all(isinstance(u, str) and u for u in uris)):
             raise OAuthError("invalid_redirect_uri", "redirect_uris must be a non-empty list")
-        if any(_CONTROL_CHARS.search(u) for u in uris):
+        if any(_unprintable(u) for u in uris):
             raise OAuthError("invalid_redirect_uri", "redirect_uris must not contain "
                                                      "control characters")
         for uri in uris:
@@ -602,10 +609,10 @@ class OAuthProvider:
         # Anyone can register, and operators read these names in a terminal
         # (client list, usage reports): no ANSI escapes or other controls.
         if (not isinstance(name, str) or len(name) > MAX_CLIENT_NAME
-                or _CONTROL_CHARS.search(name)):
+                or _unprintable(name)):
             raise OAuthError("invalid_client_metadata",
                              f"client_name must be at most {MAX_CLIENT_NAME} characters "
-                             "with no control characters")
+                             "with no control or format characters")
         with self.store.transaction() as data:
             record, secret = self._new_client(
                 data, name=name, redirect_uris=list(uris), auth_method=method,

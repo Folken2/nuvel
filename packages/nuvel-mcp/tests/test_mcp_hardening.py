@@ -550,17 +550,18 @@ def test_per_ip_settings_from_env(monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["\x1b[31mops\x1b[0m", "a\nb", "tab\there", "del\x7f",
-                                  "c1\x85", "csi\x9b31m", "a" * 101])
+                                  "c1\x85", "csi\x9b31m", "a" * 101,
+                                  "evil‮txt.exe", "zero​width", "bom﻿"])
 def test_register_rejects_control_characters_and_long_names(launch, name):
     status, body = register(Client(launch()), client_name=name)
     assert status == 400 and body["error"] == "invalid_client_metadata"
 
 
 def test_register_rejects_control_characters_in_redirect_uris(launch):
-    status, body = register(Client(launch()),
-                            redirect_uris=["http://127.0.0.1:1/cb\x1b[2J"])
-    assert status == 400 and body["error"] in ("invalid_redirect_uri",
-                                               "invalid_client_metadata")
+    for uri in ("http://127.0.0.1:1/cb\x1b[2J", "http://127.0.0.1:1/‮bc"):
+        status, body = register(Client(launch()), redirect_uris=[uri])
+        assert status == 400 and body["error"] in ("invalid_redirect_uri",
+                                                   "invalid_client_metadata")
 
 
 def test_register_accepts_a_plain_unicode_name_up_to_the_cap(launch):
