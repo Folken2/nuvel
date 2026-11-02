@@ -897,12 +897,22 @@ class OAuthProvider:
         if grant_type not in ("authorization_code", "refresh_token", "client_credentials"):
             raise OAuthError("unsupported_grant_type", f"Unsupported grant_type: {grant_type!r}")
 
+        # Authenticate against a read-only snapshot first: an unknown client or
+        # a bad secret is refused without the write transaction (which, on
+        # Postgres, locks the counter row FOR UPDATE and serializes every
+        # writer across replicas) and without pruning, so unauthenticated
+        # requests cannot queue up legitimate token requests behind them.
+        with self.store.reading() as snapshot:
+            self._authenticate_client(snapshot, form, authorization)
+
         now = self.clock()
         outcome: dict | OAuthError
         # Errors are returned out of the transaction rather than raised, so that
         # consuming a code (or revoking a grant on replay) is still persisted.
         with self.store.transaction() as data:
             self._prune(data, now)
+            # Again under the lock: the client may have been deleted or its
+            # secret changed since the snapshot.
             client = self._authenticate_client(data, form, authorization)
             if grant_type not in client.get("grant_types", []):
                 outcome = OAuthError("unauthorized_client",

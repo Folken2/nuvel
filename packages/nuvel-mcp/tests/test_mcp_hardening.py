@@ -369,6 +369,74 @@ def test_register_accepts_a_plain_unicode_name_up_to_the_cap(launch):
     assert status == 201 and len(body["client_name"]) == 100
 
 
+# --- (4) /token authenticates the client before taking the write lock ---------------------
+
+
+def _count_transactions(provider, monkeypatch):
+    opened = []
+    original = provider.store.transaction
+
+    def spy():
+        opened.append(1)
+        return original()
+
+    monkeypatch.setattr(provider.store, "transaction", spy)
+    return opened
+
+
+@pytest.mark.parametrize("auth", ["unknown", "bad_secret", "secret_on_public", "no_client"])
+def test_token_refuses_bad_clients_without_a_write_transaction(launch, monkeypatch, auth):
+    from _mcp_http_helpers import basic
+
+    httpd = launch()
+    record, secret = httpd.oauth.create_client("svc")
+    public = register(Client(httpd))[1]["client_id"]
+    headers = {
+        "unknown": {"Authorization": basic("nvcl_nope", "x")},
+        "bad_secret": {"Authorization": basic(record["client_id"], secret + "x")},
+        "secret_on_public": {"Authorization": basic(public, "x")},
+        "no_client": {},
+    }[auth]
+    opened = _count_transactions(httpd.oauth, monkeypatch)
+    status, _, data = Client(httpd).form("/token", {"grant_type": "client_credentials"},
+                                         headers)
+    assert status == 401 and json.loads(data)["error"] == "invalid_client"
+    assert opened == []
+
+
+def test_token_for_a_good_client_still_writes(launch, monkeypatch):
+    from _mcp_http_helpers import basic
+
+    httpd = launch()
+    record, secret = httpd.oauth.create_client("svc")
+    opened = _count_transactions(httpd.oauth, monkeypatch)
+    status, _, data = Client(httpd).form("/token", {"grant_type": "client_credentials"},
+                                         {"Authorization": basic(record["client_id"], secret)})
+    assert status == 200 and json.loads(data)["access_token"]
+    assert opened == [1]
+
+
+def test_token_refuses_a_client_deleted_after_the_snapshot(launch, monkeypatch):
+    # Authenticated against the snapshot, then deleted before the lock: the
+    # transaction re-checks, so no token is issued for a client that is gone.
+    from _mcp_http_helpers import basic
+
+    httpd = launch()
+    provider = httpd.oauth
+    record, secret = provider.create_client("svc")
+    original = provider.store.transaction
+
+    def delete_first():
+        provider.store.transaction = original
+        provider.delete_client(record["client_id"])
+        return original()
+
+    monkeypatch.setattr(provider.store, "transaction", delete_first)
+    status, _, data = Client(httpd).form("/token", {"grant_type": "client_credentials"},
+                                         {"Authorization": basic(record["client_id"], secret)})
+    assert status == 401
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 
