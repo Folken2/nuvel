@@ -102,6 +102,7 @@ DEFAULT_SESSION_TTL = 3600.0
 DEFAULT_PING_INTERVAL = 15.0
 DEFAULT_READ_TIMEOUT = 30.0
 DEFAULT_REQUEST_DEADLINE = 30.0
+DEFAULT_HEADER_DEADLINE = 5.0
 DEFAULT_MAX_CONNECTIONS = 128
 DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 8
 DEFAULT_MAX_STREAMS_PER_PRINCIPAL = 4
@@ -152,6 +153,11 @@ class HttpConfig:
     # Wall-clock seconds a client gets to send a whole request (request line,
     # headers and body), however slowly it trickles. Must be > 0.
     request_deadline: float = DEFAULT_REQUEST_DEADLINE
+    # Behind a trusted proxy only: seconds a connection gets to finish its
+    # request line and headers (idle keep-alive included). Until then it has
+    # no caller IP to count against the per-IP cap, so this bounds how long an
+    # unidentified connection can sit on a global slot. Must be > 0.
+    header_deadline: float = DEFAULT_HEADER_DEADLINE
     # Handler threads (open connections, SSE streams included) served at once;
     # further connections are refused with 503. Must be >= 1.
     max_connections: int = DEFAULT_MAX_CONNECTIONS
@@ -176,7 +182,7 @@ class HttpConfig:
     public_url: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("read_timeout", "request_deadline"):
+        for name in ("read_timeout", "request_deadline", "header_deadline"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 env = "NUVEL_MCP_" + name.upper()
@@ -196,6 +202,7 @@ class HttpConfig:
             session_ttl=_env_float("NUVEL_MCP_SESSION_TTL", DEFAULT_SESSION_TTL),
             read_timeout=_env_float("NUVEL_MCP_READ_TIMEOUT", DEFAULT_READ_TIMEOUT),
             request_deadline=_env_float("NUVEL_MCP_REQUEST_DEADLINE", DEFAULT_REQUEST_DEADLINE),
+            header_deadline=_env_float("NUVEL_MCP_HEADER_DEADLINE", DEFAULT_HEADER_DEADLINE),
             max_connections=_env_int("NUVEL_MCP_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
             max_sessions_per_principal=_env_int("NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL",
                                                 DEFAULT_MAX_SESSIONS_PER_PRINCIPAL),
@@ -668,7 +675,15 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # One deadline for request line + headers + body (an idle keep-alive
         # connection counts too). Expiry closes the connection quietly; a body
         # that outlives it gets 408 in _read_body.
-        self.rfile.arm(self.server.config.request_deadline)
+        config = self.server.config
+        self._request_started = time.monotonic()
+        if config.trust_forwarded_for:
+            # Behind a proxy the headers name the caller (X-Forwarded-For);
+            # until they arrive the connection counts against no per-IP share,
+            # so it gets only the short header deadline (see parse_request).
+            self.rfile.arm(min(config.header_deadline, config.request_deadline))
+        else:
+            self.rfile.arm(config.request_deadline)
         super().handle_one_request()
 
     def parse_request(self) -> bool:
@@ -680,6 +695,10 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             return super().parse_request()
         finally:
             self.rfile = tap._fp
+            if self.server.config.trust_forwarded_for:
+                # Identified now: the body gets what is left of the request deadline.
+                self.rfile.arm(self.server.config.request_deadline
+                               - (time.monotonic() - self._request_started))
 
     def handle_expect_100(self) -> bool:
         # The stdlib would send "100 Continue" here, inside parse_request, before

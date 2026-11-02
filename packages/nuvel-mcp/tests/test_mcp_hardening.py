@@ -38,7 +38,8 @@ from _mcp_http_helpers import (
 def _isolated_env(monkeypatch, tmp_path):
     isolate_env(monkeypatch, tmp_path)
     for name in ("NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL", "NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
-                 "NUVEL_MCP_MAX_CONNECTIONS_PER_IP", "NUVEL_MCP_TRUST_FORWARDED_FOR"):
+                 "NUVEL_MCP_MAX_CONNECTIONS_PER_IP", "NUVEL_MCP_TRUST_FORWARDED_FOR",
+                 "NUVEL_MCP_HEADER_DEADLINE"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -261,6 +262,40 @@ def test_per_ip_cap_behind_a_trusted_proxy_keys_on_x_forwarded_for(launch):
         assert alice.request("GET", "/healthz")[0] == 200  # no header: the peer
     finally:
         stream.close()
+
+
+def test_behind_a_proxy_unidentified_connections_get_a_short_header_deadline(launch):
+    # Until its headers arrive a connection has no IP to count against, so it
+    # may only sit on a global slot for the short header deadline.
+    import socket
+    httpd = launch(trust_forwarded_for=True, header_deadline=0.5, request_deadline=5.0,
+                   read_timeout=5.0)
+    with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+        started = time.monotonic()
+        sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n")  # never finished
+        assert _recv_all(sock) == b""  # closed quietly
+        assert time.monotonic() - started < 2.5
+    # Once identified, the body still gets the full request deadline.
+    alice = authed(httpd)
+    body = json.dumps(INIT).encode()
+    with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+        host = f"{alice.host}:{alice.port}"  # the token is bound to this origin
+        sock.sendall(f"POST /mcp HTTP/1.1\r\nHost: {host}\r\n".encode()
+                     + b"Content-Type: application/json\r\nAccept: application/json\r\n"
+                     + f"Authorization: Bearer {alice.token}\r\n".encode()
+                     + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode())
+        time.sleep(1.0)  # past the header deadline, well inside the request one
+        sock.sendall(body)
+        assert _recv_all(sock).startswith(b"HTTP/1.1 200")
+
+
+def test_header_deadline_from_env(monkeypatch):
+    assert HttpConfig().header_deadline == 5.0
+    monkeypatch.setenv("NUVEL_MCP_HEADER_DEADLINE", "2.5")
+    assert HttpConfig.from_env().header_deadline == 2.5
+    monkeypatch.setenv("NUVEL_MCP_HEADER_DEADLINE", "0")
+    with pytest.raises(ValueError, match="NUVEL_MCP_HEADER_DEADLINE"):
+        HttpConfig.from_env()
 
 
 def test_forwarded_for_is_ignored_unless_trusted(launch):
