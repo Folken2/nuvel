@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -156,6 +157,9 @@ def add_oauth_commands(subparsers: argparse._SubParsersAction) -> None:
                           help="Issue a URL key instead of a secret and print the "
                                "connector URL ($NUVEL_MCP_PUBLIC_URL/mcp/k/<key>) once, "
                                "for MCP clients that connect with no sign-in.")
+    p_create.add_argument("--expires-in", type=float, default=None, metavar="DAYS",
+                          help="With --url-key: the key stops working after DAYS days "
+                               "(fractions allowed). Default: until revoked.")
     p_create.set_defaults(func=_cmd_client_create)
     p_list = client_sub.add_parser("list", help="List registered clients (no secrets).")
     p_list.add_argument("--json", action="store_true", help="Print JSON.")
@@ -494,6 +498,9 @@ def _store_errors(func):
 def _cmd_client_create(args: argparse.Namespace) -> int:
     if args.url_key:
         return _create_url_key_client(args)
+    if args.expires_in is not None:
+        print("Error: --expires-in applies to --url-key only.", file=sys.stderr)
+        return 2
     provider = _provider()
     try:
         record, secret = provider.create_client(args.name, args.redirect_uri)
@@ -520,19 +527,28 @@ def _create_url_key_client(args: argparse.Namespace) -> int:
         print("Error: --url-key and --redirect-uri are mutually exclusive: a URL-key "
               "client never uses the authorization code flow.", file=sys.stderr)
         return 2
+    days = args.expires_in
+    if days is not None and not (math.isfinite(days) and days > 0):
+        print("Error: --expires-in must be a positive number of days.", file=sys.stderr)
+        return 2
     try:
         public_url = public_url_from_env()
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     provider = _provider()
-    record, key = provider.create_client(args.name, url_key=True)
-    print(json.dumps({
+    record, key = provider.create_client(
+        args.name, url_key=True, expires_in=None if days is None else days * 86400)
+    output = {
         "client_id": record["client_id"],
         "client_name": record["client_name"],
         "url_key": key,
         "connector_url": f"{public_url or ''}{URL_KEY_PATH}{key}",
-    }, indent=2))
+    }
+    if "url_key_expires_at" in record:
+        output["expires_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                             time.gmtime(record["url_key_expires_at"]))
+    print(json.dumps(output, indent=2))
     if public_url is None:
         print("NUVEL_MCP_PUBLIC_URL is not set: prefix connector_url with the server's "
               "public origin.", file=sys.stderr)

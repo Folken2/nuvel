@@ -39,6 +39,7 @@ import hashlib
 import hmac
 import html
 import json
+import math
 import os
 import re
 import secrets
@@ -567,27 +568,41 @@ class OAuthProvider:
         return response
 
     def create_client(self, name: str, redirect_uris: list[str] | None = None, *,
-                      url_key: bool = False) -> tuple[dict, str]:
+                      url_key: bool = False,
+                      expires_in: float | None = None) -> tuple[dict, str]:
         """Operator-issued client (``nuvel mcp client create``).
 
         Returns ``(record, credential)``: a confidential client and its secret,
         or with ``url_key`` a client that has no secret and no grant types (it
         only names the tenant) and its URL key. Either is shown once; only its
-        hash is stored.
+        hash is stored. ``expires_in`` (seconds, URL keys only) makes the key
+        stop working after that long; without it the key lasts until revoked.
         """
         redirect_uris = list(redirect_uris or [])
+        if expires_in is not None:
+            if not url_key:
+                raise ValueError("only a URL key can expire")
+            if not math.isfinite(expires_in) or expires_in <= 0:
+                raise ValueError(f"expires_in must be a positive number of seconds "
+                                 f"(got {expires_in})")
         if url_key:
             if redirect_uris:
                 raise ValueError("a URL-key client takes no redirect URIs")
             key = URL_KEY_PREFIX + secrets.token_urlsafe(32)
+            now = self.clock()
+            key_record = {"issued_at": int(now), "revoked": False}
             with self.store.transaction() as data:
                 record, _ = self._new_client(
                     data, name=name, redirect_uris=[], auth_method="none",
                     grant_types=[], source="cli")
                 record["url_key"] = True
-                data["url_keys"][token_hash(key)] = {
-                    "client_id": record["client_id"], "issued_at": int(self.clock()),
-                    "revoked": False}
+                if expires_in is not None:
+                    # On the client too, so `client list` shows it; the key
+                    # record's copy is the one validate_url_key enforces.
+                    key_record["expires_at"] = now + expires_in
+                    record["url_key_expires_at"] = now + expires_in
+                data["url_keys"][token_hash(key)] = {"client_id": record["client_id"],
+                                                     **key_record}
             return record, key
         for uri in redirect_uris:
             if not _valid_absolute_uri(uri):
@@ -1004,11 +1019,13 @@ class OAuthProvider:
                              rec["expires_at"])
 
     def validate_url_key(self, key: str | None) -> TokenInfo | None:
-        """The key's client as a principal, if the key is unrevoked and its client
-        still exists; else None. Same scopes as a client_credentials token."""
+        """The key's client as a principal, if the key is unrevoked, unexpired
+        (keys issued without ``expires_at`` never expire) and its client still
+        exists; else None. Same scopes as a client_credentials token."""
         if not key or len(key) > 512:
             return None
         digest = token_hash(key)
+        now = self.clock()
         with self.store.reading() as data:
             found = _find(data["url_keys"], digest)
             if found is None:
@@ -1017,8 +1034,13 @@ class OAuthProvider:
             client_id = rec.get("client_id")
             if rec.get("revoked") or client_id not in data["clients"]:
                 return None
+            expires_at = rec.get("expires_at")
+            if expires_at is not None:
+                # Fail closed on a malformed value as on an elapsed one.
+                if not isinstance(expires_at, (int, float)) or expires_at <= now:
+                    return None
             return TokenInfo(client_id, f"client:{client_id}", frozenset(SCOPES), "",
-                             float("inf"))
+                             float("inf") if expires_at is None else float(expires_at))
 
     def subject_allowed(self, info: TokenInfo) -> bool:
         """Re-check the user allowlist, so removing a login takes effect immediately."""

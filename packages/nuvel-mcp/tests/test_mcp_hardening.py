@@ -345,3 +345,78 @@ def test_per_ip_settings_from_env(monkeypatch):
     monkeypatch.setenv("NUVEL_MCP_TRUST_FORWARDED_FOR", "1")
     cfg = HttpConfig.from_env()
     assert cfg.max_connections_per_ip == 5 and cfg.trust_forwarded_for is True
+
+
+# --- (3) URL-key expiry ------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self):
+        self.now = time.time()
+
+    def __call__(self):
+        return self.now
+
+
+def test_url_key_with_expiry_is_refused_once_expired(launch):
+    httpd = launch()
+    clock = _Clock()
+    httpd.oauth.clock = clock
+    record, key = httpd.oauth.create_client("tester", url_key=True, expires_in=3600)
+    assert record["url_key_expires_at"] == pytest.approx(clock.now + 3600)
+    client = Client(httpd)
+    assert client.post(INIT, path=f"/mcp/k/{key}")[0] == 200
+    assert httpd.oauth.validate_url_key(key).expires_at == pytest.approx(clock.now + 3600)
+    clock.now += 3601
+    assert httpd.oauth.validate_url_key(key) is None
+    status, headers, _ = client.post(INIT, path=f"/mcp/k/{key}")
+    assert status == 401 and "resource_metadata" not in headers["WWW-Authenticate"]
+
+
+def test_url_key_without_expiry_keeps_working(launch):
+    httpd = launch()
+    clock = _Clock()
+    httpd.oauth.clock = clock
+    _, key = httpd.oauth.create_client("tester", url_key=True)
+    clock.now += 10 * 365 * 24 * 3600
+    assert httpd.oauth.validate_url_key(key) is not None
+    assert Client(httpd).post(INIT, path=f"/mcp/k/{key}")[0] == 200
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("nan"), float("inf")])
+def test_url_key_expiry_must_be_positive_and_finite(store_path, bad):
+    with pytest.raises(ValueError):
+        make_provider(store_path).create_client("t", url_key=True, expires_in=bad)
+
+
+def test_expiry_needs_a_url_key(store_path):
+    with pytest.raises(ValueError):
+        make_provider(store_path).create_client("t", expires_in=60)
+
+
+@pytest.mark.file_store
+def test_cli_url_key_expires_in_days(store_path, monkeypatch, capsys):
+    from nuvel_mcp.cli import main as cli_main
+
+    monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
+    before = time.time()
+    assert cli_main(["client", "create", "--name", "t", "--url-key", "--expires-in", "7"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    expires = out["expires_at"]
+    from datetime import datetime
+    stamp = datetime.fromisoformat(expires.replace("Z", "+00:00")).timestamp()
+    assert before + 7 * 86400 - 5 <= stamp <= time.time() + 7 * 86400 + 5
+    provider = make_provider(store_path)
+    assert provider.validate_url_key(out["url_key"]).expires_at == pytest.approx(stamp, abs=1)
+
+
+@pytest.mark.file_store
+@pytest.mark.parametrize("args", [["--url-key", "--expires-in", "0"],
+                                  ["--url-key", "--expires-in", "-3"],
+                                  ["--expires-in", "7"]])
+def test_cli_rejects_bad_expires_in(store_path, monkeypatch, capsys, args):
+    from nuvel_mcp.cli import main as cli_main
+
+    monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
+    assert cli_main(["client", "create", "--name", "t", *args]) == 2
+    assert "--expires-in" in capsys.readouterr().err

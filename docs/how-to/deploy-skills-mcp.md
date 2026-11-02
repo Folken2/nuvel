@@ -131,7 +131,20 @@ Without `NUVEL_MCP_PUBLIC_URL` set, the command prints just the
   (and any tokens); `nuvel-mcp token revoke "$CONNECTOR_URL"` revokes one key by
   its URL; `nuvel-mcp client delete "$CLIENT_ID"` removes the client and its key.
   The running server refuses the key on the next request and closes an open
-  stream at its next ping. Keys do not expire; to replace one, issue a new client.
+  stream at its next ping.
+- **Expiry.** `--expires-in DAYS` (fractions allowed) makes a key stop working
+  after that many days: `nuvel-mcp client create --name alice --url-key
+  --expires-in 30`. The output then includes `expires_at` (UTC), and an
+  expired key gets the same `401` as a revoked one; an open stream closes at
+  its next ping. Keys created without it, including every key issued before
+  this option existed, last until revoked.
+- **Rotating.** A key cannot be changed in place, because it is the client's
+  only credential. To rotate: create a new key for the tester
+  (`client create --name alice --url-key`, with `--expires-in` if you want),
+  send them the new `connector_url`, and once they have switched, delete the
+  old client (`nuvel-mcp client delete "$OLD_CLIENT_ID"`). The new key is a new
+  client, so it is a new tenant: run traces recorded under the old key stay
+  with the old `client_id` and are not visible through the new one.
 - **Transport.** `/mcp/k/<key>` is Streamable HTTP only (`POST`, `GET` stream and
   `DELETE`, like `/mcp`). The legacy `/sse` transport has no key form. A request
   on a key path that also sends an `Authorization` header is refused.
