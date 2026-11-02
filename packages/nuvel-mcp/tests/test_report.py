@@ -4,6 +4,7 @@ Tests using ``db_env`` need ``NUVEL_MCP_TEST_DATABASE_URL``.
 """
 
 import json
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -146,11 +147,13 @@ def test_report_on_an_empty_database(db_env, capsys):
     assert json.loads(capsys.readouterr().out)["totals"]["calls"] == 0
 
 
-EVIL = "evil\x1b]0;pwn\x07\x1b[2J\x9b31m\x7f"
+EVIL = "evil\x1b]0;pwn\x07\x1b[2J\x9b31m\x7f\u202e\u200b"
 
 
 def _controls(text):
-    return [ch for ch in text if ch != "\n" and (ord(ch) < 32 or 0x7f <= ord(ch) <= 0x9f)]
+    # C0, DEL, C1, and Unicode format characters (bidi overrides, zero-width).
+    return [ch for ch in text if ch != "\n" and (ord(ch) < 32 or 0x7f <= ord(ch) <= 0x9f
+                                                 or unicodedata.category(ch) == "Cf")]
 
 
 def test_text_output_never_carries_control_characters(db_env, capsys):

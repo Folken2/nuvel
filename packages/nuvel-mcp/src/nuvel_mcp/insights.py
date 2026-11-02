@@ -12,6 +12,7 @@ and the only personal data the insights add; ``DELETE`` the row to forget it.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 CLIENT_ID_RE = re.compile(r"\A[A-Za-z0-9_.:@-]{1,128}\Z")
 PROFILE_LIMITS = {"person": 200, "company": 200, "notes": 2000}
@@ -270,8 +271,10 @@ _CONTROL_CHARS = dict.fromkeys([*range(0x20), *range(0x7f, 0xa0)])
 
 
 def printable(text: str) -> str:
-    """*text* without control characters (C0, DEL, C1)."""
-    return text.translate(_CONTROL_CHARS)
+    """*text* without control characters (C0, DEL, C1) or Unicode format
+    characters (category Cf: bidi overrides, zero-width), which can spoof rows."""
+    return "".join(ch for ch in text.translate(_CONTROL_CHARS)
+                   if unicodedata.category(ch) != "Cf")
 
 
 def _cell(value) -> str:
