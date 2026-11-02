@@ -125,11 +125,12 @@ def test_migrations_are_packaged_in_order():
 @_pg.requires_pg
 def test_migrate_is_idempotent_and_reports_status():
     db = _pg.open_db(migrate=False)
-    assert db.status()["applied"] == [] and db.status()["pending"] == [1]
-    assert db.migrate() == [(1, "initial")]
+    every = [v for v, _, _ in migrations()]
+    assert db.status()["applied"] == [] and db.status()["pending"] == every
+    assert [v for v, _ in db.migrate()] == every
     assert db.migrate() == []
     status = db.status()
-    assert status["applied"] == [1] and status["pending"] == []
+    assert status["applied"] == every and status["pending"] == []
     assert set(status["rows"]) == set(db_mod.TABLES) and not any(status["rows"].values())
 
 
@@ -151,7 +152,56 @@ def test_concurrent_migrations_apply_once():
     for t in threads:
         t.join()
     assert errors == []
-    assert sorted(results, key=len) == [[], [], [], [(1, "initial")]]
+    applied = [(v, name) for v, name, _ in migrations()]
+    assert sorted(results, key=len) == [[], [], [], applied]
+
+
+@_pg.requires_pg
+def test_every_table_forces_row_level_security():
+    db = _pg.open_db()
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c "
+            "WHERE c.relnamespace = %s::regnamespace AND c.relkind IN ('r', 'p')",
+            (f'"{db.schema}"',)).fetchall()
+    names = {name for name, _, _ in rows}
+    assert set(db_mod.TABLES) | {"oauth_state", "schema_migrations"} <= names
+    assert [name for name, enabled, forced in rows if not (enabled and forced)] == []
+
+
+@_pg.requires_pg
+def test_other_roles_see_nothing_even_with_grants():
+    # A role that is not the owner -- Neon's Data API, a read-only login -- is
+    # granted SELECT on everything and still reads zero rows, views included.
+    import psycopg
+
+    db = _pg.open_db()
+    with db.connection() as conn:
+        conn.execute(f"INSERT INTO {db.table('usage_events')} (at, tenant, transport, method, "
+                     "outcome, duration_ms) VALUES (now(), 't1', 'http', 'tools/list', 'ok', 3)")
+    probe = f"probe_{uuid.uuid4().hex[:8]}"
+    q = f'"{db.schema}"'
+    with psycopg.connect(_pg.DSN, autocommit=True) as conn:
+        try:
+            conn.execute(f'CREATE ROLE "{probe}" NOLOGIN')
+        except psycopg.errors.InsufficientPrivilege:
+            pytest.skip("the test role cannot create roles")
+        try:
+            conn.execute(f'GRANT "{probe}" TO CURRENT_USER')
+            conn.execute(f'GRANT USAGE ON SCHEMA {q} TO "{probe}"')
+            conn.execute(f'GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA {q} TO "{probe}"')
+            assert conn.execute(f"SELECT count(*) FROM {q}.usage_events").fetchone()[0] == 1
+            with conn.transaction():
+                conn.execute(f'SET LOCAL ROLE "{probe}"')
+                for rel in (*db_mod.TABLES, "oauth_state", "usage_daily", "skill_runs_daily"):
+                    assert conn.execute(f"SELECT count(*) FROM {q}.{rel}").fetchone()[0] == 0, rel
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with conn.transaction():
+                    conn.execute(f'SET LOCAL ROLE "{probe}"')
+                    conn.execute(f"INSERT INTO {q}.oauth_clients (id, record) VALUES ('x', '{{}}')")
+        finally:
+            conn.execute(f'DROP OWNED BY "{probe}"')
+            conn.execute(f'DROP ROLE "{probe}"')
 
 
 @_pg.requires_pg
