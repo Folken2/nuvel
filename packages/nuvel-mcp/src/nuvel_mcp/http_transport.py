@@ -355,33 +355,62 @@ class StreamSlots:
     of being refused: behind a proxy a client that went away can leave its
     stream half-open for minutes, and refusing would lock the client out of
     its own reconnect.
+
+    A displaced stream stays counted as *draining* until its handler really
+    exits (``close``), so a principal cannot stack up threads and sockets by
+    displacing streams whose handlers are stuck. Displacement wakes the
+    handler through the outbox and shuts its socket down, which fails a write
+    blocked on a reader that stopped reading. With ``limit`` streams open and
+    ``limit`` still draining, a new stream is refused (``open`` returns None).
     """
 
     def __init__(self, limit: int):
         self.limit = limit
-        self._open: dict = {}  # key -> {token: session}, oldest first
+        # key -> {token: (session, socket)}, oldest first; and the displaced
+        # ones whose handlers have not exited yet.
+        self._open: dict = {}
+        self._draining: dict = {}
         self._lock = threading.Lock()
 
-    def open(self, key, session: Session) -> object:
+    def open(self, key, session: Session, sock: socket.socket | None) -> object | None:
         token = object()
+        displaced = None
         with self._lock:
             streams = self._open.setdefault(key, {})
-            displaced = []
-            while len(streams) >= self.limit:
+            draining = self._draining.setdefault(key, {})
+            if len(streams) >= self.limit:
+                if len(draining) >= self.limit:
+                    self._drop_empty(key)
+                    return None
                 oldest = next(iter(streams))
-                displaced.append((oldest, streams.pop(oldest)))
-            streams[token] = session
-        for old_token, old_session in displaced:
-            old_session.outbox.put(_Displaced(old_token))  # wakes that stream
+                displaced = (oldest, streams.pop(oldest))
+                draining[oldest] = displaced[1]
+            streams[token] = (session, sock)
+        if displaced is not None:
+            old_token, (old_session, old_sock) = displaced
+            old_session.outbox.put(_Displaced(old_token))  # wakes a waiting stream
+            if old_sock is not None:
+                with contextlib.suppress(OSError):
+                    old_sock.shutdown(socket.SHUT_RDWR)  # fails a blocked write
         return token
 
     def close(self, key, token) -> None:
         with self._lock:
-            streams = self._open.get(key)
-            if streams is not None:
-                streams.pop(token, None)
-                if not streams:
-                    del self._open[key]
+            for table in (self._open, self._draining):
+                streams = table.get(key)
+                if streams is not None:
+                    streams.pop(token, None)
+            self._drop_empty(key)
+
+    def _drop_empty(self, key) -> None:
+        for table in (self._open, self._draining):
+            if key in table and not table[key]:
+                del table[key]
+
+    def counts(self, key) -> tuple[int, int]:
+        """(open, draining) streams of ``key``."""
+        with self._lock:
+            return len(self._open.get(key, ())), len(self._draining.get(key, ()))
 
 
 class KeyedLimiter:
@@ -1112,6 +1141,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         ``token`` is this stream's slot (see StreamSlots): a ``_Displaced``
         carrying it ends the stream."""
         self.close_connection = True
+        # Every write is bounded (sendall's timeout is its total duration), so
+        # a client that stops reading frees this thread after read_timeout.
+        self.connection.settimeout(self.server.config.read_timeout)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1313,7 +1345,14 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             yield None
             return
         streams = self.server.principal_streams
-        token = streams.open(key, session)
+        token = streams.open(key, session, self.connection)
+        if token is None:
+            # Every slot is open and as many displaced handlers are still
+            # exiting: brief, so a short Retry-After.
+            self.close_connection = True
+            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
+                          "Too many open streams for this client; try again shortly",
+                          SERVER_BUSY, {"Retry-After": "1"})
         try:
             yield token
         finally:

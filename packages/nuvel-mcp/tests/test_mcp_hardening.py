@@ -165,6 +165,90 @@ def test_a_stream_past_the_cap_displaces_the_oldest(launch):
             stream.close()
 
 
+def test_displaced_streams_stay_counted_until_they_exit():
+    # A displaced stream's handler may be stuck; until it really exits it is
+    # "draining" and still counted, so new streams cannot pile up threads.
+    from nuvel_mcp.http_transport import Session, StreamSlots
+
+    slots = StreamSlots(1)
+    first = slots.open("k", Session("a", "streamable"), None)
+    second = slots.open("k", Session("b", "streamable"), None)  # first is draining
+    assert first is not None and second is not None
+    assert slots.counts("k") == (1, 1)
+    assert slots.open("k", Session("c", "streamable"), None) is None  # draining full
+    slots.close("k", first)  # the displaced handler finally exits
+    assert slots.counts("k") == (1, 0)
+    third = slots.open("k", Session("c", "streamable"), None)
+    assert third is not None and slots.counts("k") == (1, 1)
+    slots.close("k", second)
+    slots.close("k", third)
+    assert slots.counts("k") == (0, 0)
+
+
+def test_displaced_stream_whose_client_stopped_reading_is_forced_out(launch):
+    import socket
+    # read_timeout is long: the handler must leave because it was displaced,
+    # not because a write finally timed out.
+    httpd = launch(max_streams_per_principal=1, read_timeout=30.0, ping_interval=30)
+    alice = authed(httpd)
+    stalled_session, other = alice.initialize(), alice.initialize()
+    host, port = httpd.server_address[:2]
+    stalled = socket.create_connection((host, port), timeout=TIMEOUT)
+    stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    try:
+        stalled.sendall((f"GET /mcp HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                         f"Authorization: Bearer {alice.token}\r\n"
+                         f"Accept: text/event-stream\r\nMcp-Session-Id: {stalled_session}\r\n\r\n"
+                         ).encode())
+        session = httpd.sessions.get(stalled_session, "streamable", alice.principal)
+        assert eventually(lambda: httpd.principal_streams.counts(
+            ("client", alice.principal[0])) == (1, 0))
+        # Fill every buffer between us: the handler blocks in a write.
+        blob = {"jsonrpc": "2.0", "method": "notifications/message",
+                "params": {"data": "x" * 65536}}
+        for _ in range(200):
+            session.send(blob)
+        time.sleep(0.5)
+        key = ("client", alice.principal[0])
+        stream, resp = alice.open_stream("/mcp", {"Mcp-Session-Id": other})
+        try:
+            assert resp.status == 200
+            # The stuck handler is forced out and its slot released.
+            assert eventually(lambda: httpd.principal_streams.counts(key) == (1, 0),
+                              timeout=3.0)
+        finally:
+            stream.close()
+    finally:
+        stalled.close()
+
+
+def test_stream_to_a_reader_that_stopped_reading_times_out(launch):
+    import socket
+    httpd = launch(read_timeout=1.0, request_deadline=5.0, ping_interval=30)
+    alice = authed(httpd)
+    session_id = alice.initialize()
+    host, port = httpd.server_address[:2]
+    stalled = socket.create_connection((host, port), timeout=TIMEOUT)
+    stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    key = ("client", alice.principal[0])
+    try:
+        stalled.sendall((f"GET /mcp HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                         f"Authorization: Bearer {alice.token}\r\n"
+                         f"Accept: text/event-stream\r\nMcp-Session-Id: {session_id}\r\n\r\n"
+                         ).encode())
+        assert eventually(lambda: httpd.principal_streams.counts(key) == (1, 0))
+        session = httpd.sessions.get(session_id, "streamable", alice.principal)
+        blob = {"jsonrpc": "2.0", "method": "notifications/message",
+                "params": {"data": "x" * 65536}}
+        for _ in range(200):
+            session.send(blob)
+        # The blocked write gives up after read_timeout and frees the thread.
+        assert eventually(lambda: httpd.principal_streams.counts(key) == (0, 0),
+                          timeout=4.0)
+    finally:
+        stalled.close()
+
+
 def test_stream_cap_covers_both_transports(launch):
     httpd = launch(max_streams_per_principal=1)
     alice = authed(httpd)
