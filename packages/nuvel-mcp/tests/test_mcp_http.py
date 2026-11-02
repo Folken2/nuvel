@@ -459,6 +459,24 @@ def test_healthz(client):
         assert name not in data.decode()
 
 
+@pytest.mark.parametrize("path, content_type, magic", [
+    ("/favicon.ico", "image/x-icon", b"\x00\x00\x01\x00"),
+    ("/icon.png", "image/png", b"\x89PNG"),
+    ("/icon.svg", "image/svg+xml", b"<svg"),
+])
+def test_brand_icons_are_public(client, path, content_type, magic):
+    # No token: clients fetch the icon before (or without) signing in.
+    conn = client.conn()
+    conn.request("GET", path)
+    resp = conn.getresponse()
+    status, headers, data = resp.status, resp.headers, resp.read()
+    conn.close()
+    assert status == 200
+    assert headers["Content-Type"] == content_type
+    assert data.startswith(magic)
+    assert "max-age" in headers["Cache-Control"]
+
+
 def test_healthz_reports_broken_hub(client, hub):
     (hub / "index.json").write_text("{broken", encoding="utf-8")
     status, _, data = client.request("GET", "/healthz")

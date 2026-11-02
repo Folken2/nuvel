@@ -14,7 +14,8 @@ Legacy HTTP+SSE (MCP 2024-11-05):
     GET  /sse                        SSE stream; first event is ``endpoint``.
     POST /messages?sessionId=<id>    JSON-RPC in, ``202``; replies go to the stream.
 
-Plus ``GET /healthz`` (unauthenticated liveness + counts only).
+Plus ``GET /healthz`` (unauthenticated liveness + counts only) and the public
+brand icons ``GET /favicon.ico``, ``/icon.png`` and ``/icon.svg``.
 
 Every MCP method on both transports requires an OAuth 2.1 bearer access token
 (see :mod:`nuvel_mcp.oauth`); this server is also the authorization server:
@@ -85,6 +86,7 @@ from nuvel_mcp.server import (
     INVALID_REQUEST,
     PARSE_ERROR,
     SkillsMCPServer,
+    brand_asset,
     error_response,
     log,
 )
@@ -515,6 +517,12 @@ _HTML_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+# Public brand files: request path -> (file in nuvel_mcp/brand/, Content-Type).
+_BRAND_FILES = {
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+    "/icon.png": ("icon.png", "image/png"),
+    "/icon.svg": ("icon.svg", "image/svg+xml"),
+}
 
 
 # RFC 9110 field-name: a token.
@@ -989,7 +997,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self._handle(route)
 
     def do_GET(self):  # noqa: N802
-        self._route({"/healthz": self._get_healthz, "/mcp": self._get_mcp, "/sse": self._get_sse})
+        self._route({"/healthz": self._get_healthz, "/mcp": self._get_mcp, "/sse": self._get_sse,
+                     **{path: self._get_brand for path in _BRAND_FILES}})
 
     def do_POST(self):  # noqa: N802
         self._route({"/mcp": self._post_mcp, "/messages": self._post_messages})
@@ -999,6 +1008,12 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     def _not_found(self) -> None:
         raise _Reject(HTTPStatus.NOT_FOUND, "Not found")
+
+    def _get_brand(self) -> None:
+        # Unauthenticated: connector UIs fetch the icon before anyone signs in.
+        name, content_type = _BRAND_FILES[self._path()]
+        self._send(HTTPStatus.OK, brand_asset(name), content_type,
+                   {"Cache-Control": "public, max-age=86400"})
 
     # --- MCP routes ---------------------------------------------------------------------
 

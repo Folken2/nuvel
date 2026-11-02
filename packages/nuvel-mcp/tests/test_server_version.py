@@ -18,3 +18,12 @@ def test_package_version_falls_back_when_not_installed(monkeypatch):
 
     monkeypatch.setattr(server_mod.metadata, "version", missing)
     assert server_mod._package_version() == "0+unknown"
+
+
+def test_server_info_carries_the_nuvel_icon():
+    init = SkillsMCPServer(None).handle_initialize({})
+    info = init["serverInfo"]
+    assert info["title"] == "nuvel"
+    (icon,) = info["icons"]
+    assert icon["mimeType"] == "image/svg+xml" and icon["sizes"] == ["any"]
+    assert icon["src"].startswith("data:image/svg+xml;base64,")

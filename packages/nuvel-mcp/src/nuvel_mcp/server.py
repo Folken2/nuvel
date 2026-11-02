@@ -28,6 +28,7 @@ Tools:
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import http.client
@@ -40,7 +41,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from importlib import metadata
+from importlib import metadata, resources
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
@@ -66,7 +67,22 @@ def _package_version() -> str:
         return "0+unknown"
 
 
-SERVER_INFO = {"name": "nuvel-skills", "version": _package_version()}
+def brand_asset(name: str) -> bytes:
+    """A file from the packaged ``brand/`` folder (icon.svg, icon.png, favicon.ico)."""
+    return resources.files("nuvel_mcp").joinpath("brand", name).read_bytes()
+
+
+# A data: URI so the icon works over stdio too, where the server has no URL.
+SERVER_INFO = {
+    "name": "nuvel-skills",
+    "title": "nuvel",
+    "version": _package_version(),
+    "icons": [{
+        "src": "data:image/svg+xml;base64," + base64.b64encode(brand_asset("icon.svg")).decode("ascii"),
+        "mimeType": "image/svg+xml",
+        "sizes": ["any"],
+    }],
+}
 
 # JSON-RPC standard error codes.
 PARSE_ERROR = -32700
