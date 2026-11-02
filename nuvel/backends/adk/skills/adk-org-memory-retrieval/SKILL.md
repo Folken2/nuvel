@@ -68,8 +68,9 @@ The retrieval design — RRF fusion, the tier/boost cascade shape, relational re
 ## When NOT to use
 
 - **A single-user agent.** ADK's built-in per-session memory already covers it; org memory's scope resolution, tier boost, and knowledge graph are pure overhead with nothing to scope across.
-- **No Postgres with pgvector available.** Both the keyword and vector arms live in `postgres_store.py`; there's no alternative backend. If you can't run pgvector, this subsystem isn't available to you yet.
+- **No Postgres with pgvector available.** Both the keyword and vector arms live in `postgres_store.py`; there's no alternative backend for org memory. If you can't run pgvector, this subsystem isn't available to you yet — use one of ADK's built-in backends above.
 - **Latency-critical paths.** A search issues two-to-three concurrent SQL queries plus in-process ranking; that's an extra round trip most sub-100ms budgets can't absorb.
+- **You need persistent per-user recall without Postgres.** google-adk now ships simpler backends that plug into the same `memory_service=` slot: `SqliteMemoryService` (2.11+, `google.adk.memory`, or a `sqlite://` memory service URI) for a local file with full-text keyword search, and `MongoDbMemoryService` (2.13+, `google.adk.integrations.mongodb`, experimental) for keyword recall on any MongoDB deployment with no vector index. Neither scopes across a user/team/org hierarchy — that remains org memory's job.
 - **A markdown memory store is genuinely enough.** If the agent's memory need is "remember what we discussed last time, for this one user," the generated agent's default markdown store already does that with zero infrastructure. Reach for org memory when the win is *sharing* knowledge across users/teams, not just persisting it for one.
 
 ## Quick reference

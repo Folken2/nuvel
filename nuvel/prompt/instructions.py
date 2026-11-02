@@ -55,7 +55,7 @@ Propose:
 - Which skills to write, specifying which **design pattern** each follows
   (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline) and why
 - System prompt strategy (key sections, tone)
-- Any special patterns needed (LoopAgent, ParallelAgent, etc.)
+- Any orchestration needed beyond a single LlmAgent (a `Workflow` graph with routing, fan-out, cycles, or confirmation gates — load `adk-workflow-graphs`; the old LoopAgent/ParallelAgent/SequentialAgent classes are deprecated)
 
 Get user approval before proceeding.
 

@@ -178,9 +178,9 @@ becomes the next node's `node_input`.
 
 ## Migrating off Sequential / Parallel / Loop
 
-`SequentialAgent`, `ParallelAgent`, and `LoopAgent` still exist as
-convenience wrappers but are no longer the idiomatic way to compose steps.
-Their replacement is a `Workflow` whose nodes are mode-declaring `LlmAgent`s.
+`SequentialAgent`, `ParallelAgent`, and `LoopAgent` are deprecated in favor
+of `Workflow` and will be removed in a future ADK release. Their replacement is
+a `Workflow` whose nodes are mode-declaring `LlmAgent`s.
 See `references/workflow-migration.md` for the three mechanical rewrites.
 
 ## References

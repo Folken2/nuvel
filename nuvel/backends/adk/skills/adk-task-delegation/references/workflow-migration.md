@@ -1,13 +1,14 @@
 # Migrating Sequential / Parallel / Loop → Workflow + Task Modes
 
-`SequentialAgent`, `ParallelAgent`, and `LoopAgent` still ship in ADK 2.0 as
-convenience wrappers, but `Workflow` subsumes all three and is the idiomatic
-target for anything that isn't trivially linear. Migrating buys you
+`SequentialAgent`, `ParallelAgent`, and `LoopAgent` still ship in ADK 2.x,
+but they are deprecated in favor of `Workflow` (a `DeprecationWarning` on
+construction) and will be removed in a future release. Migrating buys you
 conditional routing, cycles with real exit conditions, mixed Python/LLM steps,
 and — with `mode` + `output_schema` — typed handoffs between steps.
 
-Keep the shortcut classes only when the shape is a two-or-three step straight
-line with no branching and you want a one-liner.
+One catch: a `Workflow` can't be an `LlmAgent` sub-agent. If the old class sat
+in a coordinator's `sub_agents`, move the migrated `Workflow` to the
+coordinator's `tools=[...]` (ADK wraps it as a `NodeTool`).
 
 ---
 

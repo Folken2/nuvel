@@ -3,21 +3,23 @@ name: adk-workflow-graphs
 description: >
   Build graph-based agents with ADK 2.0 `Workflow` — declare nodes and edges,
   route conditionally, fan-out/fan-in in parallel, run dynamic nodes at runtime,
-  and add human-in-the-loop revision cycles. Load this skill whenever the agent
-  needs anything beyond a strictly linear or trivially parallel pipeline.
+  route on a typed classifier answer, gate nodes behind human confirmation,
+  and add human-in-the-loop revision cycles. Load this skill whenever the
+  agent needs more than one step.
 ---
 
 # ADK 2.0 Workflow Graphs
 
-**Version 1.0** | Requires `google-adk>=2.0.0`
+**Version 1.1** | Requires `google-adk>=2.13.0`
 
 ADK 2.0 introduced **`google.adk.workflow.Workflow`** — a graph-based
-orchestration primitive that subsumes `SequentialAgent`, `LoopAgent`, and
-`ParallelAgent` into one model. Nodes are units of work (functions, `LlmAgent`s,
+orchestration primitive that replaces the now-deprecated `SequentialAgent`,
+`LoopAgent`, and `ParallelAgent` with one model. Nodes are units of work (functions, `LlmAgent`s,
 or other `BaseNode`s); edges declare how output flows and how control routes.
 
 This skill is the API reference. For *when to choose* a Workflow vs. a single
-`LlmAgent` vs. one of the shortcut classes, see `adk-agent-patterns`.
+`LlmAgent`, and how to hang a Workflow under a coordinator LLM (as a tool, not
+a sub-agent), see `adk-agent-patterns`.
 
 ## Minimal example
 
@@ -47,6 +49,7 @@ means "when the workflow begins, pass the user input to `greet`."
 | function-nodes | `@node` decorator and `FunctionNode`; param resolution from `ctx.state`; async/generator nodes | A graph step is plain Python — transform, validate, branch logic |
 | llm-agent-nodes | `_LlmAgentWrapper` behavior; `output_schema` for parsed dicts; tools-in-workflow; emitting routes from LLM output | A graph step is an `LlmAgent` and you need to compose its output cleanly |
 | routing-and-conditions | `Event(route=...)`, dict-syntax edges, `__DEFAULT__` fallback, cyclical edges with validation rules | Branching on a node's result, revision loops, or a state-machine-shaped flow |
+| classifier-routing | `ClassifierNode` with `Choice`/`Binary` questions, `LlmClassifier` / `TypesafeClassifier`, `threshold`, `answer_key`, build-time route checks | The branch is a judgment about the input (triage, urgency, intent) — replaces an LLM-labels-then-function-routes pair |
 | parallel-and-fanout | Tuple syntax for fan-out/fan-in, `JoinNode`, diamond patterns, parallel-state-write rules | Running nodes concurrently — especially when you also need to aggregate results |
 | dynamic-nodes | `ctx.run_node()` API, `rerun_on_resume=True`, deterministic naming for replay, mixing static + dynamic | The set of next steps depends on runtime data (data-driven fan-out, recursion) |
 
@@ -125,21 +128,54 @@ edges = [
 async def parent(ctx, node_input: str):
     result = await ctx.run_node(child_agent, node_input=node_input)
     return result
+
+# 9. Route on a typed classifier answer (experimental, 2.13+)
+from google.adk.labs.classifiers import Choice, ClassifierNode, LlmClassifier
+triage = ClassifierNode(
+    name="triage",
+    classifier=LlmClassifier(model=llm),
+    question=Choice(criteria={"billing": "Charges, refunds", "technical": "Bugs, outages"}),
+)
+edges = [('START', triage), (triage, {"billing": billing, "technical": tech})]
+
+# 10. Ask the user before a side-effecting node runs (2.12+)
+@node(require_confirmation=True)  # or a predicate over the node's args:
+                                  # lambda node_input: node_input["amount"] > 100
+def issue_refund(node_input: dict) -> dict:
+    ...
 ```
 
-## Migration from 1.x shortcut classes
+## Confirmation gates and stopping a run
 
-`SequentialAgent`, `LoopAgent`, and `ParallelAgent` still work in 2.0 — they are
-now thin wrappers that compile to the same graph machinery. Migrate to
-`Workflow` when:
+**`require_confirmation`** (2.12+) on `@node(...)` / `node(...)` pauses the
+workflow and asks the user to approve before the node runs — the same
+`RequestInput` pause an `LlmAgent` uses for tool confirmation. Pass `True`, or
+a predicate that receives the node's own arguments by name (plus `node_input`
+and `ctx` if it declares them) to confirm only some inputs.
+It turns on `rerun_on_resume=True` for you. Since 2.11, tool nodes whose tool
+asks for confirmation pause the same way instead of passing an error
+downstream. For the approval UX on the client side, see `adk-callbacks-hitl`.
 
-- You need to branch or route based on a step's result.
-- You need to fan out *and* aggregate (`ParallelAgent` alone has no join).
-- You're nesting two or more of the shortcut classes.
-- You want a plain Python step (`FunctionNode`) inline with LLM steps.
+**`abort_signal`** (2.11+): pass an `asyncio.Event` to
+`runner.run_async(..., abort_signal=sig)` and `sig.set()` to stop a run
+cleanly. The `Workflow` cancels its in-flight node tasks, dangling tool calls
+get synthetic responses so the session stays valid for the next turn, and the
+stream ends with an `INVOCATION_ABORTED` event instead of raising. Long tools
+and nodes can poll `ctx.is_aborted` to stop early. ADK's own `/run` and
+`/run_sse` (what a generated agent's `run_adk.py` serves via
+`get_fast_api_app`) already trip it when the HTTP client disconnects.
 
-Stay on the shortcut classes for trivially linear (3 steps, no routing) or
-trivially parallel (no aggregation) cases — they're one line and equivalent.
+## Migration from the deprecated shortcut classes
+
+`SequentialAgent`, `LoopAgent`, and `ParallelAgent` still run, but they are
+deprecated in favor of `Workflow` (a `DeprecationWarning` on construction) and
+will be removed in a future release. Write new pipelines as a `Workflow`, even
+trivially linear ones, and migrate existing ones — the step-by-step rewrite lives
+in the `workflow-migration.md` reference in `adk-task-delegation`.
+
+One thing a `Workflow` can't do yet: be an `LlmAgent` **sub-agent**
+(`sub_agents=[workflow]` fails validation). Give it to the coordinator as a
+**tool** instead — `LlmAgent(tools=[workflow])` wraps it in a `NodeTool`.
 
 ## Critical rules
 

@@ -92,3 +92,27 @@ class TestLitellmMasterKey(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLitellmProxyImage(unittest.TestCase):
+    """The proxy image must be pinned: litellm 1.107.0 was a compromised release."""
+
+    def test_scaffolded_proxy_image_is_pinned_by_digest(self):
+        tmpdir = tempfile.mkdtemp()
+        try:
+            result = scaffold_agent("agent-img", output_dir=tmpdir, with_litellm=True)
+            dockerfile = Path(result["path"]) / "agent_img" / "litellm" / "Dockerfile"
+            froms = [
+                ln.split()[1]
+                for ln in dockerfile.read_text().splitlines()
+                if ln.startswith("FROM ")
+            ]
+            self.assertEqual(len(froms), 1, froms)
+            image = froms[0]
+            match = re.fullmatch(
+                r"ghcr\.io/berriai/litellm:v(\d+\.\d+\.\d+)@sha256:[0-9a-f]{64}", image
+            )
+            self.assertIsNotNone(match, f"proxy image is not pinned by version and digest: {image}")
+            self.assertNotIn(match.group(1), {"1.82.7", "1.82.8", "1.107.0"})
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
