@@ -155,8 +155,9 @@ class HttpConfig:
     # Handler threads (open connections, SSE streams included) served at once;
     # further connections are refused with 503. Must be >= 1.
     max_connections: int = DEFAULT_MAX_CONNECTIONS
-    # Per principal (client_id + subject; a URL key is its client): sessions
-    # open and SSE streams (GET /mcp and GET /sse) held at once, so one caller
+    # Per principal (a signed-in user's subject across all their clients; else
+    # the client: client_credentials, URL keys -- see limit_key): sessions open
+    # and SSE streams (GET /mcp and GET /sse) held at once, so one caller
     # cannot take every global slot. Over either cap is 429. Must be >= 1.
     max_sessions_per_principal: int = DEFAULT_MAX_SESSIONS_PER_PRINCIPAL
     max_streams_per_principal: int = DEFAULT_MAX_STREAMS_PER_PRINCIPAL
@@ -318,6 +319,19 @@ class SessionFull(Exception):
     pass
 
 
+def limit_key(principal):
+    """What the per-principal caps count against: a signed-in user's subject
+    alone (one user who registers more clients through DCR gets no more
+    sessions or streams), else the client (client_credentials and URL keys,
+    whose subject is ``client:<client_id>``). None when auth is off."""
+    if principal is None:
+        return None
+    client_id, subject = principal
+    if not subject or subject == f"client:{client_id}":
+        return ("client", client_id)
+    return ("subject", subject)
+
+
 class PrincipalSessionsFull(Exception):
     """This principal already holds its share of sessions (the server may not be full)."""
 
@@ -373,8 +387,9 @@ class SessionStore:
             self._reap_locked()
             if len(self._sessions) >= self.max_sessions:
                 raise SessionFull()
-            if principal is not None and self.max_per_principal is not None and sum(
-                    s.principal == principal for s in self._sessions.values()
+            key = limit_key(principal)
+            if key is not None and self.max_per_principal is not None and sum(
+                    limit_key(s.principal) == key for s in self._sessions.values()
             ) >= self.max_per_principal:
                 raise PrincipalSessionsFull()
             session = Session(secrets.token_urlsafe(32), kind, principal)
@@ -1184,7 +1199,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _stream_slot(self, info: TokenInfo | None):
         """Hold one of the principal's SSE stream slots for the block, or 429.
         No cap with auth off (principal ``None``)."""
-        principal = self._principal(info)
+        principal = limit_key(self._principal(info))
         if principal is None:
             yield
             return

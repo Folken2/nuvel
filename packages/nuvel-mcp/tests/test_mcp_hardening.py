@@ -21,7 +21,11 @@ from _mcp_http_helpers import (
     TIMEOUT,
     Client,
     call,
+    dev_login,
+    exchange,
     isolate_env,
+    pkce,
+    register,
     make_hub,
     make_provider,
     read_frame,
@@ -140,6 +144,40 @@ def test_per_principal_stream_cap_covers_both_transports(launch):
         return again.status == 200
 
     assert eventually(reopened)
+
+
+def user_token_on(anon, client_id, username):
+    """Dev login as *username* on an existing public client -> access token."""
+    verifier, challenge = pkce()
+    query = dev_login(anon, client_id, challenge, username=username)
+    status, _, body = exchange(anon, client_id, query["code"], verifier)
+    assert status == 200, body
+    return body["access_token"]
+
+
+def test_one_user_across_two_clients_shares_one_allowance(launch):
+    # Registering more clients (DCR) must not buy a user more sessions/streams.
+    httpd = launch(max_sessions_per_principal=1, max_streams_per_principal=1)
+    anon = Client(httpd)
+    first, second = register(anon)[1]["client_id"], register(anon)[1]["client_id"]
+    alice_a = Client(httpd, user_token_on(anon, first, "alice"))
+    alice_b = Client(httpd, user_token_on(anon, second, "alice"))
+    bob_a = Client(httpd, user_token_on(anon, first, "bob"))
+    alice_a.initialize()
+    assert alice_b.post(INIT)[0] == 429
+    bob_a.initialize()  # another user on the same client: own allowance
+    httpd.sessions.close_all()
+    stream, resp = alice_a.open_stream("/sse")
+    try:
+        assert resp.status == 200
+        read_frame(resp)
+        other, resp2 = alice_b.open_stream("/sse")
+        try:
+            assert resp2.status == 429
+        finally:
+            other.close()
+    finally:
+        stream.close()
 
 
 def test_per_principal_caps_from_env(monkeypatch):
