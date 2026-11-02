@@ -73,7 +73,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from nuvel_mcp import oauth
+from nuvel_mcp import oauth, usage
 from nuvel_mcp.auth import current_principal
 from nuvel_mcp.clientip import client_ip, trust_forwarded_for
 from nuvel_mcp.oauth import (
@@ -307,6 +307,8 @@ class Session:
         # Held by the one GET /mcp stream allowed per streamable session, so a
         # single session cannot pin every connection slot with parallel streams.
         self.stream_lock = threading.Lock()
+        # The client app its initialize named (sanitized), for usage events.
+        self.client_info: dict = {}
 
     def touch(self) -> None:
         self.last_seen = time.monotonic()
@@ -1105,7 +1107,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     # --- dispatch -------------------------------------------------------------------
 
-    def _dispatch_all(self, messages, info: TokenInfo | None) -> list:
+    def _dispatch_all(self, messages, info: TokenInfo | None, session: Session) -> list:
         """Run each message through the shared dispatcher; collect responses.
 
         The caller's tenant is ``TokenInfo.tenant``: the ``client_id`` for a
@@ -1116,13 +1118,26 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         This is the only place the principal is set for HTTP: both POST /mcp
         and the legacy POST /messages route through here, and the ``finally``
         resets it even when dispatch raises, so a keep-alive connection's next
-        request never inherits it.
+        request never inherits it. The session's client app (and the caller's
+        country, never its address) are set the same way for usage events.
         """
         reset = current_principal.set(info.tenant if info else None)
+        reset_client = usage.current_session_client.set(session.client_info)
+        reset_country = usage.current_country.set(self._country())
         try:
             return self._dispatch_each(messages)
         finally:
+            usage.current_country.reset(reset_country)
+            usage.current_session_client.reset(reset_client)
             current_principal.reset(reset)
+
+    def _country(self) -> str | None:
+        """The caller's two-letter country when usage is recorded and a GeoIP
+        table is loaded; the address is looked up and dropped, never kept."""
+        lookup = self.server.mcp.country_lookup
+        if lookup is None or self.server.mcp.usage is None:
+            return None
+        return lookup(client_ip(self.headers, self.client_address[0], trust_forwarded_for()))
 
     def _dispatch_each(self, messages) -> list:
         responses = []
@@ -1381,7 +1396,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             session = self._session_or_404(self.headers.get(SESSION_HEADER), "streamable", info)
 
         try:
-            responses = self._dispatch_all(messages, info)
+            responses = self._dispatch_all(messages, info, session)
         except BaseException:
             if is_init:
                 self.server.sessions.terminate(session.id)
@@ -1440,7 +1455,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         session = self._session_or_404(self._query().get("sessionId"), "legacy", info)
         messages, _ = self._parse_jsonrpc(self._read_body())
         self._check_scopes(info, messages)
-        for response in self._dispatch_all(messages, info):
+        for response in self._dispatch_all(messages, info, session):
             session.send(response)
         self._send(HTTPStatus.ACCEPTED)
 
