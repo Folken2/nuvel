@@ -457,6 +457,43 @@ def test_forwarded_for_is_ignored_unless_trusted(launch):
         stream.close()
 
 
+def test_client_ip_reads_every_x_forwarded_for_line():
+    # A caller's own XFF line comes first; the proxy appends its entry as a
+    # separate line. The right-most entry across all lines must win.
+    from email.message import Message
+
+    from nuvel_mcp.clientip import client_ip
+
+    headers = Message()
+    headers["X-Forwarded-For"] = "203.0.113.5"  # forged by the caller
+    headers["X-Forwarded-For"] = "198.51.100.7, not-an-ip"  # appended by the proxy
+    assert client_ip(headers, "10.0.0.1", True) == "198.51.100.7"
+    assert client_ip(headers, "10.0.0.1", False) == "10.0.0.1"
+    # Plain dicts (no get_all) still work.
+    assert client_ip({"X-Forwarded-For": "203.0.113.5, 198.51.100.7"}, "10.0.0.1",
+                     True) == "198.51.100.7"
+
+
+def test_two_forwarded_for_lines_over_http_use_the_proxys(launch, store_path):
+    import socket
+    httpd = launch(make_provider(store_path, register_limit=1), trust_forwarded_for=True)
+    host, port = httpd.server_address[:2]
+    body = json.dumps({"client_name": "x", "redirect_uris": ["http://127.0.0.1:1/cb"],
+                       "token_endpoint_auth_method": "none"}).encode()
+
+    def reg(forged, real):
+        with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
+            sock.sendall((f"POST /register HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                          "Content-Type: application/json\r\nConnection: close\r\n"
+                          f"X-Forwarded-For: {forged}\r\nX-Forwarded-For: {real}\r\n"
+                          f"Content-Length: {len(body)}\r\n\r\n").encode() + body)
+            return _recv_all(sock).split(b" ", 2)[1]
+
+    assert reg("203.0.113.5", "198.51.100.7") == b"201"
+    # Rotating the forged line does not buy a new bucket.
+    assert reg("203.0.113.99", "198.51.100.7") == b"429"
+
+
 def test_register_rate_limit_keys_on_the_forwarded_client_ip(launch, store_path):
     httpd = launch(make_provider(store_path, register_limit=1), trust_forwarded_for=True)
     anon = Client(httpd)
