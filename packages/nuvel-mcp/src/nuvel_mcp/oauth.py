@@ -91,6 +91,9 @@ FORBIDDEN = -32004
 _PKCE_VERIFIER = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
 _PKCE_CHALLENGE = re.compile(r"[A-Za-z0-9\-_]{43}")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+# C0, DEL and C1 controls: refused in display fields a registrant chooses.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+MAX_CLIENT_NAME = 100
 _TABLES = ("clients", "codes", "access_tokens", "refresh_tokens", "url_keys")
 
 URL_KEY_PREFIX = "nvuk_"
@@ -531,6 +534,9 @@ class OAuthProvider:
         if (not isinstance(uris, list) or not uris
                 or not all(isinstance(u, str) and u for u in uris)):
             raise OAuthError("invalid_redirect_uri", "redirect_uris must be a non-empty list")
+        if any(_CONTROL_CHARS.search(u) for u in uris):
+            raise OAuthError("invalid_redirect_uri", "redirect_uris must not contain "
+                                                     "control characters")
         for uri in uris:
             if not (_is_dcr_loopback(uri) or uri in self.config.redirect_allowlist):
                 raise OAuthError(
@@ -553,8 +559,13 @@ class OAuthProvider:
         if response_types != ["code"]:
             raise OAuthError("invalid_client_metadata", "response_types must be [\"code\"]")
         name = metadata.get("client_name", "")
-        if not isinstance(name, str) or len(name) > 200:
-            raise OAuthError("invalid_client_metadata", "client_name must be a short string")
+        # Anyone can register, and operators read these names in a terminal
+        # (client list, usage reports): no ANSI escapes or other controls.
+        if (not isinstance(name, str) or len(name) > MAX_CLIENT_NAME
+                or _CONTROL_CHARS.search(name)):
+            raise OAuthError("invalid_client_metadata",
+                             f"client_name must be at most {MAX_CLIENT_NAME} characters "
+                             "with no control characters")
         with self.store.transaction() as data:
             record, secret = self._new_client(
                 data, name=name, redirect_uris=list(uris), auth_method=method,

@@ -347,6 +347,28 @@ def test_per_ip_settings_from_env(monkeypatch):
     assert cfg.max_connections_per_ip == 5 and cfg.trust_forwarded_for is True
 
 
+# --- DCR: stored display fields carry no control characters -------------------------------
+
+
+@pytest.mark.parametrize("name", ["\x1b[31mops\x1b[0m", "a\nb", "tab\there", "del\x7f",
+                                  "c1\x85", "csi\x9b31m", "a" * 101])
+def test_register_rejects_control_characters_and_long_names(launch, name):
+    status, body = register(Client(launch()), client_name=name)
+    assert status == 400 and body["error"] == "invalid_client_metadata"
+
+
+def test_register_rejects_control_characters_in_redirect_uris(launch):
+    status, body = register(Client(launch()),
+                            redirect_uris=["http://127.0.0.1:1/cb\x1b[2J"])
+    assert status == 400 and body["error"] in ("invalid_redirect_uri",
+                                               "invalid_client_metadata")
+
+
+def test_register_accepts_a_plain_unicode_name_up_to_the_cap(launch):
+    status, body = register(Client(launch()), client_name="Clàude Désktop " + "a" * 85)
+    assert status == 201 and len(body["client_name"]) == 100
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 
