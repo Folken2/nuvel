@@ -161,6 +161,12 @@ def add_oauth_commands(subparsers: argparse._SubParsersAction) -> None:
     p_create.add_argument("--expires-in", type=float, default=None, metavar="DAYS",
                           help="With --url-key: the key stops working after DAYS days "
                                "(fractions allowed). Default: until revoked.")
+    p_create.add_argument("--person", default=None,
+                          help="Who uses this client; saved as with `clients label` "
+                               "(needs $NUVEL_MCP_DATABASE_URL).")
+    p_create.add_argument("--company", default=None,
+                          help="Their company; saved as with `clients label` "
+                               "(needs $NUVEL_MCP_DATABASE_URL).")
     p_create.set_defaults(func=_cmd_client_create)
     p_list = client_sub.add_parser("list", help="List registered clients (no secrets).")
     p_list.add_argument("--json", action="store_true", help="Print JSON.")
@@ -521,10 +527,44 @@ def _store_errors(func):
     return wrapper
 
 
+def _new_client_profile(args: argparse.Namespace) -> tuple[dict, str | None]:
+    """The ``--person``/``--company`` of ``client create`` and an error if they
+    can't be saved, checked before any client is created."""
+    from nuvel_mcp.db import DatabaseSettings
+    from nuvel_mcp.insights import validate_profile_fields
+
+    fields = {name: value.strip() for name in ("person", "company")
+              if (value := getattr(args, name)) is not None and value.strip()}
+    if not fields:
+        return {}, None
+    error = validate_profile_fields(fields)
+    if error:
+        return fields, error
+    try:
+        configured = DatabaseSettings.from_env() is not None
+    except ValueError:
+        configured = True  # _provider() reports the bad setting
+    if not configured:
+        return fields, ("--person and --company are saved in the database, and "
+                        "NUVEL_MCP_DATABASE_URL is not set")
+    return fields, None
+
+
+def _label_new_client(client_id: str, fields: dict) -> None:
+    from nuvel_mcp.insights import label_client
+
+    if fields and _COMMAND_DATABASES:
+        label_client(_COMMAND_DATABASES[-1], client_id, fields)
+
+
 @_store_errors
 def _cmd_client_create(args: argparse.Namespace) -> int:
+    profile, error = _new_client_profile(args)
+    if error:
+        print(f"Error: {error}.", file=sys.stderr)
+        return 2
     if args.url_key:
-        return _create_url_key_client(args)
+        return _create_url_key_client(args, profile)
     if args.expires_in is not None:
         print("Error: --expires-in applies to --url-key only.", file=sys.stderr)
         return 2
@@ -534,6 +574,7 @@ def _cmd_client_create(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+    _label_new_client(record["client_id"], profile)
     print(json.dumps({
         "client_id": record["client_id"],
         "client_secret": secret,
@@ -547,7 +588,7 @@ def _cmd_client_create(args: argparse.Namespace) -> int:
     return 0
 
 
-def _create_url_key_client(args: argparse.Namespace) -> int:
+def _create_url_key_client(args: argparse.Namespace, profile: dict) -> int:
     from nuvel_mcp.oauth import URL_KEY_PATH, public_url_from_env
 
     if args.redirect_uri:
@@ -566,6 +607,7 @@ def _create_url_key_client(args: argparse.Namespace) -> int:
     provider = _provider()
     record, key = provider.create_client(
         args.name, url_key=True, expires_in=None if days is None else days * 86400)
+    _label_new_client(record["client_id"], profile)
     output = {
         "client_id": record["client_id"],
         "client_name": record["client_name"],

@@ -114,3 +114,27 @@ def test_db_status_counts_profiles(db_env, capsys):
     capsys.readouterr()
     assert main(["db", "status", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["rows"]["client_profiles"] == 1
+
+
+def test_create_labels_the_new_client(db_env, capsys):
+    assert main(["client", "create", "--name", "Oriol (System Action)", "--url-key",
+                 "--person", "Oriol Mayor", "--company", "System Action"]) == 0
+    client_id = json.loads(capsys.readouterr().out)["client_id"]
+    assert main(["clients", "list", "--json"]) == 0
+    (row,) = json.loads(capsys.readouterr().out)
+    assert (row["client_id"], row["person"], row["company"]) == (
+        client_id, "Oriol Mayor", "System Action")
+
+
+def test_create_with_a_label_needs_a_database_and_creates_nothing(capsys):
+    assert main(["client", "create", "--name", "x", "--url-key", "--company", "Acme"]) == 2
+    assert "NUVEL_MCP_DATABASE_URL" in capsys.readouterr().err
+    assert main(["client", "list"]) == 0
+    assert "No clients registered" in capsys.readouterr().out
+
+
+def test_create_rejects_a_bad_label_before_creating(db_env, capsys):
+    assert main(["client", "create", "--name", "x", "--company", "x" * 201]) == 2
+    assert "--company" in capsys.readouterr().err
+    assert main(["clients", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []

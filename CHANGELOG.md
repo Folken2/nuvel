@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
+- `nuvel-mcp client create --person <name> --company <name>` saves who is behind the new client in the same step (as `clients label` does; needs the database). A bad value or a missing database stops before any client is created.
 - Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.
 - `--tools A,B` allow-list of tool names to expose.
 - `nuvel-mcp` usage insights (Postgres only): usage events record the session's client app (`initialize` `clientInfo` name/version and protocol version, sanitized) and, with `NUVEL_MCP_GEOIP_CSV` (DB-IP country CSV, off with `NUVEL_MCP_RECORD_COUNTRY=0`), the caller's country; never an IP address or tool arguments. New `client_profiles` table with `nuvel-mcp clients label|list`, and `nuvel-mcp report [--days 7] [--json]`.
