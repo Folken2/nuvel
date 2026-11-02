@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - litellm is capped below 1.106.3 in the root, template and sample-agent requirements (was `<2.0.0`). litellm 1.107.0 was a compromised release; google-adk 2.13 applies the same cap to its own extras. Raise it only after checking the new release is clean.
+- The `--with-litellm` proxy image is pinned to `ghcr.io/berriai/litellm:v1.106.2` by tag and digest (was the floating `main-latest`, which would have pulled the compromised 1.107.0 build).
 
 ## [0.4.0] - 2026-10-18
 
