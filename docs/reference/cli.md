@@ -293,7 +293,12 @@ nuvel-mcp client create --name NAME [--redirect-uri URI ...]
 nuvel-mcp client list [--json]
 nuvel-mcp client delete CLIENT_ID
 nuvel-mcp token revoke TOKEN_OR_CLIENT_ID
+nuvel-mcp clients label CLIENT_ID [--person P] [--company C] [--notes N]
+nuvel-mcp clients list [--json]
+nuvel-mcp report [--days 7] [--json]
 ```
+
+`clients` and `report` need `NUVEL_MCP_DATABASE_URL`: `clients label` records who is behind an OAuth client id (an empty value clears a field), `clients list` shows each client id with its label, last usage and events in the last 30 days, and `report` prints the usage report (clients, calls, tools, errors, latency, client apps, countries, skill runs, recipe adoption). What the usage log holds is listed in [Usage insights](../how-to/deploy-skills-mcp.md#usage-insights-what-is-collected).
 
 | Flag | Description |
 |---|---|
