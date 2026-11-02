@@ -504,9 +504,26 @@ class _DeadlineReader:
         self._idle = idle
         self._buf = bytearray()
         self._deadline = math.inf
+        self._first_byte_window: float | None = None
+        # When the current request's first byte arrived (None while idle).
+        self.first_byte_at: float | None = None
 
-    def arm(self, seconds: float) -> None:
-        self._deadline = time.monotonic() + seconds
+    def arm(self, seconds: float, first_byte_window: float | None = None) -> None:
+        """Deadline ``seconds`` from now; with ``first_byte_window``, also at
+        most that long after the request's first byte arrives, so idle time
+        before a request does not count against the shorter window."""
+        now = time.monotonic()
+        self._deadline = now + seconds
+        self._first_byte_window = first_byte_window
+        self.first_byte_at = None
+        if self._buf:  # pipelined bytes already here: the request has begun
+            self._first_byte(now)
+
+    def _first_byte(self, now: float) -> None:
+        self.first_byte_at = now
+        if self._first_byte_window is not None:
+            self._deadline = min(self._deadline, now + self._first_byte_window)
+            self._first_byte_window = None
 
     def _fill(self) -> bool:
         remaining = self._deadline - time.monotonic()
@@ -521,6 +538,8 @@ class _DeadlineReader:
             data = b""
         finally:
             self._sock.settimeout(self._idle)
+        if data and self.first_byte_at is None:
+            self._first_byte(time.monotonic())
         self._buf += data
         return bool(data)
 
@@ -728,12 +747,14 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         # connection counts too). Expiry closes the connection quietly; a body
         # that outlives it gets 408 in _read_body.
         config = self.server.config
-        self._request_started = time.monotonic()
         if config.trust_forwarded_for:
             # Behind a proxy the headers name the caller (X-Forwarded-For);
             # until they arrive the connection counts against no per-IP share,
-            # so it gets only the short header deadline (see parse_request).
-            self.rfile.arm(min(config.header_deadline, config.request_deadline))
+            # so once a request starts it gets only the short header deadline
+            # (see parse_request). Idle keep-alive time before that is not
+            # counted: the proxy pools upstream connections, and closing idle
+            # ones early would race its reuse (502s).
+            self.rfile.arm(config.request_deadline, first_byte_window=config.header_deadline)
         else:
             self.rfile.arm(config.request_deadline)
         super().handle_one_request()
@@ -747,10 +768,13 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             return super().parse_request()
         finally:
             self.rfile = tap._fp
-            if self.server.config.trust_forwarded_for:
-                # Identified now: the body gets what is left of the request deadline.
+            started = self.rfile.first_byte_at
+            if self.server.config.trust_forwarded_for and started is not None:
+                # Identified now: the body gets what is left of the request
+                # deadline, counted from the request's first byte.
                 self.rfile.arm(self.server.config.request_deadline
-                               - (time.monotonic() - self._request_started))
+                               - (time.monotonic() - started))
+                self.rfile.first_byte_at = started
 
     def handle_expect_100(self) -> bool:
         # The stdlib would send "100 Continue" here, inside parse_request, before

@@ -301,11 +301,12 @@ def test_behind_a_proxy_unidentified_connections_get_a_short_header_deadline(lau
     import socket
     httpd = launch(trust_forwarded_for=True, header_deadline=0.5, request_deadline=5.0,
                    read_timeout=5.0)
-    with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
-        started = time.monotonic()
-        sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n")  # never finished
-        assert _recv_all(sock) == b""  # closed quietly
-        assert time.monotonic() - started < 2.5
+    for partial in (b"GET /healthz HTTP/1.1\r\nHost: x\r\n", b"GET /hea"):  # never finished
+        with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+            started = time.monotonic()
+            sock.sendall(partial)
+            assert _recv_all(sock) == b""  # closed quietly
+            assert time.monotonic() - started < 2.5
     # Once identified, the body still gets the full request deadline.
     alice = authed(httpd)
     body = json.dumps(INIT).encode()
@@ -318,6 +319,30 @@ def test_behind_a_proxy_unidentified_connections_get_a_short_header_deadline(lau
         time.sleep(1.0)  # past the header deadline, well inside the request one
         sock.sendall(body)
         assert _recv_all(sock).startswith(b"HTTP/1.1 200")
+
+
+def test_behind_a_proxy_idle_keep_alive_outlives_the_header_deadline(launch):
+    # The proxy pools upstream connections: an idle one must last the usual
+    # read_timeout, not the short header deadline, or the pool races our close.
+    import http.client
+    httpd = launch(trust_forwarded_for=True, header_deadline=0.3, request_deadline=5.0,
+                   read_timeout=5.0)
+    host, port = httpd.server_address[:2]
+    conn = http.client.HTTPConnection(host, port, timeout=TIMEOUT)
+    try:
+        conn.request("GET", "/healthz")
+        first = conn.getresponse()
+        first.read()
+        assert first.status == 200 and not first.will_close
+        sock = conn.sock
+        time.sleep(1.0)  # idle well past header_deadline
+        conn.request("GET", "/healthz")
+        second = conn.getresponse()
+        second.read()
+        assert second.status == 200
+        assert conn.sock is sock  # the same connection served both
+    finally:
+        conn.close()
 
 
 def test_header_deadline_from_env(monkeypatch):
