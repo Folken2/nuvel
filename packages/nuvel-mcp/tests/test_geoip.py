@@ -108,9 +108,9 @@ class _Recorder:
 def serve():
     started = []
 
-    def factory(mcp):
-        httpd = make_server(mcp, "127.0.0.1", 0, HttpConfig(ping_interval=0.2), None,
-                            no_auth=True)
+    def factory(mcp, trust_forwarded_for=False):
+        config = HttpConfig(ping_interval=0.2, trust_forwarded_for=trust_forwarded_for)
+        httpd = make_server(mcp, "127.0.0.1", 0, config, None, no_auth=True)
         thread = threading.Thread(target=httpd.serve_forever, args=(0.05,), daemon=True)
         thread.start()
         started.append((httpd, thread))
@@ -123,11 +123,11 @@ def serve():
         thread.join(TIMEOUT)
 
 
-def _session_events(serve, tmp_path, csv_path, headers=None, with_usage=True):
+def _session_events(serve, tmp_path, csv_path, headers=None, with_usage=True, trust=False):
     usage = _Recorder() if with_usage else None
     mcp = SkillsMCPServer(SkillsLoader.from_base(make_hub(tmp_path)), usage=usage)
     mcp.country_lookup = CountryTable.load(csv_path)
-    client = Client(serve(mcp))
+    client = Client(serve(mcp, trust_forwarded_for=trust))
     _, h, _ = client.post(INIT, headers=headers)
     client.post(call("list_themes", {}), h["Mcp-Session-Id"], headers=headers)
     return usage.events if usage else []
@@ -139,11 +139,11 @@ def test_country_from_the_peer(serve, tmp_path, csv_path):
     assert "127.0.0.1" not in json.dumps(events, default=str)
 
 
-def test_forwarded_for_only_when_trusted(serve, tmp_path, csv_path, monkeypatch):
+def test_forwarded_for_only_when_trusted(serve, tmp_path, csv_path):
+    # Trust comes from the transport's HttpConfig (NUVEL_MCP_TRUST_FORWARDED_FOR at startup).
     xff = {"X-Forwarded-For": "2001:200::7, 5.4.3.2"}
     assert {e["country"] for e in _session_events(serve, tmp_path / "a", csv_path, xff)} == {"ES"}
-    monkeypatch.setenv("NUVEL_MCP_TRUST_FORWARDED_FOR", "1")
-    events = _session_events(serve, tmp_path / "b", csv_path, xff)
+    events = _session_events(serve, tmp_path / "b", csv_path, xff, trust=True)
     assert {e["country"] for e in events} == {"DE"}  # the right-most entry
     dumped = json.dumps(events, default=str)
     assert "5.4.3.2" not in dumped and "2001:200" not in dumped
