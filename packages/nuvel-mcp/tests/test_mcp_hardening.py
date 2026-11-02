@@ -505,6 +505,65 @@ def test_dockerfile_does_not_trust_forwarded_for_by_default():
     assert "NUVEL_MCP_TRUST_FORWARDED_FOR" not in " ".join(_dockerfile_instructions())
 
 
+# --- (7a) interactive logins get a tenant per (client, subject) -----------------------------
+
+
+def _trace():
+    import uuid
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent / "fixtures" / "skill_run_example.json")
+                      .read_text())
+    data["run_id"] = str(uuid.uuid4())
+    data["started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return data
+
+
+def _rpc(client, message):
+    session = client.initialize()
+    status, _, data = client.post(message, session)
+    assert status == 200, data
+    body = json.loads(data)
+    assert "result" in body, body
+    return json.loads(body["result"]["content"][0]["text"])
+
+
+def _health(client):
+    return _rpc(client, call("check_skill_health",
+                             {"skill_name": "radar", "plugin": "chief-of-staff"}))
+
+
+def test_two_users_on_one_client_get_separate_tenants(launch):
+    from nuvel_mcp.oauth import tenant_for
+
+    httpd = launch()
+    anon = Client(httpd)
+    shared = register(anon)[1]["client_id"]
+    alice = Client(httpd, user_token_on(anon, shared, "alice"))
+    mallory = Client(httpd, user_token_on(anon, shared, "mallory"))
+    a_info = httpd.oauth.validate(alice.token, None)
+    m_info = httpd.oauth.validate(mallory.token, None)
+    assert a_info.client_id == m_info.client_id == shared
+    assert a_info.tenant != m_info.tenant
+    assert a_info.tenant == tenant_for(shared, "dev:alice")
+    assert a_info.tenant.startswith(shared + ":") and "alice" not in a_info.tenant
+
+    assert _rpc(alice, call("record_run_trace", {"trace": _trace()}))["status"] == "recorded"
+    assert _health(alice)["runs"]["total"] == 1
+    # Same client_id, another user: none of alice's runs.
+    assert _health(mallory)["runs"]["total"] == 0
+
+
+def test_service_and_url_key_tenants_stay_the_client_id(launch):
+    httpd = launch()
+    token = service_token(httpd)
+    info = httpd.oauth.validate(token, None)
+    assert info.tenant == info.client_id
+    record, key = httpd.oauth.create_client("tester", url_key=True)
+    assert httpd.oauth.validate_url_key(key).tenant == record["client_id"]
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 

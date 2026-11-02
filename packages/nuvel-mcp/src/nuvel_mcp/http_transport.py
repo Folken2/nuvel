@@ -43,8 +43,10 @@ Every server built here runs its dispatcher in remote mode
 (``SkillsMCPServer.enable_remote_mode``): nothing read from the feedback store
 is served, and without an explicit ``tools`` allow-list only
 ``HTTP_DEFAULT_TOOLS`` are exposed. Each authenticated dispatch runs with
-``nuvel_mcp.auth.current_principal`` set to the token's ``client_id``, the
-tenant that run traces are stamped and scoped with (``None`` with no auth).
+``nuvel_mcp.auth.current_principal`` set to the token's tenant
+(``TokenInfo.tenant``: the ``client_id``, plus a hash of the user for an
+interactive login), which run traces are stamped and scoped with (``None``
+with no auth).
 
 Diagnostics go to stderr; request bodies, query strings, URL keys, tokens and
 codes are never logged.
@@ -336,7 +338,7 @@ def limit_key(principal):
     client_id, subject = principal
     if not subject or subject == f"client:{client_id}":
         return ("client", client_id)
-    return ("subject", subject)
+    return ("subject", oauth.subject_identity(subject))
 
 
 class PrincipalSessionsFull(Exception):
@@ -996,15 +998,17 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _dispatch_all(self, messages, info: TokenInfo | None) -> list:
         """Run each message through the shared dispatcher; collect responses.
 
-        The caller's tenant is the token's ``client_id`` (never its subject, a
-        person's login); ``None`` when auth is off. Dispatch is synchronous on
+        The caller's tenant is ``TokenInfo.tenant``: the ``client_id`` for a
+        client acting as itself (client_credentials, URL keys), the client_id
+        plus a hash of the user for an interactive login (never the subject,
+        a person's login, itself); ``None`` when auth is off. Dispatch is synchronous on
         this thread, so the tool handlers see it via ``current_principal``.
         This is the only place the principal is set for HTTP: both POST /mcp
         and the legacy POST /messages route through here, and the ``finally``
         resets it even when dispatch raises, so a keep-alive connection's next
         request never inherits it.
         """
-        reset = current_principal.set(info.client_id if info else None)
+        reset = current_principal.set(info.tenant if info else None)
         try:
             return self._dispatch_each(messages)
         finally:

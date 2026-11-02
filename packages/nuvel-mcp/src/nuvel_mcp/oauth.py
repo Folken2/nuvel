@@ -154,6 +154,35 @@ def _find(table: dict, digest: str):
     return match
 
 
+def subject_identity(subject: str) -> str:
+    """The stable part of a token subject: a GitHub user by numeric id
+    (``github:<login>:<id>`` -> ``github:#<id>``), since a login can be renamed
+    or recycled; any other subject as is."""
+    idp, _, rest = subject.partition(":")
+    if idp == "github":
+        _, sep, gh_id = rest.rpartition(":")
+        if sep and gh_id.isdigit():
+            return f"github:#{gh_id}"
+    return subject
+
+
+def tenant_for(client_id: str, subject: str) -> str:
+    """The tenant a principal's run traces are stamped and scoped with.
+
+    A client acting as itself (client_credentials and URL keys: subject
+    ``client:<client_id>``) is its ``client_id``, as it always was, so existing
+    data stays in its tenant. A signed-in user is ``<client_id>:<16 hex>`` from
+    a hash of their identity: public clients are open to anyone allowed to log
+    in (a loopback redirect accepts any port), so the client_id alone would let
+    one user mint a token for another's client and read that tenant. The
+    subject (a person's login) itself never appears in the tenant.
+    """
+    if not subject or subject == f"client:{client_id}":
+        return client_id
+    digest = hashlib.sha256(subject_identity(subject).encode("utf-8")).hexdigest()
+    return f"{client_id}:{digest[:16]}"
+
+
 def _split_env(name: str) -> list[str]:
     return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
 
@@ -448,6 +477,10 @@ class TokenInfo:
     @property
     def principal(self) -> tuple[str, str]:
         return (self.client_id, self.subject)
+
+    @property
+    def tenant(self) -> str:
+        return tenant_for(self.client_id, self.subject)
 
 
 class OAuthProvider:

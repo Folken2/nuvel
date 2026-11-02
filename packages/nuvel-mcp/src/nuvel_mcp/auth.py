@@ -3,7 +3,8 @@
 ``current_principal`` holds the tenant of the caller handling the current tool
 call; ``None`` means an unauthenticated local session (stdio, or HTTP with
 ``--no-auth``). :mod:`nuvel_mcp.http_transport` sets it to the OAuth token's
-``client_id`` for the duration of a request; ``record_run_trace`` stamps
+tenant (:func:`nuvel_mcp.oauth.tenant_for`: the ``client_id``, plus a hash of
+the user for an interactive login) for the duration of a request; ``record_run_trace`` stamps
 ``tenant`` with it and ``check_skill_health`` scopes by it. Authentication
 itself lives in :mod:`nuvel_mcp.oauth`.
 """

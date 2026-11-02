@@ -358,11 +358,16 @@ free text). `get_skill` leaves out its `health` report, and `check_skill_health`
 requires `plugin` and returns only `{"skill", "plugin", "runs"}`: the run-trace
 summary for the caller's own tenant.
 
-**Tenant is the OAuth `client_id`.** For each authenticated request, the token's
-`client_id` is the caller's tenant: it is stamped on every trace it records and
-scopes what `check_skill_health` returns, so two clients never see each other's
-runs. It is never the `subject` (a person's GitHub login). Use one client per
-tenant, which is what `client create` is for.
+**Tenant is the OAuth `client_id`.** For each authenticated request, the caller
+has a tenant: it is stamped on every trace it records and scopes what
+`check_skill_health` returns, so two tenants never see each other's runs. For a
+client acting as itself (`client_credentials`, URL keys) the tenant is its
+`client_id`. For a person who signed in interactively it is the `client_id`
+followed by `:` and 16 hex characters derived from who they are (their GitHub
+numeric id, or their dev-login name), so two people using the same public
+client never share a tenant, even though anyone allowed to log in can use any
+registered public client. It never contains the `subject` (a person's GitHub
+login) itself. Use one client per tenant, which is what `client create` is for.
 
 ## Request limits
 

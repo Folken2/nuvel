@@ -1060,7 +1060,7 @@ def test_dispatch_resets_the_principal_after_a_handler_raises():
         raise RuntimeError("handler failed")
 
     fake = SimpleNamespace(_dispatch_each=boom)
-    info = SimpleNamespace(client_id="tenant-a")
+    info = SimpleNamespace(tenant="tenant-a")
     assert current_principal.get() is None
     with pytest.raises(RuntimeError):
         McpRequestHandler._dispatch_all(fake, [{}], info)
