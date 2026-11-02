@@ -1,7 +1,8 @@
-"""Command line for the Skills MCP server: ``nuvel-mcp serve|client|token|db``.
+"""Command line for the Skills MCP server:
+``nuvel-mcp serve|client|token|db|clients|report``.
 
-``add_serve_arguments`` / ``run_serve``, ``add_oauth_commands`` and
-``add_db_commands`` are shared
+``add_serve_arguments`` / ``run_serve``, ``add_oauth_commands``,
+``add_db_commands`` and ``add_insight_commands`` are shared
 with ``nuvel mcp …`` so both entry points expose identical flags and commands.
 ``--transport http`` runs the stdlib transport in :mod:`nuvel_mcp.http_transport`
 (OAuth 2.1 via :mod:`nuvel_mcp.oauth`); stdio stays the default.
@@ -730,7 +731,8 @@ def _cmd_db_import(args: argparse.Namespace, db) -> int:
 
 
 def add_insight_commands(subparsers: argparse._SubParsersAction) -> None:
-    """``clients label|list``: who is behind each OAuth client, from the database."""
+    """``clients label|list`` (who is behind each OAuth client) and ``report``
+    (the usage report), from the database."""
     p_clients = subparsers.add_parser(
         "clients", help="Label OAuth clients with who uses them and list them with "
                         "their recent usage (needs $NUVEL_MCP_DATABASE_URL).")
@@ -748,6 +750,14 @@ def add_insight_commands(subparsers: argparse._SubParsersAction) -> None:
                      "in the last 30 days.")
     p_list.add_argument("--json", action="store_true", help="Print JSON.")
     p_list.set_defaults(func=_cmd_clients_list)
+
+    p_report = subparsers.add_parser(
+        "report", help="Usage report from the database: active clients, calls, tools, "
+                       "errors, latency, client apps, countries, skill runs and recipes.")
+    p_report.add_argument("--days", type=int, default=7,
+                          help="Window in days, ending now (default 7).")
+    p_report.add_argument("--json", action="store_true", help="Print JSON.")
+    p_report.set_defaults(func=_cmd_report)
 
 
 @_database_command
@@ -790,9 +800,26 @@ def _cmd_clients_list(args: argparse.Namespace, db) -> int:
 
 
 def _clip(value, width: int = 24):
+    from nuvel_mcp.insights import printable
+
     if value is None:
         return None
+    value = printable(value)  # format_table strips again; clip what is shown
     return value if len(value) <= width else value[:width - 1] + "…"
+
+
+@_database_command
+def _cmd_report(args: argparse.Namespace, db) -> int:
+    from nuvel_mcp.insights import build_report, format_report
+    from nuvel_mcp.server import FEEDBACK_TOOLS, HUB_TOOLS
+
+    if not 1 <= args.days <= 366:
+        print("Error: --days must be between 1 and 366.", file=sys.stderr)
+        return 2
+    db.migrate()
+    report = build_report(db, args.days, HUB_TOOLS | FEEDBACK_TOOLS)
+    print(json.dumps(report, indent=2) if args.json else format_report(report))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -43,7 +43,7 @@ def test_nuvel_mcp_and_nuvel_cli_share_flags_and_commands():
     mcp_serve.register(root.add_subparsers())
     nuvel_mcp_tree = _subcommands(root)["mcp"]
 
-    assert set(_subcommands(nuvel_mcp_tree)) == {"serve", "client", "token", "db", "clients"}
+    assert set(_subcommands(nuvel_mcp_tree)) == {"serve", "client", "token", "db", "clients", "report"}
     assert _surface(standalone) == _surface(nuvel_mcp_tree)
     serve_flags = {f for _, opts, _ in _surface(standalone) if isinstance(opts, tuple) for f in opts}
     assert {"--transport", "--host", "--port", "--allow-remote", "--no-auth",
