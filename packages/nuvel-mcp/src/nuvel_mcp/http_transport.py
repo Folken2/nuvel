@@ -109,9 +109,6 @@ DEFAULT_MAX_CONNECTIONS = 128
 DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 8
 DEFAULT_MAX_STREAMS_PER_PRINCIPAL = 4
 DEFAULT_MAX_CONNECTIONS_PER_IP = 16
-# Retry-After on a per-caller 429: a slot frees when the caller ends a session
-# or stream, which the server cannot predict; a few seconds avoids a hot loop.
-PER_CALLER_RETRY_AFTER = 5
 CORS_MAX_AGE = 600
 
 SESSION_HEADER = "Mcp-Session-Id"
@@ -166,7 +163,8 @@ class HttpConfig:
     # Per principal (a signed-in user's subject across all their clients; else
     # the client: client_credentials, URL keys -- see limit_key): sessions open
     # and SSE streams (GET /mcp and GET /sse) held at once, so one caller
-    # cannot take every global slot. Over either cap is 429. Must be >= 1.
+    # cannot take every global slot. Past either cap the caller's own least
+    # recently used session / oldest stream gives way. Must be >= 1.
     max_sessions_per_principal: int = DEFAULT_MAX_SESSIONS_PER_PRINCIPAL
     max_streams_per_principal: int = DEFAULT_MAX_STREAMS_PER_PRINCIPAL
     # Per caller IP (see trust_forwarded_for): connections held at once,
@@ -341,8 +339,49 @@ def limit_key(principal):
     return ("subject", oauth.subject_identity(subject))
 
 
-class PrincipalSessionsFull(Exception):
-    """This principal already holds its share of sessions (the server may not be full)."""
+class _Displaced:
+    """Outbox sentinel: end the stream holding ``token`` (a newer stream of the
+    same principal took its slot). Any other stream on the session skips it,
+    so a sentinel left behind by a stream that already ended is harmless."""
+
+    def __init__(self, token):
+        self.token = token
+
+
+class StreamSlots:
+    """Open SSE streams per principal, at most ``limit`` each.
+
+    A new stream past the cap displaces that principal's oldest one instead
+    of being refused: behind a proxy a client that went away can leave its
+    stream half-open for minutes, and refusing would lock the client out of
+    its own reconnect.
+    """
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self._open: dict = {}  # key -> {token: session}, oldest first
+        self._lock = threading.Lock()
+
+    def open(self, key, session: Session) -> object:
+        token = object()
+        with self._lock:
+            streams = self._open.setdefault(key, {})
+            displaced = []
+            while len(streams) >= self.limit:
+                oldest = next(iter(streams))
+                displaced.append((oldest, streams.pop(oldest)))
+            streams[token] = session
+        for old_token, old_session in displaced:
+            old_session.outbox.put(_Displaced(old_token))  # wakes that stream
+        return token
+
+    def close(self, key, token) -> None:
+        with self._lock:
+            streams = self._open.get(key)
+            if streams is not None:
+                streams.pop(token, None)
+                if not streams:
+                    del self._open[key]
 
 
 class KeyedLimiter:
@@ -376,8 +415,14 @@ class KeyedLimiter:
 
 class SessionStore:
     """Thread-safe session table with a size cap, a per-principal cap and
-    idle expiry. The per-principal cap is skipped when auth is off (principal
-    ``None``): there is only the one local caller."""
+    idle expiry.
+
+    A principal at its cap gets a new session by evicting its own least
+    recently used one (closed as DELETE or expiry would close it), not a
+    refusal: connectors often re-``initialize`` on every reconnect and never
+    DELETE, and refusing would lock a legitimate tester out until the TTL.
+    The per-principal cap is skipped when auth is off (principal ``None``):
+    there is only the one local caller."""
 
     def __init__(self, max_sessions: int, ttl: float, max_per_principal: int | None = None):
         self.max_sessions = max_sessions
@@ -394,13 +439,18 @@ class SessionStore:
     def create(self, kind: str, principal=None) -> Session:
         with self._lock:
             self._reap_locked()
-            if len(self._sessions) >= self.max_sessions:
-                raise SessionFull()
             key = limit_key(principal)
-            if key is not None and self.max_per_principal is not None and sum(
-                    limit_key(s.principal) == key for s in self._sessions.values()
-            ) >= self.max_per_principal:
-                raise PrincipalSessionsFull()
+            evict: list[Session] = []
+            if key is not None and self.max_per_principal is not None:
+                mine = [s for s in self._sessions.values() if limit_key(s.principal) == key]
+                surplus = len(mine) - self.max_per_principal + 1
+                if surplus > 0:
+                    evict = sorted(mine, key=lambda s: s.last_seen)[:surplus]
+            # Evicting the caller's own sessions frees global slots too.
+            if len(self._sessions) - len(evict) >= self.max_sessions:
+                raise SessionFull()
+            for old in evict:
+                self._sessions.pop(old.id).close()  # ends its stream, if any
             session = Session(secrets.token_urlsafe(32), kind, principal)
             self._sessions[session.id] = session
             return session
@@ -552,7 +602,7 @@ class McpHTTPServer(ThreadingHTTPServer):
         self.sessions = SessionStore(config.max_sessions, config.session_ttl,
                                      config.max_sessions_per_principal)
         # Open SSE streams per principal (GET /mcp and GET /sse alike).
-        self.principal_streams = KeyedLimiter(config.max_streams_per_principal)
+        self.principal_streams = StreamSlots(config.max_streams_per_principal)
         self.stopping = threading.Event()
         self._slots = threading.BoundedSemaphore(config.max_connections)
         # Per caller IP: connections by TCP peer here in the accept loop, or,
@@ -1033,8 +1083,10 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         return responses
 
     def _stream(self, session: Session, first_event: bytes | None = None,
-                still_valid=lambda: True) -> None:
-        """Hold an SSE stream open, relaying the session outbox and pinging."""
+                still_valid=lambda: True, token=None) -> None:
+        """Hold an SSE stream open, relaying the session outbox and pinging.
+        ``token`` is this stream's slot (see StreamSlots): a ``_Displaced``
+        carrying it ends the stream."""
         self.close_connection = True
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
@@ -1063,6 +1115,10 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                     continue
                 if item is _STREAM_CLOSED:
                     break
+                if isinstance(item, _Displaced):
+                    if item.token is token:
+                        break  # a newer stream of this principal took the slot
+                    continue  # meant for an earlier stream on this session
                 session.touch()
                 self.wfile.write(sse_event(item))
                 self.wfile.flush()
@@ -1222,31 +1278,22 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         except SessionFull:
             raise _Reject(HTTPStatus.SERVICE_UNAVAILABLE,
                           "Too many sessions; try again later", SERVER_BUSY)
-        except PrincipalSessionsFull:
-            # 429, not the global cap's 503: the server has room, this caller
-            # is over its share and must end a session (DELETE /mcp) first.
-            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
-                          "Too many sessions for this client; end one or try again later",
-                          SERVER_BUSY, {"Retry-After": str(PER_CALLER_RETRY_AFTER)})
 
     @contextlib.contextmanager
-    def _stream_slot(self, info: TokenInfo | None):
-        """Hold one of the principal's SSE stream slots for the block, or 429.
-        No cap with auth off (principal ``None``)."""
-        principal = limit_key(self._principal(info))
-        if principal is None:
-            yield
+    def _stream_slot(self, info: TokenInfo | None, session: Session):
+        """Hold one of the principal's SSE stream slots for the block; yield
+        its token for ``_stream``. Past the cap the principal's oldest stream
+        is displaced, never this one. No cap with auth off (principal ``None``)."""
+        key = limit_key(self._principal(info))
+        if key is None:
+            yield None
             return
         streams = self.server.principal_streams
-        if not streams.acquire(principal):
-            self.close_connection = True  # free this connection's slot right away
-            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
-                          "Too many open streams for this client; close one or try again later",
-                          SERVER_BUSY, {"Retry-After": str(PER_CALLER_RETRY_AFTER)})
+        token = streams.open(key, session)
         try:
-            yield
+            yield token
         finally:
-            streams.release(principal)
+            streams.close(key, token)
 
     def _post_mcp(self) -> None:
         info = self._authenticate()
@@ -1295,8 +1342,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True  # free this connection's slot right away
             raise _Reject(HTTPStatus.CONFLICT, "A stream is already open for this session")
         try:
-            with self._stream_slot(info):
-                self._stream(session, still_valid=self._still_valid(info))
+            with self._stream_slot(info, session) as token:
+                self._stream(session, still_valid=self._still_valid(info), token=token)
         finally:
             session.stream_lock.release()
 
@@ -1308,15 +1355,15 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     def _get_sse(self) -> None:
         info = self._authenticate()
-        with self._stream_slot(info):
-            session = self._new_session("legacy", info)
-            endpoint = f"/messages?sessionId={session.id}"
-            try:
+        session = self._new_session("legacy", info)
+        endpoint = f"/messages?sessionId={session.id}"
+        try:
+            with self._stream_slot(info, session) as token:
                 self._stream(session, first_event=sse_event(endpoint, event="endpoint"),
-                             still_valid=self._still_valid(info))
-            finally:
-                # A legacy session lives exactly as long as its stream.
-                self.server.sessions.terminate(session.id)
+                             still_valid=self._still_valid(info), token=token)
+        finally:
+            # A legacy session lives exactly as long as its stream.
+            self.server.sessions.terminate(session.id)
 
     def _post_messages(self) -> None:
         info = self._authenticate()

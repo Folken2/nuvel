@@ -28,6 +28,7 @@ from _mcp_http_helpers import (
     register,
     make_hub,
     make_provider,
+    read_event,
     read_frame,
     service_token,
     start,
@@ -85,21 +86,53 @@ def eventually(probe, timeout=TIMEOUT):
 # --- (1) per-principal session and stream caps ---------------------------------------
 
 
-def test_per_principal_session_cap_is_429_and_other_principals_are_unaffected(launch):
-    httpd = launch(max_sessions_per_principal=2)
+def _ended(resp) -> bool:
+    """True once the SSE stream ends (EOF) within the timeout."""
+    try:
+        while True:
+            read_frame(resp)
+    except (EOFError, OSError):
+        return True
+
+
+def test_url_key_reinitializing_past_the_cap_evicts_its_oldest_session(launch):
+    # A connector that re-initializes on every reconnect and never DELETEs
+    # must keep working: the 9th initialize evicts the least recently used.
+    httpd = launch()
+    _, key = httpd.oauth.create_client("tester", url_key=True)
+    tester = Client(httpd)
+    path = f"/mcp/k/{key}"
+    sessions = []
+    for _ in range(9):
+        status, headers, data = tester.post(INIT, path=path)
+        assert status == 200, data
+        sessions.append(headers["Mcp-Session-Id"])
+    assert tester.post(call("list_themes", {}), sessions[0], path=path)[0] == 404
+    for session in sessions[1:]:
+        assert tester.post(call("list_themes", {}), session, path=path)[0] == 200
+
+
+def test_session_eviction_takes_the_least_recently_used_and_ends_its_stream(launch):
+    # Pings touch a streamed session; keep them out of the LRU order here.
+    httpd = launch(max_sessions_per_principal=2, ping_interval=30)
     alice = authed(httpd)
+    old, recent = alice.initialize(), alice.initialize()
+    stream, resp = alice.open_stream("/mcp", {"Mcp-Session-Id": old})
+    try:
+        read_frame(resp)
+        time.sleep(0.01)
+        assert alice.post(call("list_themes", {}), recent)[0] == 200  # recent is newer
+        newest = alice.initialize()
+        assert _ended(resp)  # the evicted session's stream is closed
+    finally:
+        stream.close()
+    assert alice.post(call("list_themes", {}), old)[0] == 404
+    assert alice.post(call("list_themes", {}), recent)[0] == 200
+    assert alice.post(call("list_themes", {}), newest)[0] == 200
+    bob = authed(httpd)  # another client is never evicted for alice
+    bob_session = bob.initialize()
     alice.initialize()
-    alice.initialize()
-    status, headers, data = alice.post(INIT)
-    assert status == 429
-    assert int(headers["Retry-After"]) >= 1
-    assert "Mcp-Session-Id" not in headers and b"Mcp-Session-Id" not in data
-    assert json.loads(data)["error"]["code"] == -32003
-    bob = authed(httpd)  # another client: its own allowance
-    bob.initialize()
-    # Ending a session frees a slot for its principal.
-    httpd.sessions.close_all()
-    alice.initialize()
+    assert bob.post(call("list_themes", {}), bob_session)[0] == 200
 
 
 def test_global_session_cap_still_applies_across_principals(launch):
@@ -109,42 +142,50 @@ def test_global_session_cap_still_applies_across_principals(launch):
     assert authed(httpd).post(INIT)[0] == 503
 
 
-def test_per_principal_stream_cap_covers_both_transports(launch):
+def test_a_stream_past_the_cap_displaces_the_oldest(launch):
+    httpd = launch()  # default: 4 streams per principal
+    alice = authed(httpd)
+    sessions = [alice.initialize() for _ in range(5)]
+    opened = []
+    try:
+        for session in sessions:
+            stream, resp = alice.open_stream("/mcp", {"Mcp-Session-Id": session})
+            assert resp.status == 200
+            read_frame(resp)
+            opened.append((stream, resp))
+        assert _ended(opened[0][1])  # the 5th displaced the oldest
+        note = {"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}
+        for session, (_, live) in zip(sessions[1:], opened[1:]):
+            httpd.sessions.get(session, "streamable", alice.principal).send(note)
+            assert json.loads(read_event(live)) == note
+        # The displaced stream's session survives and can stream again.
+        assert alice.post(call("list_themes", {}), sessions[0])[0] == 200
+    finally:
+        for stream, _ in opened:
+            stream.close()
+
+
+def test_stream_cap_covers_both_transports(launch):
     httpd = launch(max_streams_per_principal=1)
     alice = authed(httpd)
     session = alice.initialize()
-    first, resp = alice.open_stream("/sse")
+    legacy, resp = alice.open_stream("/sse")
     try:
-        assert resp.status == 200
-        read_frame(resp)  # endpoint event: the stream holds alice's one slot
-        second, resp2 = alice.open_stream("/sse")
+        read_frame(resp)  # endpoint event
+        stream, resp2 = alice.open_stream("/mcp", {"Mcp-Session-Id": session})
         try:
-            assert resp2.status == 429 and int(resp2.getheader("Retry-After")) >= 1
+            assert resp2.status == 200
+            assert _ended(resp)  # the legacy stream gave way
         finally:
-            second.close()
-        third, resp3 = alice.open_stream("/mcp", {"Mcp-Session-Id": session})
-        try:
-            assert resp3.status == 429
-        finally:
-            third.close()
-        # Another principal still gets a stream.
-        bob = authed(httpd)
-        other, resp4 = bob.open_stream("/sse")
-        try:
-            assert resp4.status == 200
-        finally:
-            other.close()
-        # POSTs are not streams: alice can still call tools.
-        assert alice.post(call("list_themes", {}), session)[0] == 200
+            stream.close()
     finally:
-        first.close()
-
-    def reopened():
-        stream, again = alice.open_stream("/mcp", {"Mcp-Session-Id": session})
-        stream.close()
-        return again.status == 200
-
-    assert eventually(reopened)
+        legacy.close()
+    bob = authed(httpd)
+    other, resp3 = bob.open_stream("/sse")
+    try:
+        assert resp3.status == 200
+    finally:
+        other.close()
 
 
 def user_token_on(anon, client_id, username):
@@ -164,21 +205,11 @@ def test_one_user_across_two_clients_shares_one_allowance(launch):
     alice_a = Client(httpd, user_token_on(anon, first, "alice"))
     alice_b = Client(httpd, user_token_on(anon, second, "alice"))
     bob_a = Client(httpd, user_token_on(anon, first, "bob"))
-    alice_a.initialize()
-    assert alice_b.post(INIT)[0] == 429
-    bob_a.initialize()  # another user on the same client: own allowance
-    httpd.sessions.close_all()
-    stream, resp = alice_a.open_stream("/sse")
-    try:
-        assert resp.status == 200
-        read_frame(resp)
-        other, resp2 = alice_b.open_stream("/sse")
-        try:
-            assert resp2.status == 429
-        finally:
-            other.close()
-    finally:
-        stream.close()
+    a_session = alice_a.initialize()
+    bob_session = bob_a.initialize()  # another user on the same client
+    alice_b.initialize()  # evicts alice's session on the other client
+    assert alice_a.post(call("list_themes", {}), a_session)[0] == 404
+    assert bob_a.post(call("list_themes", {}), bob_session)[0] == 200
 
 
 def test_per_principal_caps_from_env(monkeypatch):
