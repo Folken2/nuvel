@@ -369,6 +369,26 @@ def test_register_rate_limit_ignores_forwarded_for_unless_trusted(launch, store_
     assert anon.request("POST", "/register", body, {"X-Forwarded-For": "198.51.100.7"})[0] == 429
 
 
+@pytest.mark.parametrize("public_url, trusted, warned", [
+    ("https://mcp.example.test", False, True),
+    ("https://mcp.example.test", True, False),
+    ("http://127.0.0.1:8080", False, False),
+    (None, False, False),
+])
+def test_https_without_trusted_forwarded_for_warns_at_startup(hub, capsys, public_url,
+                                                               trusted, warned):
+    from nuvel_mcp.http_transport import make_server
+    from nuvel_mcp.server import SkillsMCPServer
+    from nuvel_mcp.skills_loader import SkillsLoader
+
+    cfg = HttpConfig(public_url=public_url, trust_forwarded_for=trusted)
+    httpd = make_server(SkillsMCPServer(SkillsLoader.from_base(hub)), "127.0.0.1", 0, cfg,
+                        no_auth=True)
+    httpd.server_close()
+    err = capsys.readouterr().err
+    assert ("NUVEL_MCP_TRUST_FORWARDED_FOR" in err) is warned, err
+
+
 def test_per_ip_settings_from_env(monkeypatch):
     assert HttpConfig().max_connections_per_ip == 16
     assert HttpConfig.from_env().trust_forwarded_for is False

@@ -1528,6 +1528,14 @@ def make_server(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFA
             f"NUVEL_MCP_MAX_CONNECTIONS ({config.max_connections}): every open SSE stream "
             "holds a connection, so streams can use up all connections before the "
             "session cap applies. Keep sessions below connections.")
+    if (config.public_url or "").startswith("https://") and not config.trust_forwarded_for:
+        # An https public URL means TLS ends in front of us (this server never
+        # terminates it), so every TCP peer is likely that proxy.
+        log("Warning: NUVEL_MCP_PUBLIC_URL is https but NUVEL_MCP_TRUST_FORWARDED_FOR is "
+            "not set: behind a TLS-terminating proxy every connection comes from the "
+            "proxy, so the per-IP caps (NUVEL_MCP_MAX_CONNECTIONS_PER_IP, /register, "
+            "pending logins) count all callers as one. Set NUVEL_MCP_TRUST_FORWARDED_FOR=1 "
+            "if the proxy appends the caller to X-Forwarded-For.")
     return McpHTTPServer((host, port), mcp, config, oauth_provider)
 
 
