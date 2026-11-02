@@ -56,7 +56,7 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `--allow-remote` | Required to bind a non-loopback `--host`. |
 | `NUVEL_MCP_PUBLIC_URL` | The origin clients reach the server at (for example `https://mcp.example.com`). It is the OAuth issuer and the audience of every token. Required on a non-loopback bind. |
 | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | A GitHub OAuth app whose callback URL is `<NUVEL_MCP_PUBLIC_URL>/oauth/callback`. This is how people log in when they connect an interactive client. |
-| `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to log in. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
+| `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub users allowed to log in, each either `id:<number>` (GitHub's numeric user id, from `https://api.github.com/users/<login>`) or a login. Prefer ids: a login can be renamed and later registered by someone else. A login entry still works (existing lists need no change), but the first account it admits is pinned by id until the server restarts, and any other account under that login is refused. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
 | `NUVEL_OAUTH_LOGIN` | `none` turns the interactive login off: `/authorize`, `/register` and the login callbacks answer `404`, and clients connect with a [URL key](#beta-testers-url-keys) or `client_credentials`. GitHub credentials and `NUVEL_OAUTH_DEV_LOGIN` are then ignored, with a warning. Unset, the login is GitHub when its credentials are set, else the dev login, else the server refuses to start. Any other value stops the server with exit code 2. |
 | `NUVEL_OAUTH_REDIRECT_ALLOWLIST` | Extra redirect URIs accepted at client registration, beyond `https://` and loopback ones. |
 | `NUVEL_MCP_DATABASE_URL` | A Postgres connection string. Set, OAuth, run traces, recipes and usage all live in that database ([below](#store-everything-in-postgres-neon)); this is the production setup. |
@@ -65,8 +65,13 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `NUVEL_MCP_REQUEST_DEADLINE` | Wall-clock seconds a client gets to send one whole request (request line, headers, body), however slowly it trickles. Default 30. |
 | `NUVEL_MCP_READ_TIMEOUT` | Seconds a single socket read or write may stall, and how long an idle keep-alive connection is kept. Default 30. The idle keep-alive limit is the smaller of this and `NUVEL_MCP_REQUEST_DEADLINE`. |
 | `NUVEL_MCP_MAX_CONNECTIONS` | Connections (handler threads, open SSE streams included) served at once. Default 128. Slots are taken before authentication, and long-lived GET streams hold them, so a public deployment should sit behind a buffering reverse proxy with per-client connection limits. |
+| `NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL` | MCP sessions one caller may hold at once. A signed-in user counts across every client they use (registering more clients buys no more); a `client_credentials` client or URL key counts as its client. Default 8. A new session past it evicts that caller's least recently used session (as `DELETE` would, closing its stream), so a connector that re-initializes on every reconnect and never deletes keeps working. The global `NUVEL_MCP_MAX_SESSIONS` still applies. Not applied with `--no-auth`. |
+| `NUVEL_MCP_MAX_CONNECTIONS_PER_IP` | Connections one caller IP may hold at once. Default 16. Over it is `429`, sent from the accept loop without a handler thread. Behind a trusted proxy (`NUVEL_MCP_TRUST_FORWARDED_FOR=1`) it counts in-flight requests and open streams per `X-Forwarded-For` address instead, since every TCP peer is then the proxy. That only covers requests whose headers have arrived: behind a proxy, connection-level flood protection (slow or half-open connections, connection rate per client) belongs to the proxy. |
+| `NUVEL_MCP_HEADER_DEADLINE` | Behind a trusted proxy only: on a new connection, the seconds from accept until its first request's headers are in, idle time included, so a connection that sends nothing is closed after it. On a keep-alive connection that has already served a request, idle time is not counted (it lasts `NUVEL_MCP_READ_TIMEOUT`, because the proxy pools upstream connections and closing them early causes intermittent 502s); the window starts at the next request's first byte. Default 5, must be greater than 0. Until its headers arrive a connection has no caller IP to count against, so this bounds how long it can hold a global connection slot; the body then gets the rest of `NUVEL_MCP_REQUEST_DEADLINE`. |
+| `NUVEL_MCP_TRUST_FORWARDED_FOR` | `1` when the server sits behind a reverse proxy that appends the caller's address to `X-Forwarded-For` (Railway, nginx, Caddy). The right-most entry is then the caller's IP for the per-IP cap and the `/register` rate limit. Leave it unset when clients reach the server directly, or they could pick their own IP. |
+| `NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL` | Open SSE streams (`GET /mcp` and `GET /sse` together) one caller may hold at once. Default 4. A new stream past it closes that caller's oldest stream (a half-open stream left behind a proxy must not lock the client out of its reconnect); the session behind it stays usable. A displaced stream's connection is shut down and it counts until its handler has exited; with as many displaced streams still exiting as the cap, a new stream gets `429` with `Retry-After: 1`. A stream whose client stops reading is dropped after `NUVEL_MCP_READ_TIMEOUT`. Not applied with `--no-auth`. |
 
-The two timeouts must be greater than 0 and `NUVEL_MCP_MAX_CONNECTIONS` at least 1 (0 does not disable them); any other value stops the server at startup with exit code 2.
+The two timeouts must be greater than 0 and `NUVEL_MCP_MAX_CONNECTIONS` and the per-caller caps at least 1 (0 does not disable them); any other value stops the server at startup with exit code 2.
 
 Keep the GitHub secret and every other credential in your secret manager and
 inject it as an environment variable; never put one on a command line or in a
@@ -126,7 +131,20 @@ Without `NUVEL_MCP_PUBLIC_URL` set, the command prints just the
   (and any tokens); `nuvel-mcp token revoke "$CONNECTOR_URL"` revokes one key by
   its URL; `nuvel-mcp client delete "$CLIENT_ID"` removes the client and its key.
   The running server refuses the key on the next request and closes an open
-  stream at its next ping. Keys do not expire; to replace one, issue a new client.
+  stream at its next ping.
+- **Expiry.** `--expires-in DAYS` (fractions allowed) makes a key stop working
+  after that many days: `nuvel-mcp client create --name alice --url-key
+  --expires-in 30`. The output then includes `expires_at` (UTC), and an
+  expired key gets the same `401` as a revoked one; an open stream closes at
+  its next ping. Keys created without it, including every key issued before
+  this option existed, last until revoked.
+- **Rotating.** A key cannot be changed in place, because it is the client's
+  only credential. To rotate: create a new key for the tester
+  (`client create --name alice --url-key`, with `--expires-in` if you want),
+  send them the new `connector_url`, and once they have switched, delete the
+  old client (`nuvel-mcp client delete "$OLD_CLIENT_ID"`). The new key is a new
+  client, so it is a new tenant: run traces recorded under the old key stay
+  with the old `client_id` and are not visible through the new one.
 - **Transport.** `/mcp/k/<key>` is Streamable HTTP only (`POST`, `GET` stream and
   `DELETE`, like `/mcp`). The legacy `/sse` transport has no key form. A request
   on a key path that also sends an `Authorization` header is refused.
@@ -252,7 +270,9 @@ The same commands exist as `nuvel mcp db …`.
 
 `packages/nuvel-mcp/` ships a `Dockerfile` for this. The image binds
 `0.0.0.0:$PORT` with `--allow-remote`. With `NUVEL_MCP_DATABASE_URL` set, all
-state is in Postgres; without it, it falls back to files under `/data`. The Railway project itself (service, Dockerfile build, `/data`
+state is in Postgres; without it, it falls back to files under `/data`. The
+server runs as the unprivileged system user `nuvel` (uid 10001), which owns
+`/data` in the image; a volume mounted there must be writable by that uid. The Railway project itself (service, Dockerfile build, `/data`
 volume) is defined in `.railway/railway.ts`, Railway's Infrastructure as Code;
 its config-as-code `railway.json` is deprecated.
 
@@ -286,8 +306,9 @@ its config-as-code `railway.json` is deprecated.
    | `NUVEL_MCP_PUBLIC_URL` | `https://<your-domain>` |
    | `NUVEL_MCP_DATABASE_URL` | Neon's pooled connection string (a secret) |
    | `NUVEL_OAUTH_LOGIN` | `none`, for URL keys only |
+   | `NUVEL_MCP_TRUST_FORWARDED_FOR` | `1`: Railway's edge proxy appends the caller's address to `X-Forwarded-For`, so the per-IP cap and the `/register` limit see real callers instead of the proxy. The image does not set it, since a container exposed with no proxy in front must not trust the header. |
    | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | For GitHub login: from the OAuth app |
-   | `NUVEL_OAUTH_ALLOWED_USERS` | For GitHub login: the GitHub logins allowed to log in |
+   | `NUVEL_OAUTH_ALLOWED_USERS` | For GitHub login: the GitHub users allowed to log in, as `id:<number>` (preferred) or logins |
    | `NUVEL_MCP_SKILLS_DIR` | Optional: a skills hub inside the container, for example one cloned onto the volume. Unset, the server runs feedback-only. |
 
    The server refuses to start without the public URL and without either
@@ -337,11 +358,23 @@ free text). `get_skill` leaves out its `health` report, and `check_skill_health`
 requires `plugin` and returns only `{"skill", "plugin", "runs"}`: the run-trace
 summary for the caller's own tenant.
 
-**Tenant is the OAuth `client_id`.** For each authenticated request, the token's
-`client_id` is the caller's tenant: it is stamped on every trace it records and
-scopes what `check_skill_health` returns, so two clients never see each other's
-runs. It is never the `subject` (a person's GitHub login). Use one client per
-tenant, which is what `client create` is for.
+**Tenant is the OAuth `client_id`.** For each authenticated request, the caller
+has a tenant: it is stamped on every trace it records and scopes what
+`check_skill_health` returns, so two tenants never see each other's runs. For a
+client acting as itself (`client_credentials`, URL keys) the tenant is its
+`client_id`. For a person who signed in interactively it is the `client_id`
+followed by `:` and 16 hex characters derived from who they are (their GitHub
+numeric id, or their dev-login name), so two people using the same public
+client never share a tenant, even though anyone allowed to log in can use any
+registered public client. It never contains the `subject` (a person's GitHub
+login) itself. Use one client per tenant, which is what `client create` is for.
+
+> **Changed in this release:** interactive-login tenants used to be the bare
+> `client_id`. Run traces that GitHub (or dev-login) users recorded before
+> upgrading stay under that old `client_id` tenant, and the same users now see
+> only what they record under their new per-user tenant. `client_credentials`
+> and URL-key tenants are unchanged. No migration is run; a deployment with
+> `NUVEL_OAUTH_LOGIN=none` is not affected.
 
 ## Request limits
 
@@ -358,6 +391,9 @@ tenant, which is what `client create` is for.
 | Request not fully received within `NUVEL_MCP_REQUEST_DEADLINE` seconds | `408` if it stalled in the body; a slow request line or headers just closes the connection |
 | A second `GET /mcp` stream on a session that already has one open | `409`; the open stream keeps working |
 | More than `NUVEL_MCP_MAX_CONNECTIONS` connections open | `503` with `Retry-After: 1`, sent without starting a handler thread |
+| More than `NUVEL_MCP_MAX_CONNECTIONS_PER_IP` connections (or, behind a trusted proxy, in-flight requests) from one caller IP | `429` with `Retry-After: 1` |
+| More than `NUVEL_MCP_MAX_SESSIONS` sessions in all | `503` |
+| One caller past `NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL` sessions or `NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL` open streams | Not refused: the caller's own least recently used session, or oldest stream, is closed to make room; other callers are unaffected |
 | Body that is not valid JSON | `400` |
 
 Error responses do not echo the request body or path, and a failing trace store

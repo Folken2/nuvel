@@ -1,0 +1,1044 @@
+"""Abuse limits and hardening on the HTTP transport and the OAuth server.
+
+Per-principal session and stream caps, the per-IP connection cap (behind a
+trusted proxy too), URL-key expiry, client authentication before the /token
+write lock, security headers, per-subject tenants for interactive logins, the
+pending-login caps and the GitHub numeric-id allow-list.
+
+Real servers on 127.0.0.1:0, driven with http.client -- no HTTP mocks.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+
+import pytest
+
+from nuvel_mcp.http_transport import HttpConfig
+from _mcp_http_helpers import (
+    INIT,
+    TIMEOUT,
+    Client,
+    call,
+    dev_login,
+    exchange,
+    isolate_env,
+    pkce,
+    register,
+    make_hub,
+    make_provider,
+    read_event,
+    read_frame,
+    service_token,
+    start,
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_env(monkeypatch, tmp_path):
+    isolate_env(monkeypatch, tmp_path)
+    for name in ("NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL", "NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
+                 "NUVEL_MCP_MAX_CONNECTIONS_PER_IP", "NUVEL_MCP_TRUST_FORWARDED_FOR",
+                 "NUVEL_MCP_HEADER_DEADLINE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def hub(tmp_path):
+    return make_hub(tmp_path)
+
+
+@pytest.fixture
+def store_path(tmp_path):
+    return tmp_path / "oauth" / "oauth.json"
+
+
+@pytest.fixture
+def launch(hub, store_path):
+    started = []
+
+    def factory(provider=None, **config):
+        httpd, thread = start(hub, provider or make_provider(store_path), **config)
+        started.append((httpd, thread))
+        return httpd
+
+    yield factory
+    for httpd, thread in started:
+        httpd.stop()
+        httpd.server_close()
+        thread.join(TIMEOUT)
+
+
+def authed(httpd):
+    return Client(httpd, service_token(httpd))
+
+
+def eventually(probe, timeout=TIMEOUT):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if probe():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+# --- (1) per-principal session and stream caps ---------------------------------------
+
+
+def _ended(resp) -> bool:
+    """True once the SSE stream ends (EOF) within the timeout."""
+    try:
+        while True:
+            read_frame(resp)
+    except (EOFError, OSError):
+        return True
+
+
+def test_url_key_reinitializing_past_the_cap_evicts_its_oldest_session(launch):
+    # A connector that re-initializes on every reconnect and never DELETEs
+    # must keep working: the 9th initialize evicts the least recently used.
+    httpd = launch()
+    _, key = httpd.oauth.create_client("tester", url_key=True)
+    tester = Client(httpd)
+    path = f"/mcp/k/{key}"
+    sessions = []
+    for _ in range(9):
+        status, headers, data = tester.post(INIT, path=path)
+        assert status == 200, data
+        sessions.append(headers["Mcp-Session-Id"])
+    assert tester.post(call("list_themes", {}), sessions[0], path=path)[0] == 404
+    for session in sessions[1:]:
+        assert tester.post(call("list_themes", {}), session, path=path)[0] == 200
+
+
+def test_session_eviction_takes_the_least_recently_used_and_ends_its_stream(launch):
+    # Pings touch a streamed session; keep them out of the LRU order here.
+    httpd = launch(max_sessions_per_principal=2, ping_interval=30)
+    alice = authed(httpd)
+    old, recent = alice.initialize(), alice.initialize()
+    stream, resp = alice.open_stream("/mcp", {"Mcp-Session-Id": old})
+    try:
+        read_frame(resp)
+        time.sleep(0.01)
+        assert alice.post(call("list_themes", {}), recent)[0] == 200  # recent is newer
+        newest = alice.initialize()
+        assert _ended(resp)  # the evicted session's stream is closed
+    finally:
+        stream.close()
+    assert alice.post(call("list_themes", {}), old)[0] == 404
+    assert alice.post(call("list_themes", {}), recent)[0] == 200
+    assert alice.post(call("list_themes", {}), newest)[0] == 200
+    bob = authed(httpd)  # another client is never evicted for alice
+    bob_session = bob.initialize()
+    alice.initialize()
+    assert bob.post(call("list_themes", {}), bob_session)[0] == 200
+
+
+def test_global_session_cap_still_applies_across_principals(launch):
+    httpd = launch(max_sessions=2, max_sessions_per_principal=8)
+    authed(httpd).initialize()
+    authed(httpd).initialize()
+    assert authed(httpd).post(INIT)[0] == 503
+
+
+def test_a_stream_past_the_cap_displaces_the_oldest(launch):
+    httpd = launch()  # default: 4 streams per principal
+    alice = authed(httpd)
+    sessions = [alice.initialize() for _ in range(5)]
+    opened = []
+    try:
+        for session in sessions:
+            stream, resp = alice.open_stream("/mcp", {"Mcp-Session-Id": session})
+            assert resp.status == 200
+            read_frame(resp)
+            opened.append((stream, resp))
+        assert _ended(opened[0][1])  # the 5th displaced the oldest
+        note = {"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}
+        for session, (_, live) in zip(sessions[1:], opened[1:]):
+            httpd.sessions.get(session, "streamable", alice.principal).send(note)
+            assert json.loads(read_event(live)) == note
+        # The displaced stream's session survives and can stream again.
+        assert alice.post(call("list_themes", {}), sessions[0])[0] == 200
+    finally:
+        for stream, _ in opened:
+            stream.close()
+
+
+def test_displaced_streams_stay_counted_until_they_exit():
+    # A displaced stream's handler may be stuck; until it really exits it is
+    # "draining" and still counted, so new streams cannot pile up threads.
+    from nuvel_mcp.http_transport import Session, StreamSlots
+
+    slots = StreamSlots(1)
+    first = slots.open("k", Session("a", "streamable"), None)
+    second = slots.open("k", Session("b", "streamable"), None)  # first is draining
+    assert first is not None and second is not None
+    assert slots.counts("k") == (1, 1)
+    assert slots.open("k", Session("c", "streamable"), None) is None  # draining full
+    slots.close("k", first)  # the displaced handler finally exits
+    assert slots.counts("k") == (1, 0)
+    third = slots.open("k", Session("c", "streamable"), None)
+    assert third is not None and slots.counts("k") == (1, 1)
+    slots.close("k", second)
+    slots.close("k", third)
+    assert slots.counts("k") == (0, 0)
+
+
+def test_displaced_stream_whose_client_stopped_reading_is_forced_out(launch):
+    import socket
+    # read_timeout is long: the handler must leave because it was displaced,
+    # not because a write finally timed out.
+    httpd = launch(max_streams_per_principal=1, read_timeout=30.0, ping_interval=30)
+    alice = authed(httpd)
+    stalled_session, other = alice.initialize(), alice.initialize()
+    host, port = httpd.server_address[:2]
+    stalled = socket.create_connection((host, port), timeout=TIMEOUT)
+    stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    try:
+        stalled.sendall((f"GET /mcp HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                         f"Authorization: Bearer {alice.token}\r\n"
+                         f"Accept: text/event-stream\r\nMcp-Session-Id: {stalled_session}\r\n\r\n"
+                         ).encode())
+        session = httpd.sessions.get(stalled_session, "streamable", alice.principal)
+        assert eventually(lambda: httpd.principal_streams.counts(
+            ("client", alice.principal[0])) == (1, 0))
+        # Fill every buffer between us: the handler blocks in a write.
+        blob = {"jsonrpc": "2.0", "method": "notifications/message",
+                "params": {"data": "x" * 65536}}
+        for _ in range(200):
+            session.send(blob)
+        time.sleep(0.5)
+        key = ("client", alice.principal[0])
+        stream, resp = alice.open_stream("/mcp", {"Mcp-Session-Id": other})
+        try:
+            assert resp.status == 200
+            # The stuck handler is forced out and its slot released.
+            assert eventually(lambda: httpd.principal_streams.counts(key) == (1, 0),
+                              timeout=3.0)
+        finally:
+            stream.close()
+    finally:
+        stalled.close()
+
+
+def test_stream_to_a_reader_that_stopped_reading_times_out(launch):
+    import socket
+    httpd = launch(read_timeout=1.0, request_deadline=5.0, ping_interval=30)
+    alice = authed(httpd)
+    session_id = alice.initialize()
+    host, port = httpd.server_address[:2]
+    stalled = socket.create_connection((host, port), timeout=TIMEOUT)
+    stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    key = ("client", alice.principal[0])
+    try:
+        stalled.sendall((f"GET /mcp HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                         f"Authorization: Bearer {alice.token}\r\n"
+                         f"Accept: text/event-stream\r\nMcp-Session-Id: {session_id}\r\n\r\n"
+                         ).encode())
+        assert eventually(lambda: httpd.principal_streams.counts(key) == (1, 0))
+        session = httpd.sessions.get(session_id, "streamable", alice.principal)
+        blob = {"jsonrpc": "2.0", "method": "notifications/message",
+                "params": {"data": "x" * 65536}}
+        for _ in range(200):
+            session.send(blob)
+        # The blocked write gives up after read_timeout and frees the thread.
+        assert eventually(lambda: httpd.principal_streams.counts(key) == (0, 0),
+                          timeout=4.0)
+    finally:
+        stalled.close()
+
+
+def test_stream_cap_covers_both_transports(launch):
+    httpd = launch(max_streams_per_principal=1)
+    alice = authed(httpd)
+    session = alice.initialize()
+    legacy, resp = alice.open_stream("/sse")
+    try:
+        read_frame(resp)  # endpoint event
+        stream, resp2 = alice.open_stream("/mcp", {"Mcp-Session-Id": session})
+        try:
+            assert resp2.status == 200
+            assert _ended(resp)  # the legacy stream gave way
+        finally:
+            stream.close()
+    finally:
+        legacy.close()
+    bob = authed(httpd)
+    other, resp3 = bob.open_stream("/sse")
+    try:
+        assert resp3.status == 200
+    finally:
+        other.close()
+
+
+def user_token_on(anon, client_id, username):
+    """Dev login as *username* on an existing public client -> access token."""
+    verifier, challenge = pkce()
+    query = dev_login(anon, client_id, challenge, username=username)
+    status, _, body = exchange(anon, client_id, query["code"], verifier)
+    assert status == 200, body
+    return body["access_token"]
+
+
+def test_one_user_across_two_clients_shares_one_allowance(launch):
+    # Registering more clients (DCR) must not buy a user more sessions/streams.
+    httpd = launch(max_sessions_per_principal=1, max_streams_per_principal=1)
+    anon = Client(httpd)
+    first, second = register(anon)[1]["client_id"], register(anon)[1]["client_id"]
+    alice_a = Client(httpd, user_token_on(anon, first, "alice"))
+    alice_b = Client(httpd, user_token_on(anon, second, "alice"))
+    bob_a = Client(httpd, user_token_on(anon, first, "bob"))
+    a_session = alice_a.initialize()
+    bob_session = bob_a.initialize()  # another user on the same client
+    alice_b.initialize()  # evicts alice's session on the other client
+    assert alice_a.post(call("list_themes", {}), a_session)[0] == 404
+    assert bob_a.post(call("list_themes", {}), bob_session)[0] == 200
+
+
+def test_per_principal_caps_from_env(monkeypatch):
+    monkeypatch.setenv("NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL", "3")
+    monkeypatch.setenv("NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL", "2")
+    cfg = HttpConfig.from_env()
+    assert (cfg.max_sessions_per_principal, cfg.max_streams_per_principal) == (3, 2)
+    assert (HttpConfig().max_sessions_per_principal, HttpConfig().max_streams_per_principal) \
+        == (8, 4)
+
+
+@pytest.mark.parametrize("name", ["NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL",
+                                  "NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
+                                  "NUVEL_MCP_MAX_CONNECTIONS_PER_IP"])
+def test_per_caller_caps_must_be_positive(monkeypatch, name):
+    monkeypatch.setenv(name, "0")
+    with pytest.raises(ValueError, match=name):
+        HttpConfig.from_env()
+
+
+# --- (2) per-IP connection cap, and the caller's IP behind a proxy -----------------------
+
+
+def _recv_all(sock) -> bytes:
+    chunks = []
+    try:
+        while True:
+            data = sock.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+    except (TimeoutError, ConnectionResetError):
+        pass
+    return b"".join(chunks)
+
+
+def test_per_ip_cap_refuses_extra_connections_from_one_peer(launch):
+    import socket
+    httpd = launch(max_connections_per_ip=2, read_timeout=5.0, request_deadline=5.0)
+    host, port = httpd.server_address[:2]
+    stalled = [socket.create_connection((host, port), timeout=TIMEOUT) for _ in range(2)]
+    try:
+        for sock in stalled:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\n")  # never finished: holds its slot
+        time.sleep(0.3)
+        with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+            data = _recv_all(sock)
+        assert data.startswith(b"HTTP/1.1 429"), data
+        assert b"Retry-After: " in data
+        stalled.pop().close()
+
+        def served():
+            try:
+                return Client(httpd).request("GET", "/healthz")[0] == 200
+            except ConnectionError:
+                return False
+
+        assert eventually(served)
+    finally:
+        for sock in stalled:
+            sock.close()
+
+
+def test_per_ip_cap_behind_a_trusted_proxy_keys_on_x_forwarded_for(launch):
+    # Every TCP peer is the "proxy" (127.0.0.1): only X-Forwarded-For tells
+    # callers apart, so the cap must not count the peer itself.
+    httpd = launch(max_connections_per_ip=1, trust_forwarded_for=True)
+    alice = authed(httpd)
+    stream, resp = alice.open_stream("/sse", {"X-Forwarded-For": "203.0.113.5"})
+    try:
+        assert resp.status == 200
+        read_frame(resp)  # the stream holds 203.0.113.5's one slot
+        status, headers, _ = alice.request("GET", "/healthz",
+                                           headers={"X-Forwarded-For": "203.0.113.5"})
+        assert status == 429 and int(headers["Retry-After"]) >= 1
+        # The proxy appends the real peer last; a forged left-hand entry is ignored.
+        status, _, _ = alice.request("GET", "/healthz",
+                                     headers={"X-Forwarded-For": "203.0.113.5, 198.51.100.7"})
+        assert status == 200
+        assert alice.request("GET", "/healthz")[0] == 200  # no header: the peer
+    finally:
+        stream.close()
+
+
+def test_behind_a_proxy_unidentified_connections_get_a_short_header_deadline(launch):
+    # Until its headers arrive a connection has no IP to count against, so it
+    # may only sit on a global slot for the short header deadline.
+    import socket
+    httpd = launch(trust_forwarded_for=True, header_deadline=0.5, request_deadline=5.0,
+                   read_timeout=5.0)
+    # A fresh connection that sends nothing, or never finishes its first
+    # request: the deadline runs from accept, idle time included.
+    for partial in (b"", b"GET /healthz HTTP/1.1\r\nHost: x\r\n", b"GET /hea"):
+        with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+            started = time.monotonic()
+            sock.sendall(partial)
+            assert _recv_all(sock) == b""  # closed quietly
+            assert time.monotonic() - started < 2.5
+    # Once identified, the body still gets the full request deadline.
+    alice = authed(httpd)
+    body = json.dumps(INIT).encode()
+    with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+        host = f"{alice.host}:{alice.port}"  # the token is bound to this origin
+        sock.sendall(f"POST /mcp HTTP/1.1\r\nHost: {host}\r\n".encode()
+                     + b"Content-Type: application/json\r\nAccept: application/json\r\n"
+                     + f"Authorization: Bearer {alice.token}\r\n".encode()
+                     + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode())
+        time.sleep(1.0)  # past the header deadline, well inside the request one
+        sock.sendall(body)
+        assert _recv_all(sock).startswith(b"HTTP/1.1 200")
+
+
+def test_behind_a_proxy_idle_keep_alive_outlives_the_header_deadline(launch):
+    # The proxy pools upstream connections: an idle one must last the usual
+    # read_timeout, not the short header deadline, or the pool races our close.
+    import http.client
+    httpd = launch(trust_forwarded_for=True, header_deadline=0.3, request_deadline=5.0,
+                   read_timeout=5.0)
+    host, port = httpd.server_address[:2]
+    conn = http.client.HTTPConnection(host, port, timeout=TIMEOUT)
+    try:
+        conn.request("GET", "/healthz")
+        first = conn.getresponse()
+        first.read()
+        assert first.status == 200 and not first.will_close
+        sock = conn.sock
+        time.sleep(1.0)  # idle well past header_deadline
+        conn.request("GET", "/healthz")
+        second = conn.getresponse()
+        second.read()
+        assert second.status == 200
+        assert conn.sock is sock  # the same connection served both
+    finally:
+        conn.close()
+
+
+def test_header_deadline_from_env(monkeypatch):
+    assert HttpConfig().header_deadline == 5.0
+    monkeypatch.setenv("NUVEL_MCP_HEADER_DEADLINE", "2.5")
+    assert HttpConfig.from_env().header_deadline == 2.5
+    monkeypatch.setenv("NUVEL_MCP_HEADER_DEADLINE", "0")
+    with pytest.raises(ValueError, match="NUVEL_MCP_HEADER_DEADLINE"):
+        HttpConfig.from_env()
+
+
+def test_forwarded_for_is_ignored_unless_trusted(launch):
+    import socket
+    httpd = launch(max_connections_per_ip=1)
+    alice = authed(httpd)
+    stream, resp = alice.open_stream("/sse", {"X-Forwarded-For": "203.0.113.5"})
+    try:
+        assert resp.status == 200
+        read_frame(resp)
+        # Same TCP peer, whatever the header claims: refused from the accept loop.
+        with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n"
+                         b"X-Forwarded-For: 198.51.100.7\r\n\r\n")
+            assert _recv_all(sock).startswith(b"HTTP/1.1 429")
+    finally:
+        stream.close()
+
+
+def test_client_ip_reads_every_x_forwarded_for_line():
+    # A caller's own XFF line comes first; the proxy appends its entry as a
+    # separate line. The right-most entry across all lines must win.
+    from email.message import Message
+
+    from nuvel_mcp.clientip import client_ip
+
+    headers = Message()
+    headers["X-Forwarded-For"] = "203.0.113.5"  # forged by the caller
+    headers["X-Forwarded-For"] = "198.51.100.7, not-an-ip"  # appended by the proxy
+    assert client_ip(headers, "10.0.0.1", True) == "198.51.100.7"
+    assert client_ip(headers, "10.0.0.1", False) == "10.0.0.1"
+    # Plain dicts (no get_all) still work.
+    assert client_ip({"X-Forwarded-For": "203.0.113.5, 198.51.100.7"}, "10.0.0.1",
+                     True) == "198.51.100.7"
+
+
+def test_two_forwarded_for_lines_over_http_use_the_proxys(launch, store_path):
+    import socket
+    httpd = launch(make_provider(store_path, register_limit=1), trust_forwarded_for=True)
+    host, port = httpd.server_address[:2]
+    body = json.dumps({"client_name": "x", "redirect_uris": ["http://127.0.0.1:1/cb"],
+                       "token_endpoint_auth_method": "none"}).encode()
+
+    def reg(forged, real):
+        with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
+            sock.sendall((f"POST /register HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                          "Content-Type: application/json\r\nConnection: close\r\n"
+                          f"X-Forwarded-For: {forged}\r\nX-Forwarded-For: {real}\r\n"
+                          f"Content-Length: {len(body)}\r\n\r\n").encode() + body)
+            return _recv_all(sock).split(b" ", 2)[1]
+
+    assert reg("203.0.113.5", "198.51.100.7") == b"201"
+    # Rotating the forged line does not buy a new bucket.
+    assert reg("203.0.113.99", "198.51.100.7") == b"429"
+
+
+def test_register_rate_limit_keys_on_the_forwarded_client_ip(launch, store_path):
+    httpd = launch(make_provider(store_path, register_limit=1), trust_forwarded_for=True)
+    anon = Client(httpd)
+    body = {"client_name": "x", "redirect_uris": ["http://127.0.0.1:1/cb"],
+            "token_endpoint_auth_method": "none"}
+
+    def reg(ip):
+        return anon.request("POST", "/register", body, {"X-Forwarded-For": ip})[0]
+
+    assert reg("203.0.113.5") == 201
+    assert reg("203.0.113.5") == 429
+    assert reg("198.51.100.7") == 201
+
+
+def test_register_rate_limit_ignores_forwarded_for_unless_trusted(launch, store_path):
+    httpd = launch(make_provider(store_path, register_limit=1))
+    anon = Client(httpd)
+    body = {"client_name": "x", "redirect_uris": ["http://127.0.0.1:1/cb"],
+            "token_endpoint_auth_method": "none"}
+    assert anon.request("POST", "/register", body, {"X-Forwarded-For": "203.0.113.5"})[0] == 201
+    assert anon.request("POST", "/register", body, {"X-Forwarded-For": "198.51.100.7"})[0] == 429
+
+
+@pytest.mark.parametrize("public_url, trusted, warned", [
+    ("https://mcp.example.test", False, True),
+    ("https://mcp.example.test", True, False),
+    ("http://127.0.0.1:8080", False, False),
+    (None, False, False),
+])
+def test_https_without_trusted_forwarded_for_warns_at_startup(hub, capsys, public_url,
+                                                               trusted, warned):
+    from nuvel_mcp.http_transport import make_server
+    from nuvel_mcp.server import SkillsMCPServer
+    from nuvel_mcp.skills_loader import SkillsLoader
+
+    cfg = HttpConfig(public_url=public_url, trust_forwarded_for=trusted)
+    httpd = make_server(SkillsMCPServer(SkillsLoader.from_base(hub)), "127.0.0.1", 0, cfg,
+                        no_auth=True)
+    httpd.server_close()
+    err = capsys.readouterr().err
+    assert ("NUVEL_MCP_TRUST_FORWARDED_FOR" in err) is warned, err
+
+
+def test_per_ip_settings_from_env(monkeypatch):
+    assert HttpConfig().max_connections_per_ip == 16
+    assert HttpConfig.from_env().trust_forwarded_for is False
+    monkeypatch.setenv("NUVEL_MCP_MAX_CONNECTIONS_PER_IP", "5")
+    monkeypatch.setenv("NUVEL_MCP_TRUST_FORWARDED_FOR", "1")
+    cfg = HttpConfig.from_env()
+    assert cfg.max_connections_per_ip == 5 and cfg.trust_forwarded_for is True
+
+
+# --- DCR: stored display fields carry no control characters -------------------------------
+
+
+@pytest.mark.parametrize("name", ["\x1b[31mops\x1b[0m", "a\nb", "tab\there", "del\x7f",
+                                  "c1\x85", "csi\x9b31m", "a" * 101,
+                                  "evil‮txt.exe", "zero​width", "bom﻿"])
+def test_register_rejects_control_characters_and_long_names(launch, name):
+    status, body = register(Client(launch()), client_name=name)
+    assert status == 400 and body["error"] == "invalid_client_metadata"
+
+
+def test_register_rejects_control_characters_in_redirect_uris(launch):
+    for uri in ("http://127.0.0.1:1/cb\x1b[2J", "http://127.0.0.1:1/‮bc"):
+        status, body = register(Client(launch()), redirect_uris=[uri])
+        assert status == 400 and body["error"] in ("invalid_redirect_uri",
+                                                   "invalid_client_metadata")
+
+
+def test_register_accepts_a_plain_unicode_name_up_to_the_cap(launch):
+    status, body = register(Client(launch()), client_name="Clàude Désktop " + "a" * 85)
+    assert status == 201 and len(body["client_name"]) == 100
+
+
+# --- (4) /token authenticates the client before taking the write lock ---------------------
+
+
+def _count_transactions(provider, monkeypatch):
+    opened = []
+    original = provider.store.transaction
+
+    def spy():
+        opened.append(1)
+        return original()
+
+    monkeypatch.setattr(provider.store, "transaction", spy)
+    return opened
+
+
+@pytest.mark.parametrize("auth", ["unknown", "bad_secret", "secret_on_public", "no_client"])
+def test_token_refuses_bad_clients_without_a_write_transaction(launch, monkeypatch, auth):
+    from _mcp_http_helpers import basic
+
+    httpd = launch()
+    record, secret = httpd.oauth.create_client("svc")
+    public = register(Client(httpd))[1]["client_id"]
+    headers = {
+        "unknown": {"Authorization": basic("nvcl_nope", "x")},
+        "bad_secret": {"Authorization": basic(record["client_id"], secret + "x")},
+        "secret_on_public": {"Authorization": basic(public, "x")},
+        "no_client": {},
+    }[auth]
+    opened = _count_transactions(httpd.oauth, monkeypatch)
+    status, _, data = Client(httpd).form("/token", {"grant_type": "client_credentials"},
+                                         headers)
+    assert status == 401 and json.loads(data)["error"] == "invalid_client"
+    assert opened == []
+
+
+def test_token_for_a_good_client_still_writes(launch, monkeypatch):
+    from _mcp_http_helpers import basic
+
+    httpd = launch()
+    record, secret = httpd.oauth.create_client("svc")
+    opened = _count_transactions(httpd.oauth, monkeypatch)
+    status, _, data = Client(httpd).form("/token", {"grant_type": "client_credentials"},
+                                         {"Authorization": basic(record["client_id"], secret)})
+    assert status == 200 and json.loads(data)["access_token"]
+    assert opened == [1]
+
+
+def test_token_refuses_a_client_deleted_after_the_snapshot(launch, monkeypatch):
+    # Authenticated against the snapshot, then deleted before the lock: the
+    # transaction re-checks, so no token is issued for a client that is gone.
+    from _mcp_http_helpers import basic
+
+    httpd = launch()
+    provider = httpd.oauth
+    record, secret = provider.create_client("svc")
+    original = provider.store.transaction
+
+    def delete_first():
+        provider.store.transaction = original
+        provider.delete_client(record["client_id"])
+        return original()
+
+    monkeypatch.setattr(provider.store, "transaction", delete_first)
+    status, _, data = Client(httpd).form("/token", {"grant_type": "client_credentials"},
+                                         {"Authorization": basic(record["client_id"], secret)})
+    assert status == 401
+
+
+# --- (5) security headers -----------------------------------------------------------------
+
+HSTS = "max-age=31536000; includeSubDomains"
+
+
+@pytest.mark.parametrize("method, path", [("GET", "/healthz"), ("GET", "/nope"),
+                                          ("POST", "/mcp"), ("GET", "/icon.svg"),
+                                          ("OPTIONS", "/mcp"),
+                                          ("GET", "/.well-known/oauth-protected-resource")])
+def test_every_response_is_nosniff_and_hsts_only_on_an_https_public_url(launch, method, path):
+    plain = Client(launch())
+    status, headers, _ = plain.request(method, path, {} if method == "POST" else None)
+    assert headers["X-Content-Type-Options"] == "nosniff", (status, path)
+    assert "Strict-Transport-Security" not in headers
+
+    https = Client(launch(public_url="https://mcp.example.test"))
+    _, headers, _ = https.request(method, path, {} if method == "POST" else None)
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Strict-Transport-Security"] == HSTS
+
+
+def test_sse_stream_carries_the_security_headers(launch):
+    httpd = launch()
+    alice = authed(httpd)
+    stream, resp = alice.open_stream("/sse")
+    try:
+        assert resp.status == 200
+        assert resp.getheader("X-Content-Type-Options") == "nosniff"
+    finally:
+        stream.close()
+
+
+# --- (6) the container runs as a non-root user ---------------------------------------------
+
+
+def _dockerfile_instructions():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    text = text.replace("\\\n", " ")  # join continuation lines
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")]
+
+
+def test_dockerfile_runs_as_a_non_root_system_user():
+    lines = _dockerfile_instructions()
+    users = [line.split(None, 1)[1].strip() for line in lines if line.startswith("USER ")]
+    assert users, "no USER instruction: the server would run as root"
+    user = users[-1].split(":")[0]
+    assert user not in ("root", "0")
+    run = " ".join(line for line in lines if line.startswith("RUN "))
+    assert "useradd" in run and "--system" in run and user in run
+    # The file-store fallback dirs stay writable for that user.
+    assert f"chown -R {user}" in run and "/data" in run
+    # USER comes after the last RUN, so the CMD (and nothing after) runs as root.
+    last_run = max(i for i, line in enumerate(lines) if line.startswith("RUN "))
+    last_user = max(i for i, line in enumerate(lines) if line.startswith("USER "))
+    assert last_user > last_run
+    cmd = next(i for i, line in enumerate(lines) if line.startswith("CMD "))
+    assert last_user < cmd
+
+
+def test_dockerfile_does_not_trust_forwarded_for_by_default():
+    # A plain `docker run -p` exposes the server with no proxy in front, where
+    # X-Forwarded-For is the caller's to forge; the platform sets it instead.
+    assert "NUVEL_MCP_TRUST_FORWARDED_FOR" not in " ".join(_dockerfile_instructions())
+
+
+# --- (7a) interactive logins get a tenant per (client, subject) -----------------------------
+
+
+def _trace():
+    import uuid
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent / "fixtures" / "skill_run_example.json")
+                      .read_text())
+    data["run_id"] = str(uuid.uuid4())
+    data["started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return data
+
+
+def _rpc(client, message):
+    session = client.initialize()
+    status, _, data = client.post(message, session)
+    assert status == 200, data
+    body = json.loads(data)
+    assert "result" in body, body
+    return json.loads(body["result"]["content"][0]["text"])
+
+
+def _health(client):
+    return _rpc(client, call("check_skill_health",
+                             {"skill_name": "radar", "plugin": "chief-of-staff"}))
+
+
+def test_two_users_on_one_client_get_separate_tenants(launch):
+    from nuvel_mcp.oauth import tenant_for
+
+    httpd = launch()
+    anon = Client(httpd)
+    shared = register(anon)[1]["client_id"]
+    alice = Client(httpd, user_token_on(anon, shared, "alice"))
+    mallory = Client(httpd, user_token_on(anon, shared, "mallory"))
+    a_info = httpd.oauth.validate(alice.token, None)
+    m_info = httpd.oauth.validate(mallory.token, None)
+    assert a_info.client_id == m_info.client_id == shared
+    assert a_info.tenant != m_info.tenant
+    assert a_info.tenant == tenant_for(shared, "dev:alice")
+    assert a_info.tenant.startswith(shared + ":") and "alice" not in a_info.tenant
+
+    assert _rpc(alice, call("record_run_trace", {"trace": _trace()}))["status"] == "recorded"
+    assert _health(alice)["runs"]["total"] == 1
+    # Same client_id, another user: none of alice's runs.
+    assert _health(mallory)["runs"]["total"] == 0
+
+
+def test_service_and_url_key_tenants_stay_the_client_id(launch):
+    httpd = launch()
+    token = service_token(httpd)
+    info = httpd.oauth.validate(token, None)
+    assert info.tenant == info.client_id
+    record, key = httpd.oauth.create_client("tester", url_key=True)
+    assert httpd.oauth.validate_url_key(key).tenant == record["client_id"]
+
+
+# --- (7b) pending logins are capped per client and per IP -----------------------------------
+
+
+def _start_login(anon, client_id, ip=None):
+    from _mcp_http_helpers import authorize_params
+
+    headers = {"X-Forwarded-For": ip} if ip else None
+    status, _, page = anon.request("GET", authorize_params(client_id, pkce()[1]),
+                                   headers=headers)
+    return status, page
+
+
+def test_pending_logins_are_capped_per_client(launch, store_path):
+    httpd = launch(make_provider(store_path, pending_logins_per_client=2))
+    anon = Client(httpd)
+    flooded, other = register(anon)[1]["client_id"], register(anon)[1]["client_id"]
+    assert _start_login(anon, flooded)[0] == 200
+    assert _start_login(anon, flooded)[0] == 200
+    status, page = _start_login(anon, flooded)
+    assert status == 400 and b"Too many pending sign-ins" in page
+    assert _start_login(anon, other)[0] == 200
+
+
+def test_pending_logins_are_capped_per_ip(launch, store_path):
+    httpd = launch(make_provider(store_path, pending_logins_per_ip=2),
+                   trust_forwarded_for=True)
+    anon = Client(httpd)
+    clients = [register(anon)[1]["client_id"] for _ in range(3)]
+    assert _start_login(anon, clients[0], "203.0.113.5")[0] == 200
+    assert _start_login(anon, clients[1], "203.0.113.5")[0] == 200
+    status, page = _start_login(anon, clients[2], "203.0.113.5")
+    assert status == 400 and b"Too many pending sign-ins" in page
+    assert _start_login(anon, clients[2], "198.51.100.7")[0] == 200
+
+
+def test_finished_or_expired_logins_free_their_slots(store_path):
+    from nuvel_mcp.oauth import OAuthProvider  # noqa: F401 - via make_provider
+
+    provider = make_provider(store_path, pending_logins_per_client=1)
+    clock = _Clock()
+    provider.clock = clock
+    record, _ = provider.create_client("app", ["http://127.0.0.1:9/cb"])
+    params = {"response_type": "code", "client_id": record["client_id"],
+              "redirect_uri": "http://127.0.0.1:9/cb", "state": "s",
+              "code_challenge": pkce()[1], "code_challenge_method": "S256"}
+    login = provider.start_authorization(params, "http://x", "203.0.113.5")
+    provider.pop_login(login["id"])
+    login = provider.start_authorization(params, "http://x", "203.0.113.5")
+    clock.now += 601
+    provider.start_authorization(params, "http://x", "203.0.113.5")
+
+
+# --- (7c) the GitHub allow-list matches the numeric user id ----------------------------------
+
+
+@pytest.fixture
+def github():
+    """A fake GitHub whose /user answer the test sets: ``gh.user = {...}``."""
+    import threading
+    import urllib.parse
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _json(self, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):  # noqa: N802
+            urllib.parse.parse_qsl(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            self._json({"access_token": "gho_fake"})
+
+        def do_GET(self):  # noqa: N802
+            self._json(self.server.user)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.user = {"login": "octocat", "id": 583231}
+    server.base = f"http://127.0.0.1:{server.server_address[1]}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def _github_provider(store_path, gh, allowed):
+    return make_provider(
+        store_path, dev_login=False, github_client_id="gh-id", github_client_secret="gh-secret",
+        allowed_users=frozenset(allowed),
+        github_authorize_url=f"{gh.base}/login/oauth/authorize",
+        github_token_url=f"{gh.base}/login/oauth/access_token",
+        github_user_url=f"{gh.base}/user")
+
+
+def _github_login(httpd):
+    """Run the GitHub flow -> the redirect query (code, or error)."""
+    import urllib.parse
+    from _mcp_http_helpers import authorize_params, cookie_of, login_field, redirect_query
+
+    anon = Client(httpd)
+    client_id = register(anon)[1]["client_id"]
+    verifier, challenge = pkce()
+    _, headers, page = anon.request("GET", authorize_params(client_id, challenge))
+    cookie = {"Cookie": f"nuvel_oauth_login={cookie_of(headers)}"}
+    login = login_field(page)
+    assert anon.form("/authorize", {"login": login, "action": "approve"}, cookie)[0] == 302
+    callback = "/oauth/callback?" + urllib.parse.urlencode({"code": "gh-code", "state": login})
+    status, headers, _ = anon.request("GET", callback, headers=cookie)
+    assert status == 302
+    query = redirect_query(headers)
+    if "code" in query:
+        status, _, body = exchange(anon, client_id, query["code"], verifier)
+        assert status == 200, body
+        query["access_token"] = body["access_token"]
+    return query
+
+
+def test_id_entry_admits_the_account_whatever_its_login(launch, store_path, github):
+    httpd = launch(_github_provider(store_path, github, {"id:583231"}))
+    github.user = {"login": "renamed-cat", "id": 583231}
+    result = _github_login(httpd)
+    info = httpd.oauth.validate(result["access_token"], None)
+    assert info.subject == "github:renamed-cat:583231"
+    assert httpd.oauth.subject_allowed(info)
+    github.user = {"login": "octocat", "id": 999}  # the old login, another account
+    assert _github_login(httpd)["error"] == "access_denied"
+
+
+def test_login_entry_pins_the_first_id_it_admits(launch, store_path, github):
+    httpd = launch(_github_provider(store_path, github, {"octocat"}))
+    first = _github_login(httpd)
+    info = httpd.oauth.validate(first["access_token"], None)
+    assert info.subject == "github:octocat:583231"
+    # The login is renamed away and recycled by another account: refused, and
+    # the original holder's token is still good.
+    github.user = {"login": "OctoCat", "id": 1000001}
+    assert _github_login(httpd)["error"] == "access_denied"
+    assert httpd.oauth.subject_allowed(info)
+    # A token carrying the recycled login and another id fails the re-check too.
+    from nuvel_mcp.oauth import TokenInfo
+    impostor = TokenInfo(info.client_id, "github:octocat:1000001", info.scope, "", 0.0)
+    assert not httpd.oauth.subject_allowed(impostor)
+
+
+def test_github_user_without_a_numeric_id_is_refused(launch, store_path, github):
+    httpd = launch(_github_provider(store_path, github, {"octocat"}))
+    github.user = {"login": "octocat"}
+    assert _github_login(httpd)["error"] == "server_error"
+    github.user = {"login": "octocat", "id": "583231"}  # not an integer
+    assert _github_login(httpd)["error"] == "server_error"
+    github.user = {"login": "octocat", "id": True}  # JSON true is not an id
+    assert _github_login(httpd)["error"] == "server_error"
+
+
+@pytest.mark.parametrize("allowed", [{"id:583231"}, {"octocat"}])
+def test_same_github_id_under_a_new_login_keeps_its_tenant(launch, store_path, github,
+                                                          allowed):
+    # Two logins for one account (a rename): the tenant and the allow-list
+    # decision follow the numeric id, not the login.
+    httpd = launch(_github_provider(store_path, github, allowed))
+    first = httpd.oauth.validate(_github_login(httpd)["access_token"], None)
+    github.user = {"login": "renamed-cat", "id": 583231}
+    result = _github_login(httpd)
+    if allowed == {"octocat"}:
+        # A login entry names the old login only: the renamed account is out
+        # until the operator lists the new login or its id.
+        assert result["error"] == "access_denied"
+        return
+    second = httpd.oauth.validate(result["access_token"], None)
+    assert second.subject == "github:renamed-cat:583231"
+    # Different clients (each login registered its own), so compare identities.
+    from nuvel_mcp.oauth import tenant_for
+    assert tenant_for(first.client_id, second.subject) == first.tenant
+
+
+def test_tokens_issued_before_ids_keep_working_with_login_entries(store_path):
+    from nuvel_mcp.oauth import TokenInfo
+
+    old = TokenInfo("nvcl_x", "github:octocat", frozenset(), "", 0.0)
+    assert make_provider(store_path, allowed_users=frozenset({"octocat"})).subject_allowed(old)
+    # An id-only allow-list cannot vouch for a token that carries no id.
+    assert not make_provider(store_path,
+                             allowed_users=frozenset({"id:583231"})).subject_allowed(old)
+
+
+def test_github_tenant_follows_the_id_not_the_login():
+    from nuvel_mcp.oauth import tenant_for
+
+    assert tenant_for("nvcl_x", "github:octocat:5") == tenant_for("nvcl_x", "github:renamed:5")
+    assert tenant_for("nvcl_x", "github:octocat:5") != tenant_for("nvcl_x", "github:octocat:6")
+
+
+def test_allowed_users_env_accepts_ids_and_logins(monkeypatch):
+    from nuvel_mcp.oauth import OAuthConfig
+
+    monkeypatch.setenv("NUVEL_OAUTH_ALLOWED_USERS", "Alice, id:583231")
+    assert OAuthConfig.from_env().allowed_users == frozenset({"alice", "id:583231"})
+
+
+# --- (3) URL-key expiry ------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self):
+        self.now = time.time()
+
+    def __call__(self):
+        return self.now
+
+
+def test_url_key_with_expiry_is_refused_once_expired(launch):
+    httpd = launch()
+    clock = _Clock()
+    httpd.oauth.clock = clock
+    record, key = httpd.oauth.create_client("tester", url_key=True, expires_in=3600)
+    assert record["url_key_expires_at"] == pytest.approx(clock.now + 3600)
+    client = Client(httpd)
+    assert client.post(INIT, path=f"/mcp/k/{key}")[0] == 200
+    assert httpd.oauth.validate_url_key(key).expires_at == pytest.approx(clock.now + 3600)
+    clock.now += 3601
+    assert httpd.oauth.validate_url_key(key) is None
+    status, headers, _ = client.post(INIT, path=f"/mcp/k/{key}")
+    assert status == 401 and "resource_metadata" not in headers["WWW-Authenticate"]
+
+
+def test_url_key_without_expiry_keeps_working(launch):
+    httpd = launch()
+    clock = _Clock()
+    httpd.oauth.clock = clock
+    _, key = httpd.oauth.create_client("tester", url_key=True)
+    clock.now += 10 * 365 * 24 * 3600
+    assert httpd.oauth.validate_url_key(key) is not None
+    assert Client(httpd).post(INIT, path=f"/mcp/k/{key}")[0] == 200
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("nan"), float("inf")])
+def test_url_key_expiry_must_be_positive_and_finite(store_path, bad):
+    with pytest.raises(ValueError):
+        make_provider(store_path).create_client("t", url_key=True, expires_in=bad)
+
+
+def test_expiry_needs_a_url_key(store_path):
+    with pytest.raises(ValueError):
+        make_provider(store_path).create_client("t", expires_in=60)
+
+
+@pytest.mark.file_store
+def test_cli_url_key_expires_in_days(store_path, monkeypatch, capsys):
+    from nuvel_mcp.cli import main as cli_main
+
+    monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
+    before = time.time()
+    assert cli_main(["client", "create", "--name", "t", "--url-key", "--expires-in", "7"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    expires = out["expires_at"]
+    from datetime import datetime
+    stamp = datetime.fromisoformat(expires.replace("Z", "+00:00")).timestamp()
+    assert before + 7 * 86400 - 5 <= stamp <= time.time() + 7 * 86400 + 5
+    provider = make_provider(store_path)
+    assert provider.validate_url_key(out["url_key"]).expires_at == pytest.approx(stamp, abs=1)
+
+
+@pytest.mark.file_store
+@pytest.mark.parametrize("args", [["--url-key", "--expires-in", "0"],
+                                  ["--url-key", "--expires-in", "-3"],
+                                  ["--expires-in", "7"]])
+def test_cli_rejects_bad_expires_in(store_path, monkeypatch, capsys, args):
+    from nuvel_mcp.cli import main as cli_main
+
+    monkeypatch.setenv("NUVEL_MCP_OAUTH_STORE", str(store_path))
+    assert cli_main(["client", "create", "--name", "t", *args]) == 2
+    assert "--expires-in" in capsys.readouterr().err

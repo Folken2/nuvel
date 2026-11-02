@@ -52,7 +52,9 @@ curl -s -u "$NUVEL_CLIENT_ID:$NUVEL_CLIENT_SECRET" \
 
 For an MCP client that can only be given a URL (a Claude custom connector with
 no sign-in), `uvx nuvel-mcp client create --name alice --url-key` prints a
-per-client `connector_url` (`$NUVEL_MCP_PUBLIC_URL/mcp/k/<key>`) once. Set
+per-client `connector_url` (`$NUVEL_MCP_PUBLIC_URL/mcp/k/<key>`) once; add
+`--expires-in DAYS` for a key that stops working after that long. To rotate a
+key, issue a new one, hand it out, then `client delete` the old client. Set
 `NUVEL_OAUTH_LOGIN=none` to run a public server with no interactive login.
 
 The [deployment guide](https://folken2.github.io/nuvel/how-to/deploy-skills-mcp/)

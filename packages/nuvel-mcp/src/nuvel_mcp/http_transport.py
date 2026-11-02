@@ -43,8 +43,10 @@ Every server built here runs its dispatcher in remote mode
 (``SkillsMCPServer.enable_remote_mode``): nothing read from the feedback store
 is served, and without an explicit ``tools`` allow-list only
 ``HTTP_DEFAULT_TOOLS`` are exposed. Each authenticated dispatch runs with
-``nuvel_mcp.auth.current_principal`` set to the token's ``client_id``, the
-tenant that run traces are stamped and scoped with (``None`` with no auth).
+``nuvel_mcp.auth.current_principal`` set to the token's tenant
+(``TokenInfo.tenant``: the ``client_id``, plus a hash of the user for an
+interactive login), which run traces are stamped and scoped with (``None``
+with no auth).
 
 Diagnostics go to stderr; request bodies, query strings, URL keys, tokens and
 codes are never logged.
@@ -52,6 +54,7 @@ codes are never logged.
 
 from __future__ import annotations
 
+import contextlib
 import http.cookies
 import ipaddress
 import json
@@ -72,6 +75,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from nuvel_mcp import oauth
 from nuvel_mcp.auth import current_principal
+from nuvel_mcp.clientip import client_ip, trust_forwarded_for
 from nuvel_mcp.oauth import (
     FORBIDDEN,
     UNAUTHORIZED,
@@ -100,7 +104,11 @@ DEFAULT_SESSION_TTL = 3600.0
 DEFAULT_PING_INTERVAL = 15.0
 DEFAULT_READ_TIMEOUT = 30.0
 DEFAULT_REQUEST_DEADLINE = 30.0
+DEFAULT_HEADER_DEADLINE = 5.0
 DEFAULT_MAX_CONNECTIONS = 128
+DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 8
+DEFAULT_MAX_STREAMS_PER_PRINCIPAL = 4
+DEFAULT_MAX_CONNECTIONS_PER_IP = 16
 CORS_MAX_AGE = 600
 
 SESSION_HEADER = "Mcp-Session-Id"
@@ -144,23 +152,46 @@ class HttpConfig:
     # Wall-clock seconds a client gets to send a whole request (request line,
     # headers and body), however slowly it trickles. Must be > 0.
     request_deadline: float = DEFAULT_REQUEST_DEADLINE
+    # Behind a trusted proxy only: seconds a connection gets to finish its
+    # request line and headers (idle keep-alive included). Until then it has
+    # no caller IP to count against the per-IP cap, so this bounds how long an
+    # unidentified connection can sit on a global slot. Must be > 0.
+    header_deadline: float = DEFAULT_HEADER_DEADLINE
     # Handler threads (open connections, SSE streams included) served at once;
     # further connections are refused with 503. Must be >= 1.
     max_connections: int = DEFAULT_MAX_CONNECTIONS
+    # Per principal (a signed-in user's subject across all their clients; else
+    # the client: client_credentials, URL keys -- see limit_key): sessions open
+    # and SSE streams (GET /mcp and GET /sse) held at once, so one caller
+    # cannot take every global slot. Past either cap the caller's own least
+    # recently used session / oldest stream gives way. Must be >= 1.
+    max_sessions_per_principal: int = DEFAULT_MAX_SESSIONS_PER_PRINCIPAL
+    max_streams_per_principal: int = DEFAULT_MAX_STREAMS_PER_PRINCIPAL
+    # Per caller IP (see trust_forwarded_for): connections held at once,
+    # refused with 429 from the accept loop. Behind a trusted proxy every TCP
+    # peer is the proxy, so the cap counts in-flight requests (SSE streams
+    # included) by X-Forwarded-For instead. Must be >= 1.
+    max_connections_per_ip: int = DEFAULT_MAX_CONNECTIONS_PER_IP
+    # NUVEL_MCP_TRUST_FORWARDED_FOR: take the caller's IP from the right-most
+    # X-Forwarded-For entry (our proxy's). Only behind a proxy that sets it,
+    # or callers could pick their own IP.
+    trust_forwarded_for: bool = False
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
     # The origin clients reach this server at (NUVEL_MCP_PUBLIC_URL). It is the
     # OAuth issuer and resource; unset, the origin is derived from Host.
     public_url: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("read_timeout", "request_deadline"):
+        for name in ("read_timeout", "request_deadline", "header_deadline"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 env = "NUVEL_MCP_" + name.upper()
                 raise ValueError(f"{env} must be a number of seconds greater than 0 (got {value})")
-        if self.max_connections < 1:
-            raise ValueError("NUVEL_MCP_MAX_CONNECTIONS must be at least 1 "
-                             f"(got {self.max_connections})")
+        for name in ("max_connections", "max_sessions_per_principal",
+                     "max_streams_per_principal", "max_connections_per_ip"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"NUVEL_MCP_{name.upper()} must be at least 1 (got {value})")
 
     @classmethod
     def from_env(cls) -> "HttpConfig":
@@ -171,7 +202,15 @@ class HttpConfig:
             session_ttl=_env_float("NUVEL_MCP_SESSION_TTL", DEFAULT_SESSION_TTL),
             read_timeout=_env_float("NUVEL_MCP_READ_TIMEOUT", DEFAULT_READ_TIMEOUT),
             request_deadline=_env_float("NUVEL_MCP_REQUEST_DEADLINE", DEFAULT_REQUEST_DEADLINE),
+            header_deadline=_env_float("NUVEL_MCP_HEADER_DEADLINE", DEFAULT_HEADER_DEADLINE),
             max_connections=_env_int("NUVEL_MCP_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
+            max_sessions_per_principal=_env_int("NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL",
+                                                DEFAULT_MAX_SESSIONS_PER_PRINCIPAL),
+            max_streams_per_principal=_env_int("NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
+                                               DEFAULT_MAX_STREAMS_PER_PRINCIPAL),
+            max_connections_per_ip=_env_int("NUVEL_MCP_MAX_CONNECTIONS_PER_IP",
+                                            DEFAULT_MAX_CONNECTIONS_PER_IP),
+            trust_forwarded_for=trust_forwarded_for(),
             allowed_origins=frozenset(
                 o for o in (_normalize_origin(x) for x in origins.split(",")) if o
             ),
@@ -287,11 +326,136 @@ class SessionFull(Exception):
     pass
 
 
-class SessionStore:
-    """Thread-safe session table with a size cap and idle expiry."""
+def limit_key(principal):
+    """What the per-principal caps count against: a signed-in user's subject
+    alone (one user who registers more clients through DCR gets no more
+    sessions or streams), else the client (client_credentials and URL keys,
+    whose subject is ``client:<client_id>``). None when auth is off."""
+    if principal is None:
+        return None
+    client_id, subject = principal
+    if not subject or subject == f"client:{client_id}":
+        return ("client", client_id)
+    return ("subject", oauth.subject_identity(subject))
 
-    def __init__(self, max_sessions: int, ttl: float):
+
+class _Displaced:
+    """Outbox sentinel: end the stream holding ``token`` (a newer stream of the
+    same principal took its slot). Any other stream on the session skips it,
+    so a sentinel left behind by a stream that already ended is harmless."""
+
+    def __init__(self, token):
+        self.token = token
+
+
+class StreamSlots:
+    """Open SSE streams per principal, at most ``limit`` each.
+
+    A new stream past the cap displaces that principal's oldest one instead
+    of being refused: behind a proxy a client that went away can leave its
+    stream half-open for minutes, and refusing would lock the client out of
+    its own reconnect.
+
+    A displaced stream stays counted as *draining* until its handler really
+    exits (``close``), so a principal cannot stack up threads and sockets by
+    displacing streams whose handlers are stuck. Displacement wakes the
+    handler through the outbox and shuts its socket down, which fails a write
+    blocked on a reader that stopped reading. With ``limit`` streams open and
+    ``limit`` still draining, a new stream is refused (``open`` returns None).
+    """
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        # key -> {token: (session, socket)}, oldest first; and the displaced
+        # ones whose handlers have not exited yet.
+        self._open: dict = {}
+        self._draining: dict = {}
+        self._lock = threading.Lock()
+
+    def open(self, key, session: Session, sock: socket.socket | None) -> object | None:
+        token = object()
+        displaced = None
+        with self._lock:
+            streams = self._open.setdefault(key, {})
+            draining = self._draining.setdefault(key, {})
+            if len(streams) >= self.limit:
+                if len(draining) >= self.limit:
+                    self._drop_empty(key)
+                    return None
+                oldest = next(iter(streams))
+                displaced = (oldest, streams.pop(oldest))
+                draining[oldest] = displaced[1]
+            streams[token] = (session, sock)
+        if displaced is not None:
+            old_token, (old_session, old_sock) = displaced
+            old_session.outbox.put(_Displaced(old_token))  # wakes a waiting stream
+            if old_sock is not None:
+                with contextlib.suppress(OSError):
+                    old_sock.shutdown(socket.SHUT_RDWR)  # fails a blocked write
+        return token
+
+    def close(self, key, token) -> None:
+        with self._lock:
+            for table in (self._open, self._draining):
+                streams = table.get(key)
+                if streams is not None:
+                    streams.pop(token, None)
+            self._drop_empty(key)
+
+    def _drop_empty(self, key) -> None:
+        for table in (self._open, self._draining):
+            if key in table and not table[key]:
+                del table[key]
+
+    def counts(self, key) -> tuple[int, int]:
+        """(open, draining) streams of ``key``."""
+        with self._lock:
+            return len(self._open.get(key, ())), len(self._draining.get(key, ()))
+
+
+class KeyedLimiter:
+    """Concurrent holders per key (a principal, an IP), at most ``limit`` each.
+
+    ``acquire`` never blocks: a caller over its share is refused at once.
+    Keys with no holders are dropped, so the table only holds live callers.
+    """
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self._held: dict = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, key) -> bool:
+        with self._lock:
+            held = self._held.get(key, 0)
+            if held >= self.limit:
+                return False
+            self._held[key] = held + 1
+            return True
+
+    def release(self, key) -> None:
+        with self._lock:
+            held = self._held.get(key, 0) - 1
+            if held > 0:
+                self._held[key] = held
+            else:
+                self._held.pop(key, None)
+
+
+class SessionStore:
+    """Thread-safe session table with a size cap, a per-principal cap and
+    idle expiry.
+
+    A principal at its cap gets a new session by evicting its own least
+    recently used one (closed as DELETE or expiry would close it), not a
+    refusal: connectors often re-``initialize`` on every reconnect and never
+    DELETE, and refusing would lock a legitimate tester out until the TTL.
+    The per-principal cap is skipped when auth is off (principal ``None``):
+    there is only the one local caller."""
+
+    def __init__(self, max_sessions: int, ttl: float, max_per_principal: int | None = None):
         self.max_sessions = max_sessions
+        self.max_per_principal = max_per_principal
         self.ttl = ttl
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
@@ -304,8 +468,18 @@ class SessionStore:
     def create(self, kind: str, principal=None) -> Session:
         with self._lock:
             self._reap_locked()
-            if len(self._sessions) >= self.max_sessions:
+            key = limit_key(principal)
+            evict: list[Session] = []
+            if key is not None and self.max_per_principal is not None:
+                mine = [s for s in self._sessions.values() if limit_key(s.principal) == key]
+                surplus = len(mine) - self.max_per_principal + 1
+                if surplus > 0:
+                    evict = sorted(mine, key=lambda s: s.last_seen)[:surplus]
+            # Evicting the caller's own sessions frees global slots too.
+            if len(self._sessions) - len(evict) >= self.max_sessions:
                 raise SessionFull()
+            for old in evict:
+                self._sessions.pop(old.id).close()  # ends its stream, if any
             session = Session(secrets.token_urlsafe(32), kind, principal)
             self._sessions[session.id] = session
             return session
@@ -359,9 +533,26 @@ class _DeadlineReader:
         self._idle = idle
         self._buf = bytearray()
         self._deadline = math.inf
+        self._first_byte_window: float | None = None
+        # When the current request's first byte arrived (None while idle).
+        self.first_byte_at: float | None = None
 
-    def arm(self, seconds: float) -> None:
-        self._deadline = time.monotonic() + seconds
+    def arm(self, seconds: float, first_byte_window: float | None = None) -> None:
+        """Deadline ``seconds`` from now; with ``first_byte_window``, also at
+        most that long after the request's first byte arrives, so idle time
+        before a request does not count against the shorter window."""
+        now = time.monotonic()
+        self._deadline = now + seconds
+        self._first_byte_window = first_byte_window
+        self.first_byte_at = None
+        if self._buf:  # pipelined bytes already here: the request has begun
+            self._first_byte(now)
+
+    def _first_byte(self, now: float) -> None:
+        self.first_byte_at = now
+        if self._first_byte_window is not None:
+            self._deadline = min(self._deadline, now + self._first_byte_window)
+            self._first_byte_window = None
 
     def _fill(self) -> bool:
         remaining = self._deadline - time.monotonic()
@@ -376,6 +567,8 @@ class _DeadlineReader:
             data = b""
         finally:
             self._sock.settimeout(self._idle)
+        if data and self.first_byte_at is None:
+            self._first_byte(time.monotonic())
         self._buf += data
         return bool(data)
 
@@ -454,28 +647,51 @@ class McpHTTPServer(ThreadingHTTPServer):
         self.mcp = mcp
         self.config = config
         self.oauth = oauth_provider
-        self.sessions = SessionStore(config.max_sessions, config.session_ttl)
+        self.sessions = SessionStore(config.max_sessions, config.session_ttl,
+                                     config.max_sessions_per_principal)
+        # Open SSE streams per principal (GET /mcp and GET /sse alike).
+        self.principal_streams = StreamSlots(config.max_streams_per_principal)
         self.stopping = threading.Event()
         self._slots = threading.BoundedSemaphore(config.max_connections)
+        # Per caller IP: connections by TCP peer here in the accept loop, or,
+        # behind a trusted proxy, in-flight requests by X-Forwarded-For (see
+        # McpRequestHandler._ip_slot).
+        self.per_ip = KeyedLimiter(config.max_connections_per_ip)
         super().__init__(address, McpRequestHandler)
 
+    def _peer_key(self, client_address) -> str | None:
+        """The per-IP key counted at accept time, or None behind a trusted
+        proxy (where the peer is the proxy, shared by every caller)."""
+        return None if self.config.trust_forwarded_for else client_address[0]
+
+    def _refuse(self, request, status: bytes) -> None:
+        """Answer from the accept loop (one short write) without a thread."""
+        try:
+            request.settimeout(1.0)
+            request.sendall(b"HTTP/1.1 " + status + b"\r\nRetry-After: 1\r\n"
+                            b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            request.shutdown(socket.SHUT_WR)
+            _drain_pending(request)
+        except OSError:
+            pass
+        self.shutdown_request(request)
+
     def process_request(self, request, client_address) -> None:
-        # Cap handler threads: when full, answer 503 from the accept loop
-        # (one short write) without spawning a thread.
+        # Cap handler threads: when full, answer 503 without spawning one.
         if not self._slots.acquire(blocking=False):
-            try:
-                request.settimeout(1.0)
-                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\n"
-                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
-                request.shutdown(socket.SHUT_WR)
-                _drain_pending(request)
-            except OSError:
-                pass
-            self.shutdown_request(request)
+            self._refuse(request, b"503 Service Unavailable")
+            return
+        # One peer over its share: 429, as cheaply.
+        peer = self._peer_key(client_address)
+        if peer is not None and not self.per_ip.acquire(peer):
+            self._slots.release()
+            self._refuse(request, b"429 Too Many Requests")
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
+            if peer is not None:
+                self.per_ip.release(peer)
             self._slots.release()
             raise
 
@@ -483,6 +699,9 @@ class McpHTTPServer(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
+            peer = self._peer_key(client_address)
+            if peer is not None:
+                self.per_ip.release(peer)
             self._slots.release()
 
     @property
@@ -551,13 +770,30 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self.connection.settimeout(self.server.config.read_timeout)
         self.rfile.close()
         self.rfile = _DeadlineReader(self.connection, self.server.config.read_timeout)
+        self._served_a_request = False
 
     def handle_one_request(self) -> None:
         # One deadline for request line + headers + body (an idle keep-alive
         # connection counts too). Expiry closes the connection quietly; a body
         # that outlives it gets 408 in _read_body.
-        self.rfile.arm(self.server.config.request_deadline)
+        config = self.server.config
+        if not config.trust_forwarded_for:
+            self.rfile.arm(config.request_deadline)
+        elif not self._served_a_request:
+            # Behind a proxy the headers name the caller (X-Forwarded-For);
+            # until they arrive the connection counts against no per-IP share.
+            # A fresh connection was opened to forward a request, so the short
+            # header deadline runs from accept, idle time included: a caller
+            # that connects and sends nothing cannot sit on a global slot.
+            self.rfile.arm(min(config.header_deadline, config.request_deadline))
+        else:
+            # A reused keep-alive connection idles as usual (the proxy pools
+            # upstream connections; closing idle ones early races its reuse
+            # into 502s). The short header deadline starts at the next
+            # request's first byte (see parse_request for the body).
+            self.rfile.arm(config.request_deadline, first_byte_window=config.header_deadline)
         super().handle_one_request()
+        self._served_a_request = True
 
     def parse_request(self) -> bool:
         self._expects_continue = False
@@ -568,6 +804,13 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             return super().parse_request()
         finally:
             self.rfile = tap._fp
+            started = self.rfile.first_byte_at
+            if self.server.config.trust_forwarded_for and started is not None:
+                # Identified now: the body gets what is left of the request
+                # deadline, counted from the request's first byte.
+                self.rfile.arm(self.server.config.request_deadline
+                               - (time.monotonic() - started))
+                self.rfile.first_byte_at = started
 
     def handle_expect_100(self) -> bool:
         # The stdlib would send "100 Continue" here, inside parse_request, before
@@ -633,6 +876,16 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         if origin and not self._origin_ok(origin):
             raise _Reject(HTTPStatus.FORBIDDEN, "Origin not allowed")
 
+    def _security_headers(self) -> dict[str, str]:
+        """On every response. HSTS only when the configured public URL is
+        https: it is the one origin we know browsers reach over TLS (a
+        loopback or plain-http deploy must not pin itself to https)."""
+        headers = {"X-Content-Type-Options": "nosniff"}
+        public = self.server.config.public_url
+        if public and public.startswith("https://"):
+            headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return headers
+
     def _send(self, status: int, body: bytes = b"", content_type: str | None = None,
               headers: dict | None = None) -> None:
         self.send_response(status)
@@ -641,7 +894,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if self.close_connection:
             self.send_header("Connection", "close")
-        for key, value in {**self._cors_headers(), **(headers or {})}.items():
+        for key, value in {**self._security_headers(), **self._cors_headers(),
+                           **(headers or {})}.items():
             self.send_header(key, value)
         self.end_headers()
         if body and self.command != "HEAD":
@@ -854,15 +1108,17 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _dispatch_all(self, messages, info: TokenInfo | None) -> list:
         """Run each message through the shared dispatcher; collect responses.
 
-        The caller's tenant is the token's ``client_id`` (never its subject, a
-        person's login); ``None`` when auth is off. Dispatch is synchronous on
+        The caller's tenant is ``TokenInfo.tenant``: the ``client_id`` for a
+        client acting as itself (client_credentials, URL keys), the client_id
+        plus a hash of the user for an interactive login (never the subject,
+        a person's login, itself); ``None`` when auth is off. Dispatch is synchronous on
         this thread, so the tool handlers see it via ``current_principal``.
         This is the only place the principal is set for HTTP: both POST /mcp
         and the legacy POST /messages route through here, and the ``finally``
         resets it even when dispatch raises, so a keep-alive connection's next
         request never inherits it.
         """
-        reset = current_principal.set(info.client_id if info else None)
+        reset = current_principal.set(info.tenant if info else None)
         try:
             return self._dispatch_each(messages)
         finally:
@@ -887,15 +1143,20 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         return responses
 
     def _stream(self, session: Session, first_event: bytes | None = None,
-                still_valid=lambda: True) -> None:
-        """Hold an SSE stream open, relaying the session outbox and pinging."""
+                still_valid=lambda: True, token=None) -> None:
+        """Hold an SSE stream open, relaying the session outbox and pinging.
+        ``token`` is this stream's slot (see StreamSlots): a ``_Displaced``
+        carrying it ends the stream."""
         self.close_connection = True
+        # Every write is bounded (sendall's timeout is its total duration), so
+        # a client that stops reading frees this thread after read_timeout.
+        self.connection.settimeout(self.server.config.read_timeout)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
-        for key, value in self._cors_headers().items():
+        for key, value in {**self._security_headers(), **self._cors_headers()}.items():
             self.send_header(key, value)
         if session.kind == "streamable":
             self.send_header(SESSION_HEADER, session.id)
@@ -917,6 +1178,10 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                     continue
                 if item is _STREAM_CLOSED:
                     break
+                if isinstance(item, _Displaced):
+                    if item.token is token:
+                        break  # a newer stream of this principal took the slot
+                    continue  # meant for an earlier stream on this session
                 session.touch()
                 self.wfile.write(sse_event(item))
                 self.wfile.flush()
@@ -933,7 +1198,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self._client_wants_close = self.close_connection
         self.close_connection = True
         self._body_length = 0
+        ip_slot = None
         try:
+            ip_slot = self._ip_slot()
             self._body_length = self._check_framing()
             if self._body_length == 0:
                 self.close_connection = self._client_wants_close
@@ -952,6 +1219,26 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                                 error_response(None, INTERNAL_ERROR, "Internal error"))
             except OSError:
                 pass
+        finally:
+            if ip_slot is not None:
+                self.server.per_ip.release(ip_slot)
+
+    def _client_ip(self) -> str:
+        return client_ip(self.headers, self.client_address[0],
+                         self.server.config.trust_forwarded_for)
+
+    def _ip_slot(self) -> str | None:
+        """Behind a trusted proxy, hold the caller IP's slot for this request
+        (an SSE stream holds it while open), or 429. Without one the accept
+        loop already counted the TCP peer: None."""
+        if not self.server.config.trust_forwarded_for:
+            return None
+        ip = self._client_ip()
+        if not self.server.per_ip.acquire(ip):
+            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
+                          "Too many connections from this address; try again later",
+                          SERVER_BUSY, {"Retry-After": "1"})
+        return ip
 
     def _route(self, routes: dict) -> None:
         path = self._path()
@@ -1055,6 +1342,29 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             raise _Reject(HTTPStatus.SERVICE_UNAVAILABLE,
                           "Too many sessions; try again later", SERVER_BUSY)
 
+    @contextlib.contextmanager
+    def _stream_slot(self, info: TokenInfo | None, session: Session):
+        """Hold one of the principal's SSE stream slots for the block; yield
+        its token for ``_stream``. Past the cap the principal's oldest stream
+        is displaced, never this one. No cap with auth off (principal ``None``)."""
+        key = limit_key(self._principal(info))
+        if key is None:
+            yield None
+            return
+        streams = self.server.principal_streams
+        token = streams.open(key, session, self.connection)
+        if token is None:
+            # Every slot is open and as many displaced handlers are still
+            # exiting: brief, so a short Retry-After.
+            self.close_connection = True
+            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
+                          "Too many open streams for this client; try again shortly",
+                          SERVER_BUSY, {"Retry-After": "1"})
+        try:
+            yield token
+        finally:
+            streams.close(key, token)
+
     def _post_mcp(self) -> None:
         info = self._authenticate()
         messages, is_batch = self._parse_jsonrpc(self._read_body())
@@ -1102,7 +1412,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True  # free this connection's slot right away
             raise _Reject(HTTPStatus.CONFLICT, "A stream is already open for this session")
         try:
-            self._stream(session, still_valid=self._still_valid(info))
+            with self._stream_slot(info, session) as token:
+                self._stream(session, still_valid=self._still_valid(info), token=token)
         finally:
             session.stream_lock.release()
 
@@ -1117,8 +1428,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         session = self._new_session("legacy", info)
         endpoint = f"/messages?sessionId={session.id}"
         try:
-            self._stream(session, first_event=sse_event(endpoint, event="endpoint"),
-                         still_valid=self._still_valid(info))
+            with self._stream_slot(info, session) as token:
+                self._stream(session, first_event=sse_event(endpoint, event="endpoint"),
+                             still_valid=self._still_valid(info), token=token)
         finally:
             # A legacy session lives exactly as long as its stream.
             self.server.sessions.terminate(session.id)
@@ -1147,7 +1459,9 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             metadata = json.loads(body.decode("utf-8"))
         except (ValueError, RecursionError):  # bad JSON or UTF-8, or nested too deep
             raise OAuthError("invalid_client_metadata", "Body must be JSON")
-        response = self.server.oauth.register_client(metadata, self.client_address[0])
+        # Keyed on the caller, not the TCP peer: behind Railway's proxy every
+        # peer is the proxy, and one shared bucket would let anyone lock out all.
+        response = self.server.oauth.register_client(metadata, self._client_ip())
         self._send_json(HTTPStatus.CREATED, response, _NO_STORE)
 
     def _login_cookie(self) -> str | None:
@@ -1167,7 +1481,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _get_authorize(self) -> None:
         provider = self.server.oauth
         try:
-            login = provider.start_authorization(self._query(), self._origin())
+            login = provider.start_authorization(self._query(), self._origin(),
+                                                 self._client_ip())
         except AuthorizeError as exc:
             self._send_html(HTTPStatus.BAD_REQUEST, oauth.error_page(str(exc)))
             return
@@ -1225,12 +1540,12 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                                                         "GitHub sign-in was not completed"))
             return
         try:
-            user = provider.github_user(query["code"], login)
+            user, github_id = provider.github_user(query["code"], login)
         except OAuthError as exc:
             log(f"OAuth: {exc.description}")
             self._finish(login, provider.error_redirect(login, exc.error, exc.description))
             return
-        self._finish(login, provider.complete_authorization(login, user, "github"))
+        self._finish(login, provider.complete_authorization(login, user, "github", github_id))
 
     def _post_dev_login(self) -> None:
         provider = self.server.oauth
@@ -1283,6 +1598,14 @@ def make_server(mcp: SkillsMCPServer, host: str = DEFAULT_HOST, port: int = DEFA
             f"NUVEL_MCP_MAX_CONNECTIONS ({config.max_connections}): every open SSE stream "
             "holds a connection, so streams can use up all connections before the "
             "session cap applies. Keep sessions below connections.")
+    if (config.public_url or "").startswith("https://") and not config.trust_forwarded_for:
+        # An https public URL means TLS ends in front of us (this server never
+        # terminates it), so every TCP peer is likely that proxy.
+        log("Warning: NUVEL_MCP_PUBLIC_URL is https but NUVEL_MCP_TRUST_FORWARDED_FOR is "
+            "not set: behind a TLS-terminating proxy every connection comes from the "
+            "proxy, so the per-IP caps (NUVEL_MCP_MAX_CONNECTIONS_PER_IP, /register, "
+            "pending logins) count all callers as one. Set NUVEL_MCP_TRUST_FORWARDED_FOR=1 "
+            "if the proxy appends the caller to X-Forwarded-For.")
     return McpHTTPServer((host, port), mcp, config, oauth_provider)
 
 

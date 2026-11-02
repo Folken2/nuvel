@@ -2,7 +2,7 @@
 
 Every HTTP server runs in remote mode (nothing from the feedback store is
 served), exposes the gated HTTP default tool set unless ``--tools`` says
-otherwise, stamps run traces with the OAuth ``client_id`` (never the subject),
+otherwise, stamps run traces with the token's tenant (never the raw subject),
 and refuses cross-origin browser requests to a loopback bind.
 
 Real servers on 127.0.0.1:0, driven with http.client — no HTTP mocks.
@@ -284,7 +284,9 @@ def user_token(client, username):
     return reg["client_id"], body["access_token"]
 
 
-def test_concurrent_clients_are_stamped_with_their_own_client_id(launch, hub, tmp_path):
+def test_concurrent_clients_are_stamped_with_their_own_tenant(launch, hub, tmp_path):
+    from nuvel_mcp.oauth import tenant_for
+
     httpd = launch(hub)
     anon = Client(httpd)
     users = {}
@@ -319,8 +321,9 @@ def test_concurrent_clients_are_stamped_with_their_own_client_id(launch, hub, tm
     records = stored_traces(tmp_path / "feedback")
     assert len(records) == per_client * len(users)
     tenants = [r.get("tenant") for r in records]
-    for _, client_id, _ in users.values():
-        assert tenants.count(client_id) == per_client
+    for _, client_id, subject in users.values():
+        # An interactive login's tenant is its client plus a hash of the user.
+        assert tenants.count(tenant_for(client_id, subject)) == per_client
     raw = json.dumps(records)
     for _, _, subject in users.values():
         assert subject not in raw

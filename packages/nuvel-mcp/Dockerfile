@@ -17,10 +17,25 @@ RUN pip install . "psycopg[binary,pool]>=3.2,<4" && rm -rf /app/src
 # Storage: set NUVEL_MCP_DATABASE_URL (e.g. Neon's pooled connection string) and
 # OAuth, traces, recipes and usage all live in Postgres; nothing on disk matters.
 # Without it the server falls back to files under /data, which then needs a
-# persistent volume. Runs as root because Railway volumes are mounted root-owned.
+# persistent volume. The server runs as the unprivileged system user "nuvel":
+# /data is created owned by it, so the fallback works in the image, but a
+# volume mounted there is owned by whoever the platform makes it (Railway:
+# root) and must be made writable for uid 10001 first.
 ENV NUVEL_MCP_OAUTH_STORE=/data/oauth.json \
     NUVEL_FEEDBACK_DIR=/data/feedback
-RUN mkdir -p /data
+RUN groupadd --system --gid 10001 nuvel \
+    && useradd --system --uid 10001 --gid nuvel --home-dir /data \
+       --no-create-home --shell /usr/sbin/nologin nuvel \
+    && mkdir -p /data/feedback \
+    && chown -R nuvel:nuvel /data \
+    && chmod 0700 /data
+
+# X-Forwarded-For is not trusted by default: a plain `docker run -p` exposes
+# the server with no proxy in front, where callers could forge it. Behind
+# Railway (or any proxy that appends the caller's address), set
+# NUVEL_MCP_TRUST_FORWARDED_FOR=1 in the platform's variables.
+
+USER nuvel
 
 EXPOSE 8080
 
