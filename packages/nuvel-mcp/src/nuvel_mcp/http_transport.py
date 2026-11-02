@@ -1423,12 +1423,12 @@ class McpRequestHandler(BaseHTTPRequestHandler):
                                                         "GitHub sign-in was not completed"))
             return
         try:
-            user = provider.github_user(query["code"], login)
+            user, github_id = provider.github_user(query["code"], login)
         except OAuthError as exc:
             log(f"OAuth: {exc.description}")
             self._finish(login, provider.error_redirect(login, exc.error, exc.description))
             return
-        self._finish(login, provider.complete_authorization(login, user, "github"))
+        self._finish(login, provider.complete_authorization(login, user, "github", github_id))
 
     def _post_dev_login(self) -> None:
         provider = self.server.oauth

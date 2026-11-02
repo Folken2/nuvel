@@ -616,6 +616,159 @@ def test_finished_or_expired_logins_free_their_slots(store_path):
     provider.start_authorization(params, "http://x", "203.0.113.5")
 
 
+# --- (7c) the GitHub allow-list matches the numeric user id ----------------------------------
+
+
+@pytest.fixture
+def github():
+    """A fake GitHub whose /user answer the test sets: ``gh.user = {...}``."""
+    import threading
+    import urllib.parse
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _json(self, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):  # noqa: N802
+            urllib.parse.parse_qsl(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            self._json({"access_token": "gho_fake"})
+
+        def do_GET(self):  # noqa: N802
+            self._json(self.server.user)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.user = {"login": "octocat", "id": 583231}
+    server.base = f"http://127.0.0.1:{server.server_address[1]}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def _github_provider(store_path, gh, allowed):
+    return make_provider(
+        store_path, dev_login=False, github_client_id="gh-id", github_client_secret="gh-secret",
+        allowed_users=frozenset(allowed),
+        github_authorize_url=f"{gh.base}/login/oauth/authorize",
+        github_token_url=f"{gh.base}/login/oauth/access_token",
+        github_user_url=f"{gh.base}/user")
+
+
+def _github_login(httpd):
+    """Run the GitHub flow -> the redirect query (code, or error)."""
+    import urllib.parse
+    from _mcp_http_helpers import authorize_params, cookie_of, login_field, redirect_query
+
+    anon = Client(httpd)
+    client_id = register(anon)[1]["client_id"]
+    verifier, challenge = pkce()
+    _, headers, page = anon.request("GET", authorize_params(client_id, challenge))
+    cookie = {"Cookie": f"nuvel_oauth_login={cookie_of(headers)}"}
+    login = login_field(page)
+    assert anon.form("/authorize", {"login": login, "action": "approve"}, cookie)[0] == 302
+    callback = "/oauth/callback?" + urllib.parse.urlencode({"code": "gh-code", "state": login})
+    status, headers, _ = anon.request("GET", callback, headers=cookie)
+    assert status == 302
+    query = redirect_query(headers)
+    if "code" in query:
+        status, _, body = exchange(anon, client_id, query["code"], verifier)
+        assert status == 200, body
+        query["access_token"] = body["access_token"]
+    return query
+
+
+def test_id_entry_admits_the_account_whatever_its_login(launch, store_path, github):
+    httpd = launch(_github_provider(store_path, github, {"id:583231"}))
+    github.user = {"login": "renamed-cat", "id": 583231}
+    result = _github_login(httpd)
+    info = httpd.oauth.validate(result["access_token"], None)
+    assert info.subject == "github:renamed-cat:583231"
+    assert httpd.oauth.subject_allowed(info)
+    github.user = {"login": "octocat", "id": 999}  # the old login, another account
+    assert _github_login(httpd)["error"] == "access_denied"
+
+
+def test_login_entry_pins_the_first_id_it_admits(launch, store_path, github):
+    httpd = launch(_github_provider(store_path, github, {"octocat"}))
+    first = _github_login(httpd)
+    info = httpd.oauth.validate(first["access_token"], None)
+    assert info.subject == "github:octocat:583231"
+    # The login is renamed away and recycled by another account: refused, and
+    # the original holder's token is still good.
+    github.user = {"login": "OctoCat", "id": 1000001}
+    assert _github_login(httpd)["error"] == "access_denied"
+    assert httpd.oauth.subject_allowed(info)
+    # A token carrying the recycled login and another id fails the re-check too.
+    from nuvel_mcp.oauth import TokenInfo
+    impostor = TokenInfo(info.client_id, "github:octocat:1000001", info.scope, "", 0.0)
+    assert not httpd.oauth.subject_allowed(impostor)
+
+
+def test_github_user_without_a_numeric_id_is_refused(launch, store_path, github):
+    httpd = launch(_github_provider(store_path, github, {"octocat"}))
+    github.user = {"login": "octocat"}
+    assert _github_login(httpd)["error"] == "server_error"
+    github.user = {"login": "octocat", "id": "583231"}  # not an integer
+    assert _github_login(httpd)["error"] == "server_error"
+    github.user = {"login": "octocat", "id": True}  # JSON true is not an id
+    assert _github_login(httpd)["error"] == "server_error"
+
+
+@pytest.mark.parametrize("allowed", [{"id:583231"}, {"octocat"}])
+def test_same_github_id_under_a_new_login_keeps_its_tenant(launch, store_path, github,
+                                                          allowed):
+    # Two logins for one account (a rename): the tenant and the allow-list
+    # decision follow the numeric id, not the login.
+    httpd = launch(_github_provider(store_path, github, allowed))
+    first = httpd.oauth.validate(_github_login(httpd)["access_token"], None)
+    github.user = {"login": "renamed-cat", "id": 583231}
+    result = _github_login(httpd)
+    if allowed == {"octocat"}:
+        # A login entry names the old login only: the renamed account is out
+        # until the operator lists the new login or its id.
+        assert result["error"] == "access_denied"
+        return
+    second = httpd.oauth.validate(result["access_token"], None)
+    assert second.subject == "github:renamed-cat:583231"
+    # Different clients (each login registered its own), so compare identities.
+    from nuvel_mcp.oauth import tenant_for
+    assert tenant_for(first.client_id, second.subject) == first.tenant
+
+
+def test_tokens_issued_before_ids_keep_working_with_login_entries(store_path):
+    from nuvel_mcp.oauth import TokenInfo
+
+    old = TokenInfo("nvcl_x", "github:octocat", frozenset(), "", 0.0)
+    assert make_provider(store_path, allowed_users=frozenset({"octocat"})).subject_allowed(old)
+    # An id-only allow-list cannot vouch for a token that carries no id.
+    assert not make_provider(store_path,
+                             allowed_users=frozenset({"id:583231"})).subject_allowed(old)
+
+
+def test_github_tenant_follows_the_id_not_the_login():
+    from nuvel_mcp.oauth import tenant_for
+
+    assert tenant_for("nvcl_x", "github:octocat:5") == tenant_for("nvcl_x", "github:renamed:5")
+    assert tenant_for("nvcl_x", "github:octocat:5") != tenant_for("nvcl_x", "github:octocat:6")
+
+
+def test_allowed_users_env_accepts_ids_and_logins(monkeypatch):
+    from nuvel_mcp.oauth import OAuthConfig
+
+    monkeypatch.setenv("NUVEL_OAUTH_ALLOWED_USERS", "Alice, id:583231")
+    assert OAuthConfig.from_env().allowed_users == frozenset({"alice", "id:583231"})
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 

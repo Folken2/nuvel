@@ -56,7 +56,7 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `--allow-remote` | Required to bind a non-loopback `--host`. |
 | `NUVEL_MCP_PUBLIC_URL` | The origin clients reach the server at (for example `https://mcp.example.com`). It is the OAuth issuer and the audience of every token. Required on a non-loopback bind. |
 | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | A GitHub OAuth app whose callback URL is `<NUVEL_MCP_PUBLIC_URL>/oauth/callback`. This is how people log in when they connect an interactive client. |
-| `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub logins allowed to log in. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
+| `NUVEL_OAUTH_ALLOWED_USERS` | Comma-separated GitHub users allowed to log in, each either `id:<number>` (GitHub's numeric user id, from `https://api.github.com/users/<login>`) or a login. Prefer ids: a login can be renamed and later registered by someone else. A login entry still works (existing lists need no change), but the first account it admits is pinned by id until the server restarts, and any other account under that login is refused. Unset, **any** GitHub user may, and the server warns at startup. Set it. |
 | `NUVEL_OAUTH_LOGIN` | `none` turns the interactive login off: `/authorize`, `/register` and the login callbacks answer `404`, and clients connect with a [URL key](#beta-testers-url-keys) or `client_credentials`. GitHub credentials and `NUVEL_OAUTH_DEV_LOGIN` are then ignored, with a warning. Unset, the login is GitHub when its credentials are set, else the dev login, else the server refuses to start. Any other value stops the server with exit code 2. |
 | `NUVEL_OAUTH_REDIRECT_ALLOWLIST` | Extra redirect URIs accepted at client registration, beyond `https://` and loopback ones. |
 | `NUVEL_MCP_DATABASE_URL` | A Postgres connection string. Set, OAuth, run traces, recipes and usage all live in that database ([below](#store-everything-in-postgres-neon)); this is the production setup. |
@@ -308,7 +308,7 @@ its config-as-code `railway.json` is deprecated.
    | `NUVEL_OAUTH_LOGIN` | `none`, for URL keys only |
    | `NUVEL_MCP_TRUST_FORWARDED_FOR` | `1`: Railway's edge proxy appends the caller's address to `X-Forwarded-For`, so the per-IP cap and the `/register` limit see real callers instead of the proxy. The image does not set it, since a container exposed with no proxy in front must not trust the header. |
    | `NUVEL_OAUTH_GITHUB_CLIENT_ID` / `NUVEL_OAUTH_GITHUB_CLIENT_SECRET` | For GitHub login: from the OAuth app |
-   | `NUVEL_OAUTH_ALLOWED_USERS` | For GitHub login: the GitHub logins allowed to log in |
+   | `NUVEL_OAUTH_ALLOWED_USERS` | For GitHub login: the GitHub users allowed to log in, as `id:<number>` (preferred) or logins |
    | `NUVEL_MCP_SKILLS_DIR` | Optional: a skills hub inside the container, for example one cloned onto the volume. Unset, the server runs feedback-only. |
 
    The server refuses to start without the public URL and without either

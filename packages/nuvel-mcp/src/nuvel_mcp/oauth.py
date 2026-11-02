@@ -497,6 +497,8 @@ class OAuthProvider:
         self.clock = clock
         self._logins: dict[str, dict] = {}
         self._logins_lock = threading.Lock()
+        # Allow-list login entry (lowercased) -> the GitHub id it first admitted.
+        self._github_pins: dict[str, int] = {}
         self.register_limiter = RateLimiter(config.register_limit, config.register_global_limit,
                                             config.register_window, lambda: self.clock())
 
@@ -833,14 +835,40 @@ class OAuthProvider:
         return add_query(login["redirect_uri"], error=error, error_description=description,
                          state=login["state"], iss=login["origin"])
 
-    def user_allowed(self, login: str) -> bool:
-        allowed = self.config.allowed_users
-        return allowed is None or login.lower() in allowed
+    def user_allowed(self, login: str, github_id: int | None = None) -> bool:
+        """Is this user on ``NUVEL_OAUTH_ALLOWED_USERS``?
 
-    def complete_authorization(self, login: dict, user: str, idp: str) -> str:
-        """Issue a single-use code for a logged-in user; return the client redirect."""
-        if not self.user_allowed(user):
+        An ``id:<n>`` entry matches GitHub's numeric user id, which never
+        changes. A bare login entry (the older form, still accepted) matches
+        the login case-insensitively; GitHub logins can be renamed and later
+        re-registered by someone else, so the first id a login entry admits is
+        pinned and any other id under that login is refused. The pin is kept
+        in memory (per process, until restart): prefer ``id:`` entries.
+        ``github_id`` is None for the dev login and for tokens issued before
+        subjects carried the id; those match login entries only.
+        """
+        allowed = self.config.allowed_users
+        if allowed is None:
+            return True
+        if github_id is not None and f"id:{github_id}" in allowed:
+            return True
+        key = login.lower()
+        if key not in allowed:
+            return False
+        if github_id is None:
+            return True
+        with self._logins_lock:
+            pinned = self._github_pins.setdefault(key, github_id)
+        return pinned == github_id
+
+    def complete_authorization(self, login: dict, user: str, idp: str,
+                               github_id: int | None = None) -> str:
+        """Issue a single-use code for a logged-in user; return the client redirect.
+        A GitHub user's subject is ``github:<login>:<id>``, so the allow-list
+        re-check and the tenant can both follow the numeric id."""
+        if not self.user_allowed(user, github_id):
             return self.error_redirect(login, "access_denied", "This user is not allowed")
+        subject = f"{idp}:{user}" if github_id is None else f"{idp}:{user}:{github_id}"
         code = "nvac_" + secrets.token_urlsafe(32)
         now = self.clock()
         with self.store.transaction() as data:
@@ -852,7 +880,7 @@ class OAuthProvider:
                 "code_challenge_method": "S256",
                 "scope": login["scope"],
                 "resource": login["resource"],
-                "subject": f"{idp}:{user}",
+                "subject": subject,
                 "grant_id": secrets.token_urlsafe(16),
                 "issued_at": now,
                 "expires_at": now + CODE_TTL,
@@ -869,8 +897,9 @@ class OAuthProvider:
                          redirect_uri=f"{login['origin']}/oauth/callback",
                          state=login["id"], allow_signup="false")
 
-    def github_user(self, code: str, login: dict) -> str:
-        """Exchange GitHub's code for the user's login. Raises OAuthError."""
+    def github_user(self, code: str, login: dict) -> tuple[str, int]:
+        """Exchange GitHub's code for the user's ``(login, numeric id)``.
+        Raises OAuthError."""
         form = urllib.parse.urlencode({
             "client_id": self.config.github_client_id,
             "client_secret": self.config.github_client_secret,
@@ -889,13 +918,20 @@ class OAuthProvider:
                 **headers, "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {gh_token}"})
             with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT) as resp:
-                user = json.loads(resp.read().decode("utf-8")).get("login")
+                profile = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise OAuthError("server_error",
                              f"GitHub login failed ({type(exc).__name__})") from None
+        if not isinstance(profile, dict):
+            raise OAuthError("server_error", "GitHub returned no usable login")
+        user, gh_id = profile.get("login"), profile.get("id")
         if not isinstance(user, str) or not _LOGIN.fullmatch(user):
             raise OAuthError("server_error", "GitHub returned no usable login")
-        return user
+        # The id is what the allow-list and the tenant trust (bool is an int
+        # subclass in Python; JSON true is not an id).
+        if type(gh_id) is not int or gh_id <= 0:
+            raise OAuthError("server_error", "GitHub returned no usable user id")
+        return user, gh_id
 
     @staticmethod
     def valid_dev_login(user: str) -> bool:
@@ -1112,9 +1148,16 @@ class OAuthProvider:
                              float("inf") if expires_at is None else float(expires_at))
 
     def subject_allowed(self, info: TokenInfo) -> bool:
-        """Re-check the user allowlist, so removing a login takes effect immediately."""
+        """Re-check the user allowlist, so removing a login (or id) takes
+        effect immediately. GitHub subjects are ``github:<login>:<id>``, or
+        ``github:<login>`` for tokens issued before the id was recorded."""
         idp, _, user = info.subject.partition(":")
-        if idp in ("github", "dev"):
+        if idp == "github":
+            login, sep, gh_id = user.partition(":")
+            if sep:
+                return gh_id.isdigit() and self.user_allowed(login, int(gh_id))
+            return self.user_allowed(login)
+        if idp == "dev":
             return self.user_allowed(user)
         return True
 
