@@ -13,6 +13,7 @@ import pytest
 import _pg
 from _mcp_http_helpers import INIT, TIMEOUT, Client, call, isolate_env, make_hub
 from nuvel_mcp.cli import _select_store, main as cli_main
+from nuvel_mcp.db import migrations
 from nuvel_mcp.http_transport import HttpConfig, make_server
 from nuvel_mcp.oauth import OAuthConfig, OAuthProvider
 from nuvel_mcp.recipes import LocalRecipeStore
@@ -193,7 +194,8 @@ def test_db_migrate_and_status(db_env, capsys):
     assert "up to date" in capsys.readouterr().out
     assert cli_main(["db", "status", "--json"]) == 0
     status = json.loads(capsys.readouterr().out)
-    assert status["schema"] == db_env and status["applied"] == [1] and not status["pending"]
+    every = [v for v, _, _ in migrations()]
+    assert status["schema"] == db_env and status["applied"] == every and not status["pending"]
     assert status["rows"]["usage_events"] == 0
 
 
@@ -216,7 +218,7 @@ def test_serve_picks_postgres_for_everything(db_env, monkeypatch, capsys, tmp_pa
     err = capsys.readouterr().err
     assert f"Storage: postgres (schema {db_env}); usage recording on." in err
     assert "NUVEL_MCP_OAUTH_STORE is ignored" in err  # isolate_env sets it
-    assert _count(db_env, "schema_migrations") == 1  # auto-migrated
+    assert _count(db_env, "schema_migrations") == len(migrations())  # auto-migrated
     assert not (tmp_path / "oauth" / "oauth.json").exists()
 
 
