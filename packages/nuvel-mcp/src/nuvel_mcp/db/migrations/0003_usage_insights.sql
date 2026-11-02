@@ -36,3 +36,31 @@ BEGIN
 END $$;
 
 REVOKE ALL ON {schema}.usage_daily FROM PUBLIC;
+
+-- Who is behind an OAuth client, as the operator labels it
+-- (nuvel-mcp clients label). Entered by the operator, never by a caller;
+-- person is personal data: delete the row to forget it.
+CREATE TABLE {schema}.client_profiles (
+    client_id   text PRIMARY KEY CHECK (char_length(client_id) <= 128),
+    person      text CHECK (char_length(person) <= 200),
+    company     text CHECK (char_length(company) <= 200),
+    notes       text CHECK (char_length(notes) <= 2000),
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Row-level security, forced, with the one owner policy -- as 0002 does for
+-- every table.
+DO $$
+DECLARE
+    owner text;
+BEGIN
+    SELECT pg_get_userbyid(relowner) INTO owner
+    FROM pg_class WHERE oid = '{schema}.client_profiles'::regclass;
+    ALTER TABLE {schema}.client_profiles ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE {schema}.client_profiles FORCE ROW LEVEL SECURITY;
+    EXECUTE format('CREATE POLICY owner_all ON {schema}.client_profiles TO %I '
+                   'USING (true) WITH CHECK (true)', owner);
+END $$;
+
+REVOKE ALL ON {schema}.client_profiles FROM PUBLIC;

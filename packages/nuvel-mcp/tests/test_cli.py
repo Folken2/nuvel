@@ -38,11 +38,12 @@ def test_nuvel_mcp_and_nuvel_cli_share_flags_and_commands():
     cli.add_serve_arguments(sub.add_parser("serve"))
     cli.add_oauth_commands(sub)
     cli.add_db_commands(sub)
+    cli.add_insight_commands(sub)
     root = argparse.ArgumentParser()
     mcp_serve.register(root.add_subparsers())
     nuvel_mcp_tree = _subcommands(root)["mcp"]
 
-    assert set(_subcommands(nuvel_mcp_tree)) == {"serve", "client", "token", "db"}
+    assert set(_subcommands(nuvel_mcp_tree)) == {"serve", "client", "token", "db", "clients"}
     assert _surface(standalone) == _surface(nuvel_mcp_tree)
     serve_flags = {f for _, opts, _ in _surface(standalone) if isinstance(opts, tuple) for f in opts}
     assert {"--transport", "--host", "--port", "--allow-remote", "--no-auth",
@@ -50,6 +51,7 @@ def test_nuvel_mcp_and_nuvel_cli_share_flags_and_commands():
     assert ("token revoke", "value", None) in _surface(standalone)
     assert ("client create", ("--name",), None) in _surface(standalone)
     assert ("db import", ("--force-oauth",), False) in _surface(standalone)
+    assert ("clients label", ("--person",), None) in _surface(standalone)
 
 
 def test_http_defaults_match_the_shipped_transport():

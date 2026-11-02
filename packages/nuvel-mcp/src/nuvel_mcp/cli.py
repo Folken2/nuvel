@@ -729,6 +729,72 @@ def _cmd_db_import(args: argparse.Namespace, db) -> int:
     return 0
 
 
+def add_insight_commands(subparsers: argparse._SubParsersAction) -> None:
+    """``clients label|list``: who is behind each OAuth client, from the database."""
+    p_clients = subparsers.add_parser(
+        "clients", help="Label OAuth clients with who uses them and list them with "
+                        "their recent usage (needs $NUVEL_MCP_DATABASE_URL).")
+    clients_sub = p_clients.add_subparsers(dest="clients_command", required=True)
+    p_label = clients_sub.add_parser(
+        "label", help="Set the person, company or notes of a client id. An empty "
+                      "value clears that field; omitted fields are kept.")
+    p_label.add_argument("client_id")
+    p_label.add_argument("--person", default=None, help="Who uses this client.")
+    p_label.add_argument("--company", default=None, help="Their company.")
+    p_label.add_argument("--notes", default=None, help="Free-form operator notes.")
+    p_label.set_defaults(func=_cmd_clients_label)
+    p_list = clients_sub.add_parser(
+        "list", help="Every known client id with its label, last usage and events "
+                     "in the last 30 days.")
+    p_list.add_argument("--json", action="store_true", help="Print JSON.")
+    p_list.set_defaults(func=_cmd_clients_list)
+
+
+@_database_command
+def _cmd_clients_label(args: argparse.Namespace, db) -> int:
+    from nuvel_mcp.insights import label_client, validate_profile
+
+    fields = {name: (value.strip() or None)
+              for name in ("person", "company", "notes")
+              if (value := getattr(args, name)) is not None}
+    error = validate_profile(args.client_id, fields)
+    if error:
+        print(f"Error: {error}.", file=sys.stderr)
+        return 2
+    db.migrate()
+    if not label_client(db, args.client_id, fields):
+        print(f"Note: {args.client_id} matches no OAuth client and no usage yet; "
+              "labeled anyway.", file=sys.stderr)
+    print(f"Labeled {args.client_id}.")
+    return 0
+
+
+@_database_command
+def _cmd_clients_list(args: argparse.Namespace, db) -> int:
+    from nuvel_mcp.insights import format_table, list_clients
+
+    db.migrate()
+    clients = list_clients(db)
+    if args.json:
+        print(json.dumps(clients, indent=2))
+        return 0
+    if not clients:
+        print("No clients yet.")
+        return 0
+    print(format_table(
+        ["CLIENT_ID", "NAME", "PERSON", "COMPANY", "LAST_SEEN", "EVENTS_30D"],
+        [[c["client_id"], _clip(c["name"]), _clip(c["person"]), _clip(c["company"]),
+          (c["last_seen"] or "")[:16].replace("T", " ") or None, c["events_30d"]]
+         for c in clients]))
+    return 0
+
+
+def _clip(value, width: int = 24):
+    if value is None:
+        return None
+    return value if len(value) <= width else value[:width - 1] + "…"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nuvel-mcp", description="Nuvel Skills MCP server.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -737,5 +803,6 @@ def main(argv: list[str] | None = None) -> int:
     p_serve.set_defaults(func=run_serve)
     add_oauth_commands(sub)
     add_db_commands(sub)
+    add_insight_commands(sub)
     args = parser.parse_args(argv)
     return args.func(args)
