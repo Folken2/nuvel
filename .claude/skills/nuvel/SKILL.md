@@ -178,7 +178,7 @@ nuvel-mcp db migrate|status|import           # also: nuvel mcp db …; import co
 nuvel-mcp clients label nvcl_x --person Ana --company Acme   # who is behind a client id; clients list; needs the DB
 nuvel-mcp report [--days 7] [--json]         # usage report from Postgres (clients, tools, errors, latency, apps, countries, skill runs, recipes)
 nuvel-mcp client create --name acme-radar    # OAuth client for the HTTP server; also: client list|delete, token revoke
-nuvel-mcp client create --name alice --url-key   # prints a no-sign-in connector URL ($NUVEL_MCP_PUBLIC_URL/mcp/k/<key>) once; NUVEL_OAUTH_LOGIN=none = keys + client_credentials only
+nuvel-mcp client create --name alice --url-key --person Alice --company Acme   # --person/--company label it (needs the DB); prints a no-sign-in connector URL ($NUVEL_MCP_PUBLIC_URL/mcp/k/<key>) once; NUVEL_OAUTH_LOGIN=none = keys + client_credentials only
 nuvel-mcp serve --transport http             # Streamable HTTP + OAuth 2.1, no extras; --host/--port default 127.0.0.1:8080; non-loopback needs --allow-remote + NUVEL_MCP_PUBLIC_URL; --no-auth is loopback-only dev; tenant = OAuth client_id; default HTTP tools exclude record_feedback/propose_improvement/install_skill (add via --tools)
 
 # Knowledge

@@ -90,7 +90,9 @@ nuvel-mcp client delete "$CLIENT_ID"             # also revokes its tokens
 nuvel-mcp token revoke "$TOKEN_OR_CLIENT_ID"     # one token, or all of a client's
 ```
 
-Add `--redirect-uri` to `client create` for a client that also uses the
+Add `--person` and `--company` to `client create` to record who uses the client
+in the same step (with a database; `clients list` and `report` show them). Add
+`--redirect-uri` for a client that also uses the
 authorization-code flow. The `client_secret` is shown only at creation. A service
 exchanges its `client_id` and `client_secret` for an access token with the
 `client_credentials` grant at `POST <NUVEL_MCP_PUBLIC_URL>/token` (HTTP Basic

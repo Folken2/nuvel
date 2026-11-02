@@ -24,6 +24,12 @@ def validate_profile(client_id: str, fields: dict) -> str | None:
         return "client_id must be 1-128 characters of [A-Za-z0-9_.:@-]"
     if not fields:
         return "give at least one of --person, --company or --notes"
+    return validate_profile_fields(fields)
+
+
+def validate_profile_fields(fields: dict) -> str | None:
+    """An error message for a profile value that is too long or has control
+    characters, else ``None``."""
     for name, value in fields.items():
         limit = PROFILE_LIMITS[name]
         if value is not None and len(value) > limit:
