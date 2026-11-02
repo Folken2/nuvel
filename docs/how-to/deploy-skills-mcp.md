@@ -65,8 +65,10 @@ nuvel-mcp serve --transport http --allow-remote --host 0.0.0.0 --skills-dir ./sk
 | `NUVEL_MCP_REQUEST_DEADLINE` | Wall-clock seconds a client gets to send one whole request (request line, headers, body), however slowly it trickles. Default 30. |
 | `NUVEL_MCP_READ_TIMEOUT` | Seconds a single socket read or write may stall, and how long an idle keep-alive connection is kept. Default 30. The idle keep-alive limit is the smaller of this and `NUVEL_MCP_REQUEST_DEADLINE`. |
 | `NUVEL_MCP_MAX_CONNECTIONS` | Connections (handler threads, open SSE streams included) served at once. Default 128. Slots are taken before authentication, and long-lived GET streams hold them, so a public deployment should sit behind a buffering reverse proxy with per-client connection limits. |
+| `NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL` | MCP sessions one caller (a token's client and subject; a URL key's client) may hold at once. Default 8. Over it, `initialize` and `GET /sse` get `429`. The global `NUVEL_MCP_MAX_SESSIONS` still applies. Not applied with `--no-auth`. |
+| `NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL` | Open SSE streams (`GET /mcp` and `GET /sse` together) one caller may hold at once. Default 4. Over it is `429`. Not applied with `--no-auth`. |
 
-The two timeouts must be greater than 0 and `NUVEL_MCP_MAX_CONNECTIONS` at least 1 (0 does not disable them); any other value stops the server at startup with exit code 2.
+The two timeouts must be greater than 0 and `NUVEL_MCP_MAX_CONNECTIONS` and the per-caller caps at least 1 (0 does not disable them); any other value stops the server at startup with exit code 2.
 
 Keep the GitHub secret and every other credential in your secret manager and
 inject it as an environment variable; never put one on a command line or in a
@@ -358,6 +360,8 @@ tenant, which is what `client create` is for.
 | Request not fully received within `NUVEL_MCP_REQUEST_DEADLINE` seconds | `408` if it stalled in the body; a slow request line or headers just closes the connection |
 | A second `GET /mcp` stream on a session that already has one open | `409`; the open stream keeps working |
 | More than `NUVEL_MCP_MAX_CONNECTIONS` connections open | `503` with `Retry-After: 1`, sent without starting a handler thread |
+| More than `NUVEL_MCP_MAX_SESSIONS` sessions in all | `503` |
+| One caller over `NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL` sessions or `NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL` open streams | `429` with `Retry-After: 5`; other callers are unaffected |
 | Body that is not valid JSON | `400` |
 
 Error responses do not echo the request body or path, and a failing trace store

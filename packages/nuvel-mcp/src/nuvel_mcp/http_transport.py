@@ -52,6 +52,7 @@ codes are never logged.
 
 from __future__ import annotations
 
+import contextlib
 import http.cookies
 import ipaddress
 import json
@@ -101,6 +102,11 @@ DEFAULT_PING_INTERVAL = 15.0
 DEFAULT_READ_TIMEOUT = 30.0
 DEFAULT_REQUEST_DEADLINE = 30.0
 DEFAULT_MAX_CONNECTIONS = 128
+DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 8
+DEFAULT_MAX_STREAMS_PER_PRINCIPAL = 4
+# Retry-After on a per-caller 429: a slot frees when the caller ends a session
+# or stream, which the server cannot predict; a few seconds avoids a hot loop.
+PER_CALLER_RETRY_AFTER = 5
 CORS_MAX_AGE = 600
 
 SESSION_HEADER = "Mcp-Session-Id"
@@ -147,6 +153,11 @@ class HttpConfig:
     # Handler threads (open connections, SSE streams included) served at once;
     # further connections are refused with 503. Must be >= 1.
     max_connections: int = DEFAULT_MAX_CONNECTIONS
+    # Per principal (client_id + subject; a URL key is its client): sessions
+    # open and SSE streams (GET /mcp and GET /sse) held at once, so one caller
+    # cannot take every global slot. Over either cap is 429. Must be >= 1.
+    max_sessions_per_principal: int = DEFAULT_MAX_SESSIONS_PER_PRINCIPAL
+    max_streams_per_principal: int = DEFAULT_MAX_STREAMS_PER_PRINCIPAL
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
     # The origin clients reach this server at (NUVEL_MCP_PUBLIC_URL). It is the
     # OAuth issuer and resource; unset, the origin is derived from Host.
@@ -158,9 +169,11 @@ class HttpConfig:
             if not math.isfinite(value) or value <= 0:
                 env = "NUVEL_MCP_" + name.upper()
                 raise ValueError(f"{env} must be a number of seconds greater than 0 (got {value})")
-        if self.max_connections < 1:
-            raise ValueError("NUVEL_MCP_MAX_CONNECTIONS must be at least 1 "
-                             f"(got {self.max_connections})")
+        for name in ("max_connections", "max_sessions_per_principal",
+                     "max_streams_per_principal"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"NUVEL_MCP_{name.upper()} must be at least 1 (got {value})")
 
     @classmethod
     def from_env(cls) -> "HttpConfig":
@@ -172,6 +185,10 @@ class HttpConfig:
             read_timeout=_env_float("NUVEL_MCP_READ_TIMEOUT", DEFAULT_READ_TIMEOUT),
             request_deadline=_env_float("NUVEL_MCP_REQUEST_DEADLINE", DEFAULT_REQUEST_DEADLINE),
             max_connections=_env_int("NUVEL_MCP_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS),
+            max_sessions_per_principal=_env_int("NUVEL_MCP_MAX_SESSIONS_PER_PRINCIPAL",
+                                                DEFAULT_MAX_SESSIONS_PER_PRINCIPAL),
+            max_streams_per_principal=_env_int("NUVEL_MCP_MAX_STREAMS_PER_PRINCIPAL",
+                                               DEFAULT_MAX_STREAMS_PER_PRINCIPAL),
             allowed_origins=frozenset(
                 o for o in (_normalize_origin(x) for x in origins.split(",")) if o
             ),
@@ -287,11 +304,47 @@ class SessionFull(Exception):
     pass
 
 
-class SessionStore:
-    """Thread-safe session table with a size cap and idle expiry."""
+class PrincipalSessionsFull(Exception):
+    """This principal already holds its share of sessions (the server may not be full)."""
 
-    def __init__(self, max_sessions: int, ttl: float):
+
+class KeyedLimiter:
+    """Concurrent holders per key (a principal, an IP), at most ``limit`` each.
+
+    ``acquire`` never blocks: a caller over its share is refused at once.
+    Keys with no holders are dropped, so the table only holds live callers.
+    """
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self._held: dict = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, key) -> bool:
+        with self._lock:
+            held = self._held.get(key, 0)
+            if held >= self.limit:
+                return False
+            self._held[key] = held + 1
+            return True
+
+    def release(self, key) -> None:
+        with self._lock:
+            held = self._held.get(key, 0) - 1
+            if held > 0:
+                self._held[key] = held
+            else:
+                self._held.pop(key, None)
+
+
+class SessionStore:
+    """Thread-safe session table with a size cap, a per-principal cap and
+    idle expiry. The per-principal cap is skipped when auth is off (principal
+    ``None``): there is only the one local caller."""
+
+    def __init__(self, max_sessions: int, ttl: float, max_per_principal: int | None = None):
         self.max_sessions = max_sessions
+        self.max_per_principal = max_per_principal
         self.ttl = ttl
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
@@ -306,6 +359,10 @@ class SessionStore:
             self._reap_locked()
             if len(self._sessions) >= self.max_sessions:
                 raise SessionFull()
+            if principal is not None and self.max_per_principal is not None and sum(
+                    s.principal == principal for s in self._sessions.values()
+            ) >= self.max_per_principal:
+                raise PrincipalSessionsFull()
             session = Session(secrets.token_urlsafe(32), kind, principal)
             self._sessions[session.id] = session
             return session
@@ -454,7 +511,10 @@ class McpHTTPServer(ThreadingHTTPServer):
         self.mcp = mcp
         self.config = config
         self.oauth = oauth_provider
-        self.sessions = SessionStore(config.max_sessions, config.session_ttl)
+        self.sessions = SessionStore(config.max_sessions, config.session_ttl,
+                                     config.max_sessions_per_principal)
+        # Open SSE streams per principal (GET /mcp and GET /sse alike).
+        self.principal_streams = KeyedLimiter(config.max_streams_per_principal)
         self.stopping = threading.Event()
         self._slots = threading.BoundedSemaphore(config.max_connections)
         super().__init__(address, McpRequestHandler)
@@ -1054,6 +1114,31 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         except SessionFull:
             raise _Reject(HTTPStatus.SERVICE_UNAVAILABLE,
                           "Too many sessions; try again later", SERVER_BUSY)
+        except PrincipalSessionsFull:
+            # 429, not the global cap's 503: the server has room, this caller
+            # is over its share and must end a session (DELETE /mcp) first.
+            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
+                          "Too many sessions for this client; end one or try again later",
+                          SERVER_BUSY, {"Retry-After": str(PER_CALLER_RETRY_AFTER)})
+
+    @contextlib.contextmanager
+    def _stream_slot(self, info: TokenInfo | None):
+        """Hold one of the principal's SSE stream slots for the block, or 429.
+        No cap with auth off (principal ``None``)."""
+        principal = self._principal(info)
+        if principal is None:
+            yield
+            return
+        streams = self.server.principal_streams
+        if not streams.acquire(principal):
+            self.close_connection = True  # free this connection's slot right away
+            raise _Reject(HTTPStatus.TOO_MANY_REQUESTS,
+                          "Too many open streams for this client; close one or try again later",
+                          SERVER_BUSY, {"Retry-After": str(PER_CALLER_RETRY_AFTER)})
+        try:
+            yield
+        finally:
+            streams.release(principal)
 
     def _post_mcp(self) -> None:
         info = self._authenticate()
@@ -1102,7 +1187,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True  # free this connection's slot right away
             raise _Reject(HTTPStatus.CONFLICT, "A stream is already open for this session")
         try:
-            self._stream(session, still_valid=self._still_valid(info))
+            with self._stream_slot(info):
+                self._stream(session, still_valid=self._still_valid(info))
         finally:
             session.stream_lock.release()
 
@@ -1114,14 +1200,15 @@ class McpRequestHandler(BaseHTTPRequestHandler):
 
     def _get_sse(self) -> None:
         info = self._authenticate()
-        session = self._new_session("legacy", info)
-        endpoint = f"/messages?sessionId={session.id}"
-        try:
-            self._stream(session, first_event=sse_event(endpoint, event="endpoint"),
-                         still_valid=self._still_valid(info))
-        finally:
-            # A legacy session lives exactly as long as its stream.
-            self.server.sessions.terminate(session.id)
+        with self._stream_slot(info):
+            session = self._new_session("legacy", info)
+            endpoint = f"/messages?sessionId={session.id}"
+            try:
+                self._stream(session, first_event=sse_event(endpoint, event="endpoint"),
+                             still_valid=self._still_valid(info))
+            finally:
+                # A legacy session lives exactly as long as its stream.
+                self.server.sessions.terminate(session.id)
 
     def _post_messages(self) -> None:
         info = self._authenticate()
