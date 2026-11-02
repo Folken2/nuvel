@@ -770,23 +770,30 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self.connection.settimeout(self.server.config.read_timeout)
         self.rfile.close()
         self.rfile = _DeadlineReader(self.connection, self.server.config.read_timeout)
+        self._served_a_request = False
 
     def handle_one_request(self) -> None:
         # One deadline for request line + headers + body (an idle keep-alive
         # connection counts too). Expiry closes the connection quietly; a body
         # that outlives it gets 408 in _read_body.
         config = self.server.config
-        if config.trust_forwarded_for:
-            # Behind a proxy the headers name the caller (X-Forwarded-For);
-            # until they arrive the connection counts against no per-IP share,
-            # so once a request starts it gets only the short header deadline
-            # (see parse_request). Idle keep-alive time before that is not
-            # counted: the proxy pools upstream connections, and closing idle
-            # ones early would race its reuse (502s).
-            self.rfile.arm(config.request_deadline, first_byte_window=config.header_deadline)
-        else:
+        if not config.trust_forwarded_for:
             self.rfile.arm(config.request_deadline)
+        elif not self._served_a_request:
+            # Behind a proxy the headers name the caller (X-Forwarded-For);
+            # until they arrive the connection counts against no per-IP share.
+            # A fresh connection was opened to forward a request, so the short
+            # header deadline runs from accept, idle time included: a caller
+            # that connects and sends nothing cannot sit on a global slot.
+            self.rfile.arm(min(config.header_deadline, config.request_deadline))
+        else:
+            # A reused keep-alive connection idles as usual (the proxy pools
+            # upstream connections; closing idle ones early races its reuse
+            # into 502s). The short header deadline starts at the next
+            # request's first byte (see parse_request for the body).
+            self.rfile.arm(config.request_deadline, first_byte_window=config.header_deadline)
         super().handle_one_request()
+        self._served_a_request = True
 
     def parse_request(self) -> bool:
         self._expects_continue = False

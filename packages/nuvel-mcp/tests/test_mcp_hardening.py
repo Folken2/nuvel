@@ -385,7 +385,9 @@ def test_behind_a_proxy_unidentified_connections_get_a_short_header_deadline(lau
     import socket
     httpd = launch(trust_forwarded_for=True, header_deadline=0.5, request_deadline=5.0,
                    read_timeout=5.0)
-    for partial in (b"GET /healthz HTTP/1.1\r\nHost: x\r\n", b"GET /hea"):  # never finished
+    # A fresh connection that sends nothing, or never finishes its first
+    # request: the deadline runs from accept, idle time included.
+    for partial in (b"", b"GET /healthz HTTP/1.1\r\nHost: x\r\n", b"GET /hea"):
         with socket.create_connection(httpd.server_address[:2], timeout=TIMEOUT) as sock:
             started = time.monotonic()
             sock.sendall(partial)
