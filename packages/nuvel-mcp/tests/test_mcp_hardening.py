@@ -437,6 +437,38 @@ def test_token_refuses_a_client_deleted_after_the_snapshot(launch, monkeypatch):
     assert status == 401
 
 
+# --- (5) security headers -----------------------------------------------------------------
+
+HSTS = "max-age=31536000; includeSubDomains"
+
+
+@pytest.mark.parametrize("method, path", [("GET", "/healthz"), ("GET", "/nope"),
+                                          ("POST", "/mcp"), ("GET", "/icon.svg"),
+                                          ("OPTIONS", "/mcp"),
+                                          ("GET", "/.well-known/oauth-protected-resource")])
+def test_every_response_is_nosniff_and_hsts_only_on_an_https_public_url(launch, method, path):
+    plain = Client(launch())
+    status, headers, _ = plain.request(method, path, {} if method == "POST" else None)
+    assert headers["X-Content-Type-Options"] == "nosniff", (status, path)
+    assert "Strict-Transport-Security" not in headers
+
+    https = Client(launch(public_url="https://mcp.example.test"))
+    _, headers, _ = https.request(method, path, {} if method == "POST" else None)
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Strict-Transport-Security"] == HSTS
+
+
+def test_sse_stream_carries_the_security_headers(launch):
+    httpd = launch()
+    alice = authed(httpd)
+    stream, resp = alice.open_stream("/sse")
+    try:
+        assert resp.status == 200
+        assert resp.getheader("X-Content-Type-Options") == "nosniff"
+    finally:
+        stream.close()
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 

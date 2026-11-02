@@ -764,6 +764,16 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         if origin and not self._origin_ok(origin):
             raise _Reject(HTTPStatus.FORBIDDEN, "Origin not allowed")
 
+    def _security_headers(self) -> dict[str, str]:
+        """On every response. HSTS only when the configured public URL is
+        https: it is the one origin we know browsers reach over TLS (a
+        loopback or plain-http deploy must not pin itself to https)."""
+        headers = {"X-Content-Type-Options": "nosniff"}
+        public = self.server.config.public_url
+        if public and public.startswith("https://"):
+            headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return headers
+
     def _send(self, status: int, body: bytes = b"", content_type: str | None = None,
               headers: dict | None = None) -> None:
         self.send_response(status)
@@ -772,7 +782,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if self.close_connection:
             self.send_header("Connection", "close")
-        for key, value in {**self._cors_headers(), **(headers or {})}.items():
+        for key, value in {**self._security_headers(), **self._cors_headers(),
+                           **(headers or {})}.items():
             self.send_header(key, value)
         self.end_headers()
         if body and self.command != "HEAD":
@@ -1026,7 +1037,7 @@ class McpRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
-        for key, value in self._cors_headers().items():
+        for key, value in {**self._security_headers(), **self._cors_headers()}.items():
             self.send_header(key, value)
         if session.kind == "streamable":
             self.send_header(SESSION_HEADER, session.id)
