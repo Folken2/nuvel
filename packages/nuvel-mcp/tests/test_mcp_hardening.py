@@ -469,6 +469,42 @@ def test_sse_stream_carries_the_security_headers(launch):
         stream.close()
 
 
+# --- (6) the container runs as a non-root user ---------------------------------------------
+
+
+def _dockerfile_instructions():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    text = text.replace("\\\n", " ")  # join continuation lines
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")]
+
+
+def test_dockerfile_runs_as_a_non_root_system_user():
+    lines = _dockerfile_instructions()
+    users = [line.split(None, 1)[1].strip() for line in lines if line.startswith("USER ")]
+    assert users, "no USER instruction: the server would run as root"
+    user = users[-1].split(":")[0]
+    assert user not in ("root", "0")
+    run = " ".join(line for line in lines if line.startswith("RUN "))
+    assert "useradd" in run and "--system" in run and user in run
+    # The file-store fallback dirs stay writable for that user.
+    assert f"chown -R {user}" in run and "/data" in run
+    # USER comes after the last RUN, so the CMD (and nothing after) runs as root.
+    last_run = max(i for i, line in enumerate(lines) if line.startswith("RUN "))
+    last_user = max(i for i, line in enumerate(lines) if line.startswith("USER "))
+    assert last_user > last_run
+    cmd = next(i for i, line in enumerate(lines) if line.startswith("CMD "))
+    assert last_user < cmd
+
+
+def test_dockerfile_does_not_trust_forwarded_for_by_default():
+    # A plain `docker run -p` exposes the server with no proxy in front, where
+    # X-Forwarded-For is the caller's to forge; the platform sets it instead.
+    assert "NUVEL_MCP_TRUST_FORWARDED_FOR" not in " ".join(_dockerfile_instructions())
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 
