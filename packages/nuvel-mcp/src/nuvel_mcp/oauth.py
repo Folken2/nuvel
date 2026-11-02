@@ -299,6 +299,11 @@ class OAuthConfig:
     register_limit: int = 20  # per client IP per window
     register_global_limit: int = 200  # all IPs per window
     register_window: float = 3600.0
+    # Pending /authorize logins (each held up to LOGIN_TTL) per client and per
+    # caller IP, under the global MAX_PENDING_LOGINS: one flooder must not
+    # fill the table and lock every other user out of signing in.
+    pending_logins_per_client: int = 100
+    pending_logins_per_ip: int = 20
     github_authorize_url: str = GITHUB_AUTHORIZE_URL
     github_token_url: str = GITHUB_TOKEN_URL
     github_user_url: str = GITHUB_USER_URL
@@ -735,12 +740,15 @@ class OAuthProvider:
 
     # --- authorization request ----------------------------------------------------------
 
-    def start_authorization(self, params: dict[str, str], origin: str) -> dict:
+    def start_authorization(self, params: dict[str, str], origin: str,
+                            remote_addr: str | None = None) -> dict:
         """Validate an /authorize request and park it until the user logs in.
 
-        Raises AuthorizeError (show an error page) for a bad client/redirect URI,
-        and OAuthError with ``redirect_uri``/``state`` attributes set for errors
-        that go back to the client.
+        Raises AuthorizeError (show an error page) for a bad client/redirect URI
+        or too many pending logins (globally, for this client, or from
+        ``remote_addr``, the caller's IP), and OAuthError with
+        ``redirect_uri``/``state`` attributes set for errors that go back to
+        the client.
         """
         with self.store.reading() as data:
             client = data["clients"].get(params.get("client_id") or "")
@@ -787,13 +795,20 @@ class OAuthProvider:
             "scope": sorted(scope),
             "resource": origin,
             "origin": origin,
+            "remote_addr": remote_addr,
             "expires_at": self.clock() + LOGIN_TTL,
         }
         with self._logins_lock:
             now = self.clock()
             for key in [k for k, v in self._logins.items() if v["expires_at"] <= now]:
                 del self._logins[key]
-            if len(self._logins) >= MAX_PENDING_LOGINS:
+            pending = self._logins.values()
+            if (len(self._logins) >= MAX_PENDING_LOGINS
+                    or sum(v["client_id"] == login["client_id"] for v in pending)
+                    >= self.config.pending_logins_per_client
+                    or (remote_addr is not None
+                        and sum(v.get("remote_addr") == remote_addr for v in pending)
+                        >= self.config.pending_logins_per_ip)):
                 raise AuthorizeError("Too many pending sign-ins; try again shortly.")
             self._logins[login["id"]] = login
         return login

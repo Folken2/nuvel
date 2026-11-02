@@ -564,6 +564,58 @@ def test_service_and_url_key_tenants_stay_the_client_id(launch):
     assert httpd.oauth.validate_url_key(key).tenant == record["client_id"]
 
 
+# --- (7b) pending logins are capped per client and per IP -----------------------------------
+
+
+def _start_login(anon, client_id, ip=None):
+    from _mcp_http_helpers import authorize_params
+
+    headers = {"X-Forwarded-For": ip} if ip else None
+    status, _, page = anon.request("GET", authorize_params(client_id, pkce()[1]),
+                                   headers=headers)
+    return status, page
+
+
+def test_pending_logins_are_capped_per_client(launch, store_path):
+    httpd = launch(make_provider(store_path, pending_logins_per_client=2))
+    anon = Client(httpd)
+    flooded, other = register(anon)[1]["client_id"], register(anon)[1]["client_id"]
+    assert _start_login(anon, flooded)[0] == 200
+    assert _start_login(anon, flooded)[0] == 200
+    status, page = _start_login(anon, flooded)
+    assert status == 400 and b"Too many pending sign-ins" in page
+    assert _start_login(anon, other)[0] == 200
+
+
+def test_pending_logins_are_capped_per_ip(launch, store_path):
+    httpd = launch(make_provider(store_path, pending_logins_per_ip=2),
+                   trust_forwarded_for=True)
+    anon = Client(httpd)
+    clients = [register(anon)[1]["client_id"] for _ in range(3)]
+    assert _start_login(anon, clients[0], "203.0.113.5")[0] == 200
+    assert _start_login(anon, clients[1], "203.0.113.5")[0] == 200
+    status, page = _start_login(anon, clients[2], "203.0.113.5")
+    assert status == 400 and b"Too many pending sign-ins" in page
+    assert _start_login(anon, clients[2], "198.51.100.7")[0] == 200
+
+
+def test_finished_or_expired_logins_free_their_slots(store_path):
+    from nuvel_mcp.oauth import OAuthProvider  # noqa: F401 - via make_provider
+
+    provider = make_provider(store_path, pending_logins_per_client=1)
+    clock = _Clock()
+    provider.clock = clock
+    record, _ = provider.create_client("app", ["http://127.0.0.1:9/cb"])
+    params = {"response_type": "code", "client_id": record["client_id"],
+              "redirect_uri": "http://127.0.0.1:9/cb", "state": "s",
+              "code_challenge": pkce()[1], "code_challenge_method": "S256"}
+    login = provider.start_authorization(params, "http://x", "203.0.113.5")
+    provider.pop_login(login["id"])
+    login = provider.start_authorization(params, "http://x", "203.0.113.5")
+    clock.now += 601
+    provider.start_authorization(params, "http://x", "203.0.113.5")
+
+
 # --- (3) URL-key expiry ------------------------------------------------------------------
 
 

@@ -1364,7 +1364,8 @@ class McpRequestHandler(BaseHTTPRequestHandler):
     def _get_authorize(self) -> None:
         provider = self.server.oauth
         try:
-            login = provider.start_authorization(self._query(), self._origin())
+            login = provider.start_authorization(self._query(), self._origin(),
+                                                 self._client_ip())
         except AuthorizeError as exc:
             self._send_html(HTTPStatus.BAD_REQUEST, oauth.error_page(str(exc)))
             return
