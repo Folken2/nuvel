@@ -369,6 +369,13 @@ client never share a tenant, even though anyone allowed to log in can use any
 registered public client. It never contains the `subject` (a person's GitHub
 login) itself. Use one client per tenant, which is what `client create` is for.
 
+> **Changed in this release:** interactive-login tenants used to be the bare
+> `client_id`. Run traces that GitHub (or dev-login) users recorded before
+> upgrading stay under that old `client_id` tenant, and the same users now see
+> only what they record under their new per-user tenant. `client_credentials`
+> and URL-key tenants are unchanged. No migration is run; a deployment with
+> `NUVEL_OAUTH_LOGIN=none` is not affected.
+
 ## Request limits
 
 | Condition | Response |
