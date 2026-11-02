@@ -248,6 +248,27 @@ def _select_store(kind: str, spec: str, db, load, feedback_dir, postgres_store):
     return load(spec, feedback_dir)
 
 
+def _country_lookup(usage):
+    """``(table, None)`` from ``NUVEL_MCP_GEOIP_CSV`` when usage is recorded,
+    ``(None, None)`` when off, or ``(None, error)``."""
+    from nuvel_mcp.geoip import CSV_ENV, country_lookup_from_env
+
+    if usage is None:
+        if os.environ.get(CSV_ENV, "").strip():
+            print(f"{CSV_ENV} is ignored: usage recording is off (it needs "
+                  "NUVEL_MCP_DATABASE_URL and NUVEL_MCP_USAGE on).", file=sys.stderr)
+        return None, None
+    try:
+        table = country_lookup_from_env()
+    except ValueError as exc:
+        return None, str(exc)
+    if table is not None:
+        print(f"Country: on ({len(table)} ranges from {CSV_ENV}; only the country code "
+              "is recorded, never the address). IP Geolocation by DB-IP "
+              "(https://db-ip.com, CC BY 4.0).", file=sys.stderr)
+    return table, None
+
+
 def run_serve(args: argparse.Namespace) -> int:
     with ExitStack() as cleanup:
         return _run_serve(args, cleanup)
@@ -293,6 +314,10 @@ def _run_serve(args: argparse.Namespace, cleanup: ExitStack) -> int:
             cleanup.callback(usage.close)  # LIFO: flushed before the pool closes
     else:
         PostgresRecipeStore = PostgresTraceStore = None
+    country_lookup, error = _country_lookup(usage)
+    if error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
 
     feedback_dir = resolve_feedback_dir(args.feedback_dir)
     try:
@@ -325,6 +350,7 @@ def _run_serve(args: argparse.Namespace, cleanup: ExitStack) -> int:
         usage=usage,
         database=db,
     )
+    server.country_lookup = country_lookup
     if args.require_auth and args.no_auth:
         print("Error: --require-auth and --no-auth are mutually exclusive.", file=sys.stderr)
         return 2
