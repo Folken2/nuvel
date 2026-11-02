@@ -27,6 +27,19 @@ schema is migrated at startup; `nuvel-mcp db migrate|status|import` manage it,
 and `db import` copies existing files in. See the
 [deploy guide](https://github.com/Folken2/nuvel/blob/main/docs/how-to/deploy-skills-mcp.md#store-everything-in-postgres-neon).
 
+With a database, each request is logged for the operator: when, which OAuth
+client, method and tool name (known names only), outcome, error code, latency,
+the session's client app (`initialize` `clientInfo` name and version, sanitized
+to 64 safe characters) and, optionally, the caller's country. IP addresses,
+tool arguments and any other content are never stored. The country needs
+`NUVEL_MCP_GEOIP_CSV` pointing at the DB-IP "IP to Country Lite" CSV, which you
+download yourself (CC BY 4.0: credit "IP Geolocation by DB-IP"); turn it off
+with `NUVEL_MCP_RECORD_COUNTRY=0`. `nuvel-mcp clients label|list` records who is
+behind a client id, and `nuvel-mcp report [--days 7] [--json]` prints the usage
+report. Nothing is pruned automatically: delete old `usage_events` rows with SQL.
+See [Usage insights](https://github.com/Folken2/nuvel/blob/main/docs/how-to/deploy-skills-mcp.md#usage-insights-what-is-collected)
+for exactly what is collected and retention.
+
 The HTTP transport (Streamable HTTP on `/mcp`, legacy SSE, OAuth 2.1) is part of
 the same dependency-free package; there are no extras. It binds
 `127.0.0.1:8080` and requires an OAuth token unless you pass `--no-auth` on a

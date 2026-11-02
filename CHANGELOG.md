@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
 - Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.
 - `--tools A,B` allow-list of tool names to expose.
+- `nuvel-mcp` usage insights (Postgres only): usage events record the session's client app (`initialize` `clientInfo` name/version and protocol version, sanitized) and, with `NUVEL_MCP_GEOIP_CSV` (DB-IP country CSV, off with `NUVEL_MCP_RECORD_COUNTRY=0`), the caller's country; never an IP address or tool arguments. New `client_profiles` table with `nuvel-mcp clients label|list`, and `nuvel-mcp report [--days 7] [--json]`.
 - `record_recipe_signal` and `share_recipe` tools: store content-free `nuvel.recipe_signal/2` weekly snapshots and `nuvel.recipe/3` recipes whose optional free text is masked on the server (see Changed; tenant from the OAuth `client_id`); both are in the HTTP default tool set.
 - `nuvel traces recipes` and a **Recipe candidates** page in `nuvel dashboard` (`/recipes`): recipe snapshots and shared recipes grouped by category (recipes, tenants, uses, success rate, corrections, status, latest shared version; a recipe without text shows its steps only). Tenant values are never shown.
 - `record_run_trace` tool: stores content-free `nuvel.skill_run/1` run traces (see `docs/reference/skill-run-traces.md`).

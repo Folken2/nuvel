@@ -225,6 +225,9 @@ one database.
 | `NUVEL_MCP_DATABASE_POOL_MAX` | Connections per server process. Default 10. |
 | `NUVEL_MCP_DATABASE_AUTO_MIGRATE` | `0` stops migrations at startup; run `nuvel-mcp db migrate` from your release step instead. Default `1`. |
 | `NUVEL_MCP_USAGE` | `0` turns the usage log off. Default `1`. |
+| `NUVEL_MCP_GEOIP_CSV` | Optional path to a country-level IP-range CSV (DB-IP "IP to Country Lite", plain or `.gz`). Set, each usage row gets the caller's two-letter country; the address itself is never stored. Unset (the default), `country` stays empty. See [Usage insights](#usage-insights-what-is-collected). |
+| `NUVEL_MCP_RECORD_COUNTRY` | `0` turns the country lookup off even with `NUVEL_MCP_GEOIP_CSV` set. Default `1`. |
+| `NUVEL_MCP_TRUST_FORWARDED_FOR` | `1` behind a reverse proxy you run (Railway's edge, Caddy, nginx): the caller's address is the right-most `X-Forwarded-For` entry instead of the proxy's. Leave it unset when clients reach the server directly, or they could forge it. Default off. |
 
 `--trace-store` and `--recipe-store` default to `auto`: Postgres when a URL is
 set, files otherwise. `postgres` and `local` force one; `postgres` without a URL
@@ -235,20 +238,82 @@ them anywhere the URL is set: no shell on the server is needed.
 `"database unavailable"` when the database stops answering. If the database is
 unreachable, OAuth fails closed: requests get an error, never a free pass.
 
-**Usage.** Every MCP request with an id becomes one row in `usage_events`: when,
-which client (`tenant`, the OAuth `client_id`), transport, method, tool,
-outcome (`ok`, `tool_error` or `error`), JSON-RPC error code and latency. Only
-known method and tool names are stored; anything else becomes `unknown`, and
-arguments are never recorded. Rows are written by a background thread off the
-request path, so a slow database delays the log, not the request. Two views
-summarise it:
+### Usage insights: what is collected
+
+Usage is recorded only with a database; on files nothing is. Every MCP request
+with an id becomes one row in `usage_events`. Rows are written by a background
+thread off the request path, so a slow database delays the log, not the request.
+
+**Collected, per request:**
+
+| Column | What it is |
+|---|---|
+| `at`, `duration_ms` | When, and how long the server took. |
+| `tenant` | The OAuth `client_id` of the caller (empty for stdio and `--no-auth`). |
+| `transport` | `http` or `stdio`. |
+| `method`, `tool` | The JSON-RPC method and, for `tools/call`, the tool. Only names the server knows; anything else is stored as `unknown`. |
+| `outcome`, `error_code` | `ok`, `tool_error` or `error`, and the JSON-RPC error code. |
+| `client_name`, `client_version`, `protocol_version` | The client app of the session, from its `initialize` request (`clientInfo.name`, `clientInfo.version`, `protocolVersion`), for example `claude-ai` or `Cursor`. These are the only caller-supplied text in the table: stripped, cut to 64 characters, and stored as `unknown` unless they are only letters, digits, spaces and `._:/@+()-`. Empty when the client sent none. |
+| `country` | Optional: the caller's two-letter ISO country, when `NUVEL_MCP_GEOIP_CSV` is set. |
+
+**Never collected:** IP addresses (not even hashed: the address is looked up in
+memory and dropped), tool arguments or results, skill content, request bodies,
+headers, user agents, or GitHub logins.
+
+**Country, never IP.** Download the free [DB-IP IP to Country
+Lite](https://db-ip.com/db/download/ip-to-country-lite) CSV (IPv4 and IPv6,
+updated monthly; `.csv.gz` works as is), put it where the server can read it, and
+point `NUVEL_MCP_GEOIP_CSV` at it. nuvel-mcp never downloads or ships it. The
+data is licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/):
+anywhere you show the countries (a dashboard, a report you share), credit it as
+"IP Geolocation by DB-IP" with a link to https://db-ip.com. It is loaded into
+memory at startup (tens of MB for the full table). Behind a proxy, also set
+`NUVEL_MCP_TRUST_FORWARDED_FOR=1`, or every caller looks like the proxy. Traffic
+from claude.ai and Claude Cowork connectors likely reaches the server from
+Anthropic's infrastructure, so its country reflects where that runs, not where
+the user is; desktop and CLI clients that connect directly show the user's
+country.
+
+**Who is behind a client.** `client_profiles` holds what you, the operator, know
+about a client id: a person, a company and notes. Nothing a caller sends ends up
+there.
+
+```bash
+nuvel-mcp clients label nvcl_abc --person "Ana García" --company "Acme SL" --notes "pilot"
+nuvel-mcp clients label nvcl_abc --notes ""     # an empty value clears a field
+nuvel-mcp clients list                          # label, last seen, events in 30 days
+```
+
+**The weekly report.** `nuvel-mcp report` (or `nuvel mcp report`) prints, for
+the last 7 days (`--days N`): active clients with their labels, calls per day,
+top methods and tools, error rate, top error codes and p50/p95 latency per tool,
+client apps and versions, countries, skill runs per skill with outcome mix and
+correction rate, the tools nobody called, and recipe adoption. `--json` prints
+the same as JSON. Text output strips control characters, so a client name
+cannot rewrite your terminal.
+
+Two views summarise usage in SQL too:
 
 ```sql
--- calls, errors and p50/p95 latency per day, client and tool
+-- calls, errors and p50/p95 latency per day, client, client app and tool
 SELECT * FROM nuvel_mcp.usage_daily ORDER BY day DESC, calls DESC;
 -- skill runs per day by outcome
 SELECT * FROM nuvel_mcp.skill_runs_daily ORDER BY day DESC;
 ```
+
+**Retention.** The server never deletes usage rows; pick a retention period
+(90 days is plenty for the report) and prune on a schedule, for example from a
+cron job or Neon's SQL editor:
+
+```sql
+DELETE FROM nuvel_mcp.usage_events WHERE at < now() - interval '90 days';
+-- forget a person: drop their label (usage keeps only the client id)
+DELETE FROM nuvel_mcp.client_profiles WHERE client_id = 'nvcl_abc';
+```
+
+To erase a client entirely, also delete its rows from `usage_events`,
+`skill_runs` and `recipe_signals` (`WHERE tenant = '<client_id>'`) and revoke it
+with `nuvel-mcp client delete <client_id>`.
 
 **Moving off the volume.** On a server that has been running on files, copy
 them in once, then point the server at the database:

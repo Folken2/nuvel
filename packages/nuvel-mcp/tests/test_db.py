@@ -115,8 +115,9 @@ def test_migrations_are_packaged_in_order():
     found = migrations()
     assert [v for v, _, _ in found] == sorted(v for v, _, _ in found)
     assert found[0][:2] == (1, "initial")
+    every = "\n".join(sql for _, _, sql in found)
     for table in db_mod.TABLES:
-        assert f"{{schema}}.{table}" in found[0][2]
+        assert f"CREATE TABLE {{schema}}.{table}" in every
 
 
 # --- migrations -------------------------------------------------------------------------
