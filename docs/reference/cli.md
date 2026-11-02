@@ -293,7 +293,12 @@ nuvel-mcp client create --name NAME [--redirect-uri URI ...]
 nuvel-mcp client list [--json]
 nuvel-mcp client delete CLIENT_ID
 nuvel-mcp token revoke TOKEN_OR_CLIENT_ID
+nuvel-mcp clients label CLIENT_ID [--person P] [--company C] [--notes N]
+nuvel-mcp clients list [--json]
+nuvel-mcp report [--days 7] [--json]
 ```
+
+`clients` and `report` need `NUVEL_MCP_DATABASE_URL`: `clients label` records who is behind an OAuth client id (an empty value clears a field), `clients list` shows each client id with its label, last usage and events in the last 30 days, and `report` prints the usage report (clients, calls, tools, errors, latency, client apps, countries, skill runs, recipe adoption). What the usage log holds is listed in [Usage insights](../how-to/deploy-skills-mcp.md#usage-insights-what-is-collected).
 
 | Flag | Description |
 |---|---|
@@ -306,7 +311,7 @@ nuvel-mcp token revoke TOKEN_OR_CLIENT_ID
 | `--no-auth` | HTTP only: disable OAuth for local development. Refused unless `--host` is loopback. There is then no principal, so traces carry no `tenant` and `check_skill_health` aggregates all tenants, as over stdio. |
 | `--require-auth` | stdio only: gate every request on the access token in `$NUVEL_MCP_ACCESS_TOKEN`. HTTP is always gated unless `--no-auth`. |
 
-HTTP requires an OAuth 2.1 access token by default. The tenant of each run trace is the token's OAuth `client_id`. Operators create clients with `client create` (the secret is printed once) and revoke access with `client delete` or `token revoke`. Tuning and deployment settings (`NUVEL_MCP_PUBLIC_URL`, `NUVEL_OAUTH_*`, `NUVEL_MCP_REQUEST_DEADLINE`, `NUVEL_MCP_READ_TIMEOUT`, `NUVEL_MCP_MAX_CONNECTIONS`, ...) are listed in [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md).
+HTTP requires an OAuth 2.1 access token by default. The tenant of each run trace is the token's OAuth `client_id` (for an interactive login, the `client_id` plus a hash of the user). Operators create clients with `client create` (the secret is printed once) and revoke access with `client delete` or `token revoke`. Tuning and deployment settings (`NUVEL_MCP_PUBLIC_URL`, `NUVEL_OAUTH_*`, `NUVEL_MCP_REQUEST_DEADLINE`, `NUVEL_MCP_READ_TIMEOUT`, `NUVEL_MCP_MAX_CONNECTIONS`, ...) are listed in [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md).
 
 `nuvel-mcp` has no runtime dependencies and no extras. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
 

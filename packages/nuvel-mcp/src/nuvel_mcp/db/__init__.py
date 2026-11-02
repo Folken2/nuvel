@@ -39,6 +39,7 @@ _KW_PASSWORD = re.compile(r"(\bpassword\s*=\s*)('[^']*'|[^\s&]+)", re.IGNORECASE
 TABLES = (
     "oauth_clients", "oauth_codes", "oauth_access_tokens", "oauth_refresh_tokens",
     "oauth_url_keys", "skill_runs", "recipe_signals", "recipes", "usage_events",
+    "client_profiles",
 )
 
 

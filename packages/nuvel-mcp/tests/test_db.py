@@ -33,10 +33,10 @@ def _trace(tenant=None, run_id=None, started_at="2026-10-20T09:30:12Z", **change
 
 
 def _signal(tenant=None, signal_id=None):
-    s = {"schema": "nuvel.recipe_signal/1", "signal_id": signal_id or str(uuid.uuid4()),
+    s = {"schema": "nuvel.recipe_signal/2", "signal_id": signal_id or str(uuid.uuid4()),
          "recipe_id": str(uuid.uuid4()), "install_id": str(uuid.uuid4()), "plugin": PLUGIN,
-         "category": "client-followup", "event": "used", "at": "2026-10-27T10:00:00Z",
-         "uses": 3, "successes": 2, "corrections": 0}
+         "category": "client-followup", "status": "active", "at": "2026-10-27T10:00:00Z",
+         "uses": 3, "successes": 2, "corrections": 0, "days_used": 2}
     if tenant is not None:
         s["tenant"] = tenant
     return s
@@ -115,8 +115,9 @@ def test_migrations_are_packaged_in_order():
     found = migrations()
     assert [v for v, _, _ in found] == sorted(v for v, _, _ in found)
     assert found[0][:2] == (1, "initial")
+    every = "\n".join(sql for _, _, sql in found)
     for table in db_mod.TABLES:
-        assert f"{{schema}}.{table}" in found[0][2]
+        assert f"CREATE TABLE {{schema}}.{table}" in every
 
 
 # --- migrations -------------------------------------------------------------------------
@@ -125,11 +126,12 @@ def test_migrations_are_packaged_in_order():
 @_pg.requires_pg
 def test_migrate_is_idempotent_and_reports_status():
     db = _pg.open_db(migrate=False)
-    assert db.status()["applied"] == [] and db.status()["pending"] == [1]
-    assert db.migrate() == [(1, "initial")]
+    every = [v for v, _, _ in migrations()]
+    assert db.status()["applied"] == [] and db.status()["pending"] == every
+    assert [v for v, _ in db.migrate()] == every
     assert db.migrate() == []
     status = db.status()
-    assert status["applied"] == [1] and status["pending"] == []
+    assert status["applied"] == every and status["pending"] == []
     assert set(status["rows"]) == set(db_mod.TABLES) and not any(status["rows"].values())
 
 
@@ -151,7 +153,56 @@ def test_concurrent_migrations_apply_once():
     for t in threads:
         t.join()
     assert errors == []
-    assert sorted(results, key=len) == [[], [], [], [(1, "initial")]]
+    applied = [(v, name) for v, name, _ in migrations()]
+    assert sorted(results, key=len) == [[], [], [], applied]
+
+
+@_pg.requires_pg
+def test_every_table_forces_row_level_security():
+    db = _pg.open_db()
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c "
+            "WHERE c.relnamespace = %s::regnamespace AND c.relkind IN ('r', 'p')",
+            (f'"{db.schema}"',)).fetchall()
+    names = {name for name, _, _ in rows}
+    assert set(db_mod.TABLES) | {"oauth_state", "schema_migrations"} <= names
+    assert [name for name, enabled, forced in rows if not (enabled and forced)] == []
+
+
+@_pg.requires_pg
+def test_other_roles_see_nothing_even_with_grants():
+    # A role that is not the owner -- Neon's Data API, a read-only login -- is
+    # granted SELECT on everything and still reads zero rows, views included.
+    import psycopg
+
+    db = _pg.open_db()
+    with db.connection() as conn:
+        conn.execute(f"INSERT INTO {db.table('usage_events')} (at, tenant, transport, method, "
+                     "outcome, duration_ms) VALUES (now(), 't1', 'http', 'tools/list', 'ok', 3)")
+    probe = f"probe_{uuid.uuid4().hex[:8]}"
+    q = f'"{db.schema}"'
+    with psycopg.connect(_pg.DSN, autocommit=True) as conn:
+        try:
+            conn.execute(f'CREATE ROLE "{probe}" NOLOGIN')
+        except psycopg.errors.InsufficientPrivilege:
+            pytest.skip("the test role cannot create roles")
+        try:
+            conn.execute(f'GRANT "{probe}" TO CURRENT_USER')
+            conn.execute(f'GRANT USAGE ON SCHEMA {q} TO "{probe}"')
+            conn.execute(f'GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA {q} TO "{probe}"')
+            assert conn.execute(f"SELECT count(*) FROM {q}.usage_events").fetchone()[0] == 1
+            with conn.transaction():
+                conn.execute(f'SET LOCAL ROLE "{probe}"')
+                for rel in (*db_mod.TABLES, "oauth_state", "usage_daily", "skill_runs_daily"):
+                    assert conn.execute(f"SELECT count(*) FROM {q}.{rel}").fetchone()[0] == 0, rel
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with conn.transaction():
+                    conn.execute(f'SET LOCAL ROLE "{probe}"')
+                    conn.execute(f"INSERT INTO {q}.oauth_clients (id, record) VALUES ('x', '{{}}')")
+        finally:
+            conn.execute(f'DROP OWNED BY "{probe}"')
+            conn.execute(f'DROP ROLE "{probe}"')
 
 
 @_pg.requires_pg
@@ -457,3 +508,19 @@ def test_recorder_drops_on_overflow_and_failure(capsys):
     recorder.record(_event())
     recorder.flush()
     assert "usage: dropped" in capsys.readouterr().err
+
+
+@_pg.requires_pg
+def test_postgres_stores_the_shipped_recipe_signal(pg_db):
+    # The exact signal chief-of-staff v0.4 sends: recipe_signal/2 has status, no event.
+    from nuvel_mcp.db.stores import PostgresRecipeStore
+
+    signal = json.loads((Path(__file__).parent / "fixtures" / "chief_of_staff"
+                         / "recipe_signal.json").read_text(encoding="utf-8"))
+    assert "event" not in signal
+    store = PostgresRecipeStore(pg_db)
+    assert store.append_signal(signal) is True
+    assert store.append_signal(signal) is False  # deduped on signal_id
+    with pg_db.connection() as conn:
+        row = conn.execute(f"SELECT event, record->>'status' FROM {pg_db.table('recipe_signals')}").fetchone()
+    assert row == (signal["status"], signal["status"])

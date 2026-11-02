@@ -460,7 +460,7 @@ class _FakeGitHub(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.headers.get("Authorization") == "Bearer gho_fake":
-            self._json({"login": "octocat"})
+            self._json({"login": "octocat", "id": 583231})
         else:
             self.send_response(401)
             self.send_header("Content-Length", "0")
@@ -510,7 +510,7 @@ def test_github_login_flow(launch, store_path, fake_github):
     assert gh.seen[0]["redirect_uri"] == f"{origin(httpd)}/oauth/callback"
     status, _, tokens = exchange(client, reg["client_id"], code, verifier)
     assert status == 200
-    assert httpd.oauth.validate(tokens["access_token"], None).subject == "github:octocat"
+    assert httpd.oauth.validate(tokens["access_token"], None).subject == "github:octocat:583231"
 
 
 def test_github_login_failure_redirects_error(launch, store_path, fake_github):

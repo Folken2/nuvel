@@ -1,7 +1,8 @@
-"""Command line for the Skills MCP server: ``nuvel-mcp serve|client|token|db``.
+"""Command line for the Skills MCP server:
+``nuvel-mcp serve|client|token|db|clients|report``.
 
-``add_serve_arguments`` / ``run_serve``, ``add_oauth_commands`` and
-``add_db_commands`` are shared
+``add_serve_arguments`` / ``run_serve``, ``add_oauth_commands``,
+``add_db_commands`` and ``add_insight_commands`` are shared
 with ``nuvel mcp …`` so both entry points expose identical flags and commands.
 ``--transport http`` runs the stdlib transport in :mod:`nuvel_mcp.http_transport`
 (OAuth 2.1 via :mod:`nuvel_mcp.oauth`); stdio stays the default.
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -156,6 +158,9 @@ def add_oauth_commands(subparsers: argparse._SubParsersAction) -> None:
                           help="Issue a URL key instead of a secret and print the "
                                "connector URL ($NUVEL_MCP_PUBLIC_URL/mcp/k/<key>) once, "
                                "for MCP clients that connect with no sign-in.")
+    p_create.add_argument("--expires-in", type=float, default=None, metavar="DAYS",
+                          help="With --url-key: the key stops working after DAYS days "
+                               "(fractions allowed). Default: until revoked.")
     p_create.set_defaults(func=_cmd_client_create)
     p_list = client_sub.add_parser("list", help="List registered clients (no secrets).")
     p_list.add_argument("--json", action="store_true", help="Print JSON.")
@@ -244,6 +249,27 @@ def _select_store(kind: str, spec: str, db, load, feedback_dir, postgres_store):
     return load(spec, feedback_dir)
 
 
+def _country_lookup(usage):
+    """``(table, None)`` from ``NUVEL_MCP_GEOIP_CSV`` when usage is recorded,
+    ``(None, None)`` when off, or ``(None, error)``."""
+    from nuvel_mcp.geoip import CSV_ENV, country_lookup_from_env
+
+    if usage is None:
+        if os.environ.get(CSV_ENV, "").strip():
+            print(f"{CSV_ENV} is ignored: usage recording is off (it needs "
+                  "NUVEL_MCP_DATABASE_URL and NUVEL_MCP_USAGE on).", file=sys.stderr)
+        return None, None
+    try:
+        table = country_lookup_from_env()
+    except ValueError as exc:
+        return None, str(exc)
+    if table is not None:
+        print(f"Country: on ({len(table)} ranges from {CSV_ENV}; only the country code "
+              "is recorded, never the address). IP Geolocation by DB-IP "
+              "(https://db-ip.com, CC BY 4.0).", file=sys.stderr)
+    return table, None
+
+
 def run_serve(args: argparse.Namespace) -> int:
     with ExitStack() as cleanup:
         return _run_serve(args, cleanup)
@@ -289,6 +315,10 @@ def _run_serve(args: argparse.Namespace, cleanup: ExitStack) -> int:
             cleanup.callback(usage.close)  # LIFO: flushed before the pool closes
     else:
         PostgresRecipeStore = PostgresTraceStore = None
+    country_lookup, error = _country_lookup(usage)
+    if error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
 
     feedback_dir = resolve_feedback_dir(args.feedback_dir)
     try:
@@ -321,6 +351,7 @@ def _run_serve(args: argparse.Namespace, cleanup: ExitStack) -> int:
         usage=usage,
         database=db,
     )
+    server.country_lookup = country_lookup
     if args.require_auth and args.no_auth:
         print("Error: --require-auth and --no-auth are mutually exclusive.", file=sys.stderr)
         return 2
@@ -494,6 +525,9 @@ def _store_errors(func):
 def _cmd_client_create(args: argparse.Namespace) -> int:
     if args.url_key:
         return _create_url_key_client(args)
+    if args.expires_in is not None:
+        print("Error: --expires-in applies to --url-key only.", file=sys.stderr)
+        return 2
     provider = _provider()
     try:
         record, secret = provider.create_client(args.name, args.redirect_uri)
@@ -520,19 +554,28 @@ def _create_url_key_client(args: argparse.Namespace) -> int:
         print("Error: --url-key and --redirect-uri are mutually exclusive: a URL-key "
               "client never uses the authorization code flow.", file=sys.stderr)
         return 2
+    days = args.expires_in
+    if days is not None and not (math.isfinite(days) and days > 0):
+        print("Error: --expires-in must be a positive number of days.", file=sys.stderr)
+        return 2
     try:
         public_url = public_url_from_env()
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     provider = _provider()
-    record, key = provider.create_client(args.name, url_key=True)
-    print(json.dumps({
+    record, key = provider.create_client(
+        args.name, url_key=True, expires_in=None if days is None else days * 86400)
+    output = {
         "client_id": record["client_id"],
         "client_name": record["client_name"],
         "url_key": key,
         "connector_url": f"{public_url or ''}{URL_KEY_PATH}{key}",
-    }, indent=2))
+    }
+    if "url_key_expires_at" in record:
+        output["expires_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                             time.gmtime(record["url_key_expires_at"]))
+    print(json.dumps(output, indent=2))
     if public_url is None:
         print("NUVEL_MCP_PUBLIC_URL is not set: prefix connector_url with the server's "
               "public origin.", file=sys.stderr)
@@ -687,6 +730,98 @@ def _cmd_db_import(args: argparse.Namespace, db) -> int:
     return 0
 
 
+def add_insight_commands(subparsers: argparse._SubParsersAction) -> None:
+    """``clients label|list`` (who is behind each OAuth client) and ``report``
+    (the usage report), from the database."""
+    p_clients = subparsers.add_parser(
+        "clients", help="Label OAuth clients with who uses them and list them with "
+                        "their recent usage (needs $NUVEL_MCP_DATABASE_URL).")
+    clients_sub = p_clients.add_subparsers(dest="clients_command", required=True)
+    p_label = clients_sub.add_parser(
+        "label", help="Set the person, company or notes of a client id. An empty "
+                      "value clears that field; omitted fields are kept.")
+    p_label.add_argument("client_id")
+    p_label.add_argument("--person", default=None, help="Who uses this client.")
+    p_label.add_argument("--company", default=None, help="Their company.")
+    p_label.add_argument("--notes", default=None, help="Free-form operator notes.")
+    p_label.set_defaults(func=_cmd_clients_label)
+    p_list = clients_sub.add_parser(
+        "list", help="Every known client id with its label, last usage and events "
+                     "in the last 30 days.")
+    p_list.add_argument("--json", action="store_true", help="Print JSON.")
+    p_list.set_defaults(func=_cmd_clients_list)
+
+    p_report = subparsers.add_parser(
+        "report", help="Usage report from the database: active clients, calls, tools, "
+                       "errors, latency, client apps, countries, skill runs and recipes.")
+    p_report.add_argument("--days", type=int, default=7,
+                          help="Window in days, ending now (default 7).")
+    p_report.add_argument("--json", action="store_true", help="Print JSON.")
+    p_report.set_defaults(func=_cmd_report)
+
+
+@_database_command
+def _cmd_clients_label(args: argparse.Namespace, db) -> int:
+    from nuvel_mcp.insights import label_client, validate_profile
+
+    fields = {name: (value.strip() or None)
+              for name in ("person", "company", "notes")
+              if (value := getattr(args, name)) is not None}
+    error = validate_profile(args.client_id, fields)
+    if error:
+        print(f"Error: {error}.", file=sys.stderr)
+        return 2
+    db.migrate()
+    if not label_client(db, args.client_id, fields):
+        print(f"Note: {args.client_id} matches no OAuth client and no usage yet; "
+              "labeled anyway.", file=sys.stderr)
+    print(f"Labeled {args.client_id}.")
+    return 0
+
+
+@_database_command
+def _cmd_clients_list(args: argparse.Namespace, db) -> int:
+    from nuvel_mcp.insights import format_table, list_clients
+
+    db.migrate()
+    clients = list_clients(db)
+    if args.json:
+        print(json.dumps(clients, indent=2))
+        return 0
+    if not clients:
+        print("No clients yet.")
+        return 0
+    print(format_table(
+        ["CLIENT_ID", "NAME", "PERSON", "COMPANY", "LAST_SEEN", "EVENTS_30D"],
+        [[c["client_id"], _clip(c["name"]), _clip(c["person"]), _clip(c["company"]),
+          (c["last_seen"] or "")[:16].replace("T", " ") or None, c["events_30d"]]
+         for c in clients]))
+    return 0
+
+
+def _clip(value, width: int = 24):
+    from nuvel_mcp.insights import printable
+
+    if value is None:
+        return None
+    value = printable(value)  # format_table strips again; clip what is shown
+    return value if len(value) <= width else value[:width - 1] + "…"
+
+
+@_database_command
+def _cmd_report(args: argparse.Namespace, db) -> int:
+    from nuvel_mcp.insights import build_report, format_report
+    from nuvel_mcp.server import FEEDBACK_TOOLS, HUB_TOOLS
+
+    if not 1 <= args.days <= 366:
+        print("Error: --days must be between 1 and 366.", file=sys.stderr)
+        return 2
+    db.migrate()
+    report = build_report(db, args.days, HUB_TOOLS | FEEDBACK_TOOLS)
+    print(json.dumps(report, indent=2) if args.json else format_report(report))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nuvel-mcp", description="Nuvel Skills MCP server.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -695,5 +830,6 @@ def main(argv: list[str] | None = None) -> int:
     p_serve.set_defaults(func=run_serve)
     add_oauth_commands(sub)
     add_db_commands(sub)
+    add_insight_commands(sub)
     args = parser.parse_args(argv)
     return args.func(args)

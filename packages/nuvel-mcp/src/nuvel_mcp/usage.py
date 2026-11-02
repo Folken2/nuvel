@@ -1,9 +1,19 @@
 """Usage records: one event per JSON-RPC request, written off the request path.
 
 An event is ``{"at", "tenant", "transport", "method", "tool", "outcome",
-"error_code", "duration_ms"}``. ``method`` and ``tool`` are names the server
+"error_code", "duration_ms", "client_name", "client_version",
+"protocol_version", "country"}``. ``method`` and ``tool`` are names the server
 knows or ``"unknown"`` (never caller-supplied text); ``outcome`` is ``ok``,
 ``tool_error`` (a tool answered ``isError``) or ``error`` (a JSON-RPC error).
+
+The one exception to "never caller text": ``client_name``, ``client_version``
+and ``protocol_version`` come from the session's ``initialize`` request
+(``params.clientInfo`` and ``params.protocolVersion``). They pass through
+:func:`sanitize_label` -- at most 64 characters of ``[A-Za-z0-9 ._:/@+()-]``,
+anything else becomes ``"unknown"`` -- so they can name an app, never carry
+content. ``country`` is a two-letter ISO code looked up from the caller's
+address (:mod:`nuvel_mcp.geoip`); the address itself is never kept. Tool
+arguments are never part of an event.
 
 :class:`UsageRecorder` queues events and a daemon thread writes them in
 batches to a :class:`UsageStore`. A full queue or a failed write drops events:
@@ -13,11 +23,56 @@ produced them is never slowed or failed.
 
 from __future__ import annotations
 
+import contextvars
 import queue
+import re
 import sys
 import threading
 import time
 from typing import Protocol, runtime_checkable
+
+LABEL_MAX = 64
+_LABEL_RE = re.compile(r"\A[A-Za-z0-9 ._:/@+()-]+\Z")
+
+#: The current session's client app: a mutable dict that ``initialize`` fills
+#: (see :func:`client_info`). The HTTP transport sets it to the session's own
+#: dict for each request; ``None`` means the stdio session (one per process).
+current_session_client: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "nuvel_mcp_current_session_client", default=None)
+#: The caller's two-letter country for the current request, or ``None``.
+current_country: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "nuvel_mcp_current_country", default=None)
+
+
+def sanitize_label(value) -> str | None:
+    """A caller-supplied app name / version, safe to store.
+
+    ``None`` stays ``None`` (not sent). Anything else is stripped and cut to
+    :data:`LABEL_MAX` characters; unless it is then a non-empty string of
+    ``[A-Za-z0-9 ._:/@+()-]`` it becomes ``"unknown"``.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return "unknown"
+    value = value.strip()[:LABEL_MAX].strip()
+    return value if _LABEL_RE.fullmatch(value) else "unknown"
+
+
+def client_info(params) -> dict:
+    """``client_name`` / ``client_version`` / ``protocol_version`` from the
+    params of an ``initialize`` request, each sanitized."""
+    params = params if isinstance(params, dict) else {}
+    info = params.get("clientInfo")
+    if info is None or isinstance(info, dict):
+        name, version = (info or {}).get("name"), (info or {}).get("version")
+    else:
+        name, version = "unknown", None
+    return {
+        "client_name": sanitize_label(name),
+        "client_version": sanitize_label(version),
+        "protocol_version": sanitize_label(params.get("protocolVersion")),
+    }
 
 
 @runtime_checkable

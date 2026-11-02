@@ -96,7 +96,10 @@ class PostgresRecipeStore:
         row = (
             signal.get("tenant"), signal["signal_id"], signal["recipe_id"],
             signal["install_id"], signal["plugin"]["name"], signal["category"],
-            signal["event"], traces._parse_started_at(signal["at"]), signal["uses"],
+            # recipe_signal/2 carries the lifecycle status where /1 had an event;
+            # the column keeps its 0001 name and holds whichever the signal has.
+            signal.get("status") or signal["event"],
+            traces._parse_started_at(signal["at"]), signal["uses"],
             signal["successes"], signal["corrections"], self.db.jsonb(signal),
         )
         with self.db.connection() as conn:
@@ -135,12 +138,16 @@ class PostgresUsageStore:
 
     def record_batch(self, events: list[dict]) -> None:
         rows = [(e["at"], e.get("tenant"), e["transport"], e["method"], e.get("tool"),
-                 e["outcome"], e.get("error_code"), e["duration_ms"]) for e in events]
+                 e["outcome"], e.get("error_code"), e["duration_ms"], e.get("client_name"),
+                 e.get("client_version"), e.get("protocol_version"), e.get("country"))
+                for e in events]
         with self.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.executemany(
                     f"INSERT INTO {self._table} (at, tenant, transport, method, tool, "
-                    "outcome, error_code, duration_ms) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "outcome, error_code, duration_ms, client_name, client_version, "
+                    "protocol_version, country) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     rows)
 
 

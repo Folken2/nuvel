@@ -459,6 +459,24 @@ def test_healthz(client):
         assert name not in data.decode()
 
 
+@pytest.mark.parametrize("path, content_type, magic", [
+    ("/favicon.ico", "image/x-icon", b"\x00\x00\x01\x00"),
+    ("/icon.png", "image/png", b"\x89PNG"),
+    ("/icon.svg", "image/svg+xml", b"<svg"),
+])
+def test_brand_icons_are_public(client, path, content_type, magic):
+    # No token: clients fetch the icon before (or without) signing in.
+    conn = client.conn()
+    conn.request("GET", path)
+    resp = conn.getresponse()
+    status, headers, data = resp.status, resp.headers, resp.read()
+    conn.close()
+    assert status == 200
+    assert headers["Content-Type"] == content_type
+    assert data.startswith(magic)
+    assert "max-age" in headers["Cache-Control"]
+
+
 def test_healthz_reports_broken_hub(client, hub):
     (hub / "index.json").write_text("{broken", encoding="utf-8")
     status, _, data = client.request("GET", "/healthz")
@@ -1041,13 +1059,17 @@ def test_dispatch_resets_the_principal_after_a_handler_raises():
         seen.append(current_principal.get())
         raise RuntimeError("handler failed")
 
-    fake = SimpleNamespace(_dispatch_each=boom)
-    info = SimpleNamespace(client_id="tenant-a")
+    from nuvel_mcp.usage import current_country, current_session_client
+
+    fake = SimpleNamespace(_dispatch_each=boom, _country=lambda: "DE")
+    info = SimpleNamespace(tenant="tenant-a")
+    session = SimpleNamespace(client_info={"client_name": "x"})
     assert current_principal.get() is None
     with pytest.raises(RuntimeError):
-        McpRequestHandler._dispatch_all(fake, [{}], info)
+        McpRequestHandler._dispatch_all(fake, [{}], info, session)
     assert seen == ["tenant-a"]
     assert current_principal.get() is None
+    assert current_session_client.get() is None and current_country.get() is None
 
 
 def test_sessions_at_or_over_the_connection_cap_warn_at_startup(hub, tmp_path, capsys):

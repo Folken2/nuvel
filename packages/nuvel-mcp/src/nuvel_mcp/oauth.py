@@ -39,12 +39,14 @@ import hashlib
 import hmac
 import html
 import json
+import math
 import os
 import re
 import secrets
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -90,6 +92,15 @@ FORBIDDEN = -32004
 _PKCE_VERIFIER = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
 _PKCE_CHALLENGE = re.compile(r"[A-Za-z0-9\-_]{43}")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+MAX_CLIENT_NAME = 100
+
+
+def _unprintable(text: str) -> bool:
+    """True if ``text`` holds a control character (C0, DEL, C1: category Cc)
+    or a format character (Cf: bidi overrides such as U+202E, zero-width
+    characters, BOM), which could rewrite or visually spoof what an operator
+    sees in a terminal. Refused in display fields a registrant chooses."""
+    return any(unicodedata.category(c) in ("Cc", "Cf") for c in text)
 _TABLES = ("clients", "codes", "access_tokens", "refresh_tokens", "url_keys")
 
 URL_KEY_PREFIX = "nvuk_"
@@ -148,6 +159,35 @@ def _find(table: dict, digest: str):
         if hmac.compare_digest(str(key).encode("utf-8", "replace"), probe):
             match = (key, record)
     return match
+
+
+def subject_identity(subject: str) -> str:
+    """The stable part of a token subject: a GitHub user by numeric id
+    (``github:<login>:<id>`` -> ``github:#<id>``), since a login can be renamed
+    or recycled; any other subject as is."""
+    idp, _, rest = subject.partition(":")
+    if idp == "github":
+        _, sep, gh_id = rest.rpartition(":")
+        if sep and gh_id.isdigit():
+            return f"github:#{gh_id}"
+    return subject
+
+
+def tenant_for(client_id: str, subject: str) -> str:
+    """The tenant a principal's run traces are stamped and scoped with.
+
+    A client acting as itself (client_credentials and URL keys: subject
+    ``client:<client_id>``) is its ``client_id``, as it always was, so existing
+    data stays in its tenant. A signed-in user is ``<client_id>:<16 hex>`` from
+    a hash of their identity: public clients are open to anyone allowed to log
+    in (a loopback redirect accepts any port), so the client_id alone would let
+    one user mint a token for another's client and read that tenant. The
+    subject (a person's login) itself never appears in the tenant.
+    """
+    if not subject or subject == f"client:{client_id}":
+        return client_id
+    digest = hashlib.sha256(subject_identity(subject).encode("utf-8")).hexdigest()
+    return f"{client_id}:{digest[:16]}"
 
 
 def _split_env(name: str) -> list[str]:
@@ -266,6 +306,11 @@ class OAuthConfig:
     register_limit: int = 20  # per client IP per window
     register_global_limit: int = 200  # all IPs per window
     register_window: float = 3600.0
+    # Pending /authorize logins (each held up to LOGIN_TTL) per client and per
+    # caller IP, under the global MAX_PENDING_LOGINS: one flooder must not
+    # fill the table and lock every other user out of signing in.
+    pending_logins_per_client: int = 100
+    pending_logins_per_ip: int = 20
     github_authorize_url: str = GITHUB_AUTHORIZE_URL
     github_token_url: str = GITHUB_TOKEN_URL
     github_user_url: str = GITHUB_USER_URL
@@ -445,6 +490,10 @@ class TokenInfo:
     def principal(self) -> tuple[str, str]:
         return (self.client_id, self.subject)
 
+    @property
+    def tenant(self) -> str:
+        return tenant_for(self.client_id, self.subject)
+
 
 class OAuthProvider:
     """Authorization server + token validation over an :class:`OAuthStore`."""
@@ -455,6 +504,8 @@ class OAuthProvider:
         self.clock = clock
         self._logins: dict[str, dict] = {}
         self._logins_lock = threading.Lock()
+        # Allow-list login entry (lowercased) -> the GitHub id it first admitted.
+        self._github_pins: dict[str, int] = {}
         self.register_limiter = RateLimiter(config.register_limit, config.register_global_limit,
                                             config.register_window, lambda: self.clock())
 
@@ -530,6 +581,9 @@ class OAuthProvider:
         if (not isinstance(uris, list) or not uris
                 or not all(isinstance(u, str) and u for u in uris)):
             raise OAuthError("invalid_redirect_uri", "redirect_uris must be a non-empty list")
+        if any(_unprintable(u) for u in uris):
+            raise OAuthError("invalid_redirect_uri", "redirect_uris must not contain "
+                                                     "control characters")
         for uri in uris:
             if not (_is_dcr_loopback(uri) or uri in self.config.redirect_allowlist):
                 raise OAuthError(
@@ -552,8 +606,13 @@ class OAuthProvider:
         if response_types != ["code"]:
             raise OAuthError("invalid_client_metadata", "response_types must be [\"code\"]")
         name = metadata.get("client_name", "")
-        if not isinstance(name, str) or len(name) > 200:
-            raise OAuthError("invalid_client_metadata", "client_name must be a short string")
+        # Anyone can register, and operators read these names in a terminal
+        # (client list, usage reports): no ANSI escapes or other controls.
+        if (not isinstance(name, str) or len(name) > MAX_CLIENT_NAME
+                or _unprintable(name)):
+            raise OAuthError("invalid_client_metadata",
+                             f"client_name must be at most {MAX_CLIENT_NAME} characters "
+                             "with no control or format characters")
         with self.store.transaction() as data:
             record, secret = self._new_client(
                 data, name=name, redirect_uris=list(uris), auth_method=method,
@@ -567,27 +626,41 @@ class OAuthProvider:
         return response
 
     def create_client(self, name: str, redirect_uris: list[str] | None = None, *,
-                      url_key: bool = False) -> tuple[dict, str]:
+                      url_key: bool = False,
+                      expires_in: float | None = None) -> tuple[dict, str]:
         """Operator-issued client (``nuvel mcp client create``).
 
         Returns ``(record, credential)``: a confidential client and its secret,
         or with ``url_key`` a client that has no secret and no grant types (it
         only names the tenant) and its URL key. Either is shown once; only its
-        hash is stored.
+        hash is stored. ``expires_in`` (seconds, URL keys only) makes the key
+        stop working after that long; without it the key lasts until revoked.
         """
         redirect_uris = list(redirect_uris or [])
+        if expires_in is not None:
+            if not url_key:
+                raise ValueError("only a URL key can expire")
+            if not math.isfinite(expires_in) or expires_in <= 0:
+                raise ValueError(f"expires_in must be a positive number of seconds "
+                                 f"(got {expires_in})")
         if url_key:
             if redirect_uris:
                 raise ValueError("a URL-key client takes no redirect URIs")
             key = URL_KEY_PREFIX + secrets.token_urlsafe(32)
+            now = self.clock()
+            key_record = {"issued_at": int(now), "revoked": False}
             with self.store.transaction() as data:
                 record, _ = self._new_client(
                     data, name=name, redirect_uris=[], auth_method="none",
                     grant_types=[], source="cli")
                 record["url_key"] = True
-                data["url_keys"][token_hash(key)] = {
-                    "client_id": record["client_id"], "issued_at": int(self.clock()),
-                    "revoked": False}
+                if expires_in is not None:
+                    # On the client too, so `client list` shows it; the key
+                    # record's copy is the one validate_url_key enforces.
+                    key_record["expires_at"] = now + expires_in
+                    record["url_key_expires_at"] = now + expires_in
+                data["url_keys"][token_hash(key)] = {"client_id": record["client_id"],
+                                                     **key_record}
             return record, key
         for uri in redirect_uris:
             if not _valid_absolute_uri(uri):
@@ -676,12 +749,15 @@ class OAuthProvider:
 
     # --- authorization request ----------------------------------------------------------
 
-    def start_authorization(self, params: dict[str, str], origin: str) -> dict:
+    def start_authorization(self, params: dict[str, str], origin: str,
+                            remote_addr: str | None = None) -> dict:
         """Validate an /authorize request and park it until the user logs in.
 
-        Raises AuthorizeError (show an error page) for a bad client/redirect URI,
-        and OAuthError with ``redirect_uri``/``state`` attributes set for errors
-        that go back to the client.
+        Raises AuthorizeError (show an error page) for a bad client/redirect URI
+        or too many pending logins (globally, for this client, or from
+        ``remote_addr``, the caller's IP), and OAuthError with
+        ``redirect_uri``/``state`` attributes set for errors that go back to
+        the client.
         """
         with self.store.reading() as data:
             client = data["clients"].get(params.get("client_id") or "")
@@ -728,13 +804,20 @@ class OAuthProvider:
             "scope": sorted(scope),
             "resource": origin,
             "origin": origin,
+            "remote_addr": remote_addr,
             "expires_at": self.clock() + LOGIN_TTL,
         }
         with self._logins_lock:
             now = self.clock()
             for key in [k for k, v in self._logins.items() if v["expires_at"] <= now]:
                 del self._logins[key]
-            if len(self._logins) >= MAX_PENDING_LOGINS:
+            pending = self._logins.values()
+            if (len(self._logins) >= MAX_PENDING_LOGINS
+                    or sum(v["client_id"] == login["client_id"] for v in pending)
+                    >= self.config.pending_logins_per_client
+                    or (remote_addr is not None
+                        and sum(v.get("remote_addr") == remote_addr for v in pending)
+                        >= self.config.pending_logins_per_ip)):
                 raise AuthorizeError("Too many pending sign-ins; try again shortly.")
             self._logins[login["id"]] = login
         return login
@@ -759,14 +842,40 @@ class OAuthProvider:
         return add_query(login["redirect_uri"], error=error, error_description=description,
                          state=login["state"], iss=login["origin"])
 
-    def user_allowed(self, login: str) -> bool:
-        allowed = self.config.allowed_users
-        return allowed is None or login.lower() in allowed
+    def user_allowed(self, login: str, github_id: int | None = None) -> bool:
+        """Is this user on ``NUVEL_OAUTH_ALLOWED_USERS``?
 
-    def complete_authorization(self, login: dict, user: str, idp: str) -> str:
-        """Issue a single-use code for a logged-in user; return the client redirect."""
-        if not self.user_allowed(user):
+        An ``id:<n>`` entry matches GitHub's numeric user id, which never
+        changes. A bare login entry (the older form, still accepted) matches
+        the login case-insensitively; GitHub logins can be renamed and later
+        re-registered by someone else, so the first id a login entry admits is
+        pinned and any other id under that login is refused. The pin is kept
+        in memory (per process, until restart): prefer ``id:`` entries.
+        ``github_id`` is None for the dev login and for tokens issued before
+        subjects carried the id; those match login entries only.
+        """
+        allowed = self.config.allowed_users
+        if allowed is None:
+            return True
+        if github_id is not None and f"id:{github_id}" in allowed:
+            return True
+        key = login.lower()
+        if key not in allowed:
+            return False
+        if github_id is None:
+            return True
+        with self._logins_lock:
+            pinned = self._github_pins.setdefault(key, github_id)
+        return pinned == github_id
+
+    def complete_authorization(self, login: dict, user: str, idp: str,
+                               github_id: int | None = None) -> str:
+        """Issue a single-use code for a logged-in user; return the client redirect.
+        A GitHub user's subject is ``github:<login>:<id>``, so the allow-list
+        re-check and the tenant can both follow the numeric id."""
+        if not self.user_allowed(user, github_id):
             return self.error_redirect(login, "access_denied", "This user is not allowed")
+        subject = f"{idp}:{user}" if github_id is None else f"{idp}:{user}:{github_id}"
         code = "nvac_" + secrets.token_urlsafe(32)
         now = self.clock()
         with self.store.transaction() as data:
@@ -778,7 +887,7 @@ class OAuthProvider:
                 "code_challenge_method": "S256",
                 "scope": login["scope"],
                 "resource": login["resource"],
-                "subject": f"{idp}:{user}",
+                "subject": subject,
                 "grant_id": secrets.token_urlsafe(16),
                 "issued_at": now,
                 "expires_at": now + CODE_TTL,
@@ -795,8 +904,9 @@ class OAuthProvider:
                          redirect_uri=f"{login['origin']}/oauth/callback",
                          state=login["id"], allow_signup="false")
 
-    def github_user(self, code: str, login: dict) -> str:
-        """Exchange GitHub's code for the user's login. Raises OAuthError."""
+    def github_user(self, code: str, login: dict) -> tuple[str, int]:
+        """Exchange GitHub's code for the user's ``(login, numeric id)``.
+        Raises OAuthError."""
         form = urllib.parse.urlencode({
             "client_id": self.config.github_client_id,
             "client_secret": self.config.github_client_secret,
@@ -815,13 +925,20 @@ class OAuthProvider:
                 **headers, "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {gh_token}"})
             with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT) as resp:
-                user = json.loads(resp.read().decode("utf-8")).get("login")
+                profile = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise OAuthError("server_error",
                              f"GitHub login failed ({type(exc).__name__})") from None
+        if not isinstance(profile, dict):
+            raise OAuthError("server_error", "GitHub returned no usable login")
+        user, gh_id = profile.get("login"), profile.get("id")
         if not isinstance(user, str) or not _LOGIN.fullmatch(user):
             raise OAuthError("server_error", "GitHub returned no usable login")
-        return user
+        # The id is what the allow-list and the tenant trust (bool is an int
+        # subclass in Python; JSON true is not an id).
+        if type(gh_id) is not int or gh_id <= 0:
+            raise OAuthError("server_error", "GitHub returned no usable user id")
+        return user, gh_id
 
     @staticmethod
     def valid_dev_login(user: str) -> bool:
@@ -871,12 +988,22 @@ class OAuthProvider:
         if grant_type not in ("authorization_code", "refresh_token", "client_credentials"):
             raise OAuthError("unsupported_grant_type", f"Unsupported grant_type: {grant_type!r}")
 
+        # Authenticate against a read-only snapshot first: an unknown client or
+        # a bad secret is refused without the write transaction (which, on
+        # Postgres, locks the counter row FOR UPDATE and serializes every
+        # writer across replicas) and without pruning, so unauthenticated
+        # requests cannot queue up legitimate token requests behind them.
+        with self.store.reading() as snapshot:
+            self._authenticate_client(snapshot, form, authorization)
+
         now = self.clock()
         outcome: dict | OAuthError
         # Errors are returned out of the transaction rather than raised, so that
         # consuming a code (or revoking a grant on replay) is still persisted.
         with self.store.transaction() as data:
             self._prune(data, now)
+            # Again under the lock: the client may have been deleted or its
+            # secret changed since the snapshot.
             client = self._authenticate_client(data, form, authorization)
             if grant_type not in client.get("grant_types", []):
                 outcome = OAuthError("unauthorized_client",
@@ -1004,11 +1131,13 @@ class OAuthProvider:
                              rec["expires_at"])
 
     def validate_url_key(self, key: str | None) -> TokenInfo | None:
-        """The key's client as a principal, if the key is unrevoked and its client
-        still exists; else None. Same scopes as a client_credentials token."""
+        """The key's client as a principal, if the key is unrevoked, unexpired
+        (keys issued without ``expires_at`` never expire) and its client still
+        exists; else None. Same scopes as a client_credentials token."""
         if not key or len(key) > 512:
             return None
         digest = token_hash(key)
+        now = self.clock()
         with self.store.reading() as data:
             found = _find(data["url_keys"], digest)
             if found is None:
@@ -1017,13 +1146,25 @@ class OAuthProvider:
             client_id = rec.get("client_id")
             if rec.get("revoked") or client_id not in data["clients"]:
                 return None
+            expires_at = rec.get("expires_at")
+            if expires_at is not None:
+                # Fail closed on a malformed value as on an elapsed one.
+                if not isinstance(expires_at, (int, float)) or expires_at <= now:
+                    return None
             return TokenInfo(client_id, f"client:{client_id}", frozenset(SCOPES), "",
-                             float("inf"))
+                             float("inf") if expires_at is None else float(expires_at))
 
     def subject_allowed(self, info: TokenInfo) -> bool:
-        """Re-check the user allowlist, so removing a login takes effect immediately."""
+        """Re-check the user allowlist, so removing a login (or id) takes
+        effect immediately. GitHub subjects are ``github:<login>:<id>``, or
+        ``github:<login>`` for tokens issued before the id was recorded."""
         idp, _, user = info.subject.partition(":")
-        if idp in ("github", "dev"):
+        if idp == "github":
+            login, sep, gh_id = user.partition(":")
+            if sep:
+                return gh_id.isdigit() and self.user_allowed(login, int(gh_id))
+            return self.user_allowed(login)
+        if idp == "dev":
             return self.user_allowed(user)
         return True
 

@@ -28,6 +28,7 @@ Tools:
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import http.client
@@ -40,11 +41,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from importlib import metadata
+from importlib import metadata, resources
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
 from nuvel_mcp import feedback, masking, recipes, traces
+from nuvel_mcp import usage as usage_mod
 from nuvel_mcp.auth import current_principal
 from nuvel_mcp.installer import install_skill
 from nuvel_mcp.skills_loader import SkillsError, SkillsLoader, parse_frontmatter
@@ -56,6 +58,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from nuvel_mcp.usage import UsageRecorder
 
 PROTOCOL_VERSION = "2024-11-05"
+_CLIENT_KEYS = ("client_name", "client_version", "protocol_version")
 
 
 def _package_version() -> str:
@@ -66,7 +69,22 @@ def _package_version() -> str:
         return "0+unknown"
 
 
-SERVER_INFO = {"name": "nuvel-skills", "version": _package_version()}
+def brand_asset(name: str) -> bytes:
+    """A file from the packaged ``brand/`` folder (icon.svg, icon.png, favicon.ico)."""
+    return resources.files("nuvel_mcp").joinpath("brand", name).read_bytes()
+
+
+# A data: URI so the icon works over stdio too, where the server has no URL.
+SERVER_INFO = {
+    "name": "nuvel-skills",
+    "title": "nuvel",
+    "version": _package_version(),
+    "icons": [{
+        "src": "data:image/svg+xml;base64," + base64.b64encode(brand_asset("icon.svg")).decode("ascii"),
+        "mimeType": "image/svg+xml",
+        "sizes": ["any"],
+    }],
+}
 
 # JSON-RPC standard error codes.
 PARSE_ERROR = -32700
@@ -506,6 +524,12 @@ class SkillsMCPServer:
         self.usage = usage
         self.database = database
         self.transport = "stdio"
+        # The stdio session's client app (from its initialize); HTTP sessions
+        # keep their own (usage.current_session_client).
+        self._stdio_client: dict = {}
+        # ip -> two-letter country or None (nuvel_mcp.geoip), set by the CLI
+        # when a GeoIP table is configured. Used by the HTTP transport only.
+        self.country_lookup = None
         # Optional allow-list narrowing which tools are listed and callable.
         self._allowed_tools = tools
         self.trace_store = trace_store
@@ -1685,6 +1709,9 @@ class SkillsMCPServer:
             return self._dispatch(message)
         started = time.monotonic()
         response = self._dispatch(message)
+        if isinstance(message, dict) and message.get("method") == "initialize":
+            # The session's client app, sanitized; every later event carries it.
+            self._session_client().update(usage_mod.client_info(message.get("params")))
         if isinstance(message, dict) and "id" in message:
             try:
                 self.usage.record(self._usage_event(message, response, started))
@@ -1700,6 +1727,7 @@ class SkillsMCPServer:
         if method == "tools/call":
             name = params.get("name") if isinstance(params, dict) else None
             tool = name if isinstance(name, str) and name in self._tools else "unknown"
+        client = self._session_client()
         error = response.get("error") if isinstance(response, dict) else None
         result = response.get("result") if isinstance(response, dict) else None
         if error is not None:
@@ -1717,7 +1745,15 @@ class SkillsMCPServer:
             "outcome": outcome,
             "error_code": code if isinstance(code, int) else None,
             "duration_ms": int((time.monotonic() - started) * 1000),
+            **{key: client.get(key) for key in _CLIENT_KEYS},
+            "country": usage_mod.current_country.get(),
         }
+
+    def _session_client(self) -> dict:
+        """The current session's client-app dict: the HTTP session's own, or
+        this process's for stdio (one session per process)."""
+        client = usage_mod.current_session_client.get()
+        return self._stdio_client if client is None else client
 
     def _dispatch(self, message):
         msg_id = message.get("id")

@@ -175,6 +175,8 @@ nuvel-mcp serve                             # no --skills-dir: feedback-only mod
 nuvel-mcp serve --tools record_run_trace,check_skill_health --trace-store local   # allow-list; trace/recipe store auto(default)|local|postgres|module:factory
 NUVEL_MCP_DATABASE_URL="$NEON_DATABASE_URL" nuvel-mcp serve --transport http   # Postgres for OAuth, traces, recipes + usage log (needs psycopg[binary,pool]); auto-migrates
 nuvel-mcp db migrate|status|import           # also: nuvel mcp db …; import copies oauth.json + feedback dir in (OAuth only into a fresh DB unless --force-oauth)
+nuvel-mcp clients label nvcl_x --person Ana --company Acme   # who is behind a client id; clients list; needs the DB
+nuvel-mcp report [--days 7] [--json]         # usage report from Postgres (clients, tools, errors, latency, apps, countries, skill runs, recipes)
 nuvel-mcp client create --name acme-radar    # OAuth client for the HTTP server; also: client list|delete, token revoke
 nuvel-mcp client create --name alice --url-key   # prints a no-sign-in connector URL ($NUVEL_MCP_PUBLIC_URL/mcp/k/<key>) once; NUVEL_OAUTH_LOGIN=none = keys + client_credentials only
 nuvel-mcp serve --transport http             # Streamable HTTP + OAuth 2.1, no extras; --host/--port default 127.0.0.1:8080; non-loopback needs --allow-remote + NUVEL_MCP_PUBLIC_URL; --no-auth is loopback-only dev; tenant = OAuth client_id; default HTTP tools exclude record_feedback/propose_improvement/install_skill (add via --tools)
