@@ -33,10 +33,10 @@ def _trace(tenant=None, run_id=None, started_at="2026-10-20T09:30:12Z", **change
 
 
 def _signal(tenant=None, signal_id=None):
-    s = {"schema": "nuvel.recipe_signal/1", "signal_id": signal_id or str(uuid.uuid4()),
+    s = {"schema": "nuvel.recipe_signal/2", "signal_id": signal_id or str(uuid.uuid4()),
          "recipe_id": str(uuid.uuid4()), "install_id": str(uuid.uuid4()), "plugin": PLUGIN,
-         "category": "client-followup", "event": "used", "at": "2026-10-27T10:00:00Z",
-         "uses": 3, "successes": 2, "corrections": 0}
+         "category": "client-followup", "status": "active", "at": "2026-10-27T10:00:00Z",
+         "uses": 3, "successes": 2, "corrections": 0, "days_used": 2}
     if tenant is not None:
         s["tenant"] = tenant
     return s
@@ -507,3 +507,19 @@ def test_recorder_drops_on_overflow_and_failure(capsys):
     recorder.record(_event())
     recorder.flush()
     assert "usage: dropped" in capsys.readouterr().err
+
+
+@_pg.requires_pg
+def test_postgres_stores_the_shipped_recipe_signal(pg_db):
+    # The exact signal chief-of-staff v0.4 sends: recipe_signal/2 has status, no event.
+    from nuvel_mcp.db.stores import PostgresRecipeStore
+
+    signal = json.loads((Path(__file__).parent / "fixtures" / "chief_of_staff"
+                         / "recipe_signal.json").read_text(encoding="utf-8"))
+    assert "event" not in signal
+    store = PostgresRecipeStore(pg_db)
+    assert store.append_signal(signal) is True
+    assert store.append_signal(signal) is False  # deduped on signal_id
+    with pg_db.connection() as conn:
+        row = conn.execute(f"SELECT event, record->>'status' FROM {pg_db.table('recipe_signals')}").fetchone()
+    assert row == (signal["status"], signal["status"])

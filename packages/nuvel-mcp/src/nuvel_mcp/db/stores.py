@@ -96,7 +96,10 @@ class PostgresRecipeStore:
         row = (
             signal.get("tenant"), signal["signal_id"], signal["recipe_id"],
             signal["install_id"], signal["plugin"]["name"], signal["category"],
-            signal["event"], traces._parse_started_at(signal["at"]), signal["uses"],
+            # recipe_signal/2 carries the lifecycle status where /1 had an event;
+            # the column keeps its 0001 name and holds whichever the signal has.
+            signal.get("status") or signal["event"],
+            traces._parse_started_at(signal["at"]), signal["uses"],
             signal["successes"], signal["corrections"], self.db.jsonb(signal),
         )
         with self.db.connection() as conn:
