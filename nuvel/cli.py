@@ -26,8 +26,6 @@ Subcommands:
         HTTP is gated by OAuth 2.1 (--no-auth for loopback dev); stdio by --require-auth.
     nuvel mcp client create|list|delete, nuvel mcp token revoke
         Manage the MCP server's OAuth clients and tokens.
-    nuvel acp serve [--dev]
-        Run the meta-agent as an ACP v2 subprocess over stdio.
     nuvel bots list|create|delete|chat|info|logs|send
         Manage and talk to Hermes-backed bots.
     nuvel fleet deploy|list|status|destroy
@@ -43,9 +41,19 @@ import sys
 from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk", "buzz", "hermes")
+SUPPORTED_FRAMEWORKS = ("adk", "hermes")
 DEPRECATED_FRAMEWORKS = ("claude-agent-sdk", "anthropic-managed-agents")
+# Frozen: still dispatchable for anyone who knows the name, but left out of the
+# usage line, the help listing and the "invalid choice" error.
+FROZEN_COMMANDS = ("acp",)
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
+
+
+class _VisibleChoices(dict):
+    """Subcommand map that accepts frozen names but never lists them."""
+
+    def __iter__(self):
+        return (name for name in super().__iter__() if name not in FROZEN_COMMANDS)
 
 
 def _backend_module(framework: str) -> str:
@@ -60,7 +68,7 @@ def _scaffold_agent_for(framework: str):
     if framework in DEPRECATED_FRAMEWORKS:
         print(
             f"\u26a0  Warning: '{framework}' is deprecated and will be removed in a "
-            f"future version. Use 'adk', 'buzz', or 'hermes' instead.",
+            f"future version. Use one of: {', '.join(SUPPORTED_FRAMEWORKS)}.",
             file=sys.stderr,
         )
     if framework == "adk":
@@ -82,6 +90,9 @@ def _scaffold_agent_for(framework: str):
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
+    if args.with_acp:
+        print("\u26a0  Warning: --with-acp is experimental and unsupported.", file=sys.stderr)
+
     scaffold_agent = _scaffold_agent_for(args.framework)
 
     result = scaffold_agent(
@@ -275,15 +286,13 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _add_framework_flag(parser: argparse.ArgumentParser) -> None:
-    _all_frameworks = SUPPORTED_FRAMEWORKS + DEPRECATED_FRAMEWORKS
     parser.add_argument(
         "--framework", "-f",
-        choices=_all_frameworks,
+        choices=SUPPORTED_FRAMEWORKS,
         default=DEFAULT_FRAMEWORK,
         help=(
             f"Agent framework (default: {DEFAULT_FRAMEWORK}). "
-            f"Supported: {', '.join(SUPPORTED_FRAMEWORKS)}. "
-            f"Deprecated: {', '.join(DEPRECATED_FRAMEWORKS)}."
+            f"Supported: {', '.join(SUPPORTED_FRAMEWORKS)}."
         ),
     )
 
@@ -326,9 +335,7 @@ def _add_new_agent_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--with-acp", action="store_true",
-        help="(adk only) Make the agent ACP-compatible and CLI-runnable: add an "
-             "Agent Client Protocol adapter (stdio JSON-RPC, python -m <pkg>.acp) "
-             "plus a local terminal CLI (python -m <pkg>.cli).",
+        help=argparse.SUPPRESS,  # frozen; _cmd_new warns it is unsupported
     )
     parser.add_argument(
         "--with-eval", action="store_true",
@@ -445,6 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     from nuvel.evalv2 import cli as evalv2_cli
     evalv2_cli.register(sub)
 
+    sub.choices = _VisibleChoices(sub.choices)
     return parser
 
 
