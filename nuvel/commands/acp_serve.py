@@ -23,15 +23,18 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     """Register the `acp` subcommand tree."""
     p = subparsers.add_parser(
         "acp",
-        help="Serve the Nuvel meta-agent over ACP (Agent Client Protocol).",
+        description=(
+            "Experimental and unsupported: serve the Nuvel meta-agent over ACP "
+            "(Agent Client Protocol)."
+        ),
     )
     sub = p.add_subparsers(dest="acp_command", required=True)
 
     p_serve = sub.add_parser(
         "serve",
-        help="Start the Nuvel ACP stdio server.",
+        help="Start the Nuvel ACP stdio server (experimental and unsupported).",
         description=(
-            "Run the Nuvel meta-agent as an ACP v2 subprocess over stdio "
+            "Experimental and unsupported. Run the Nuvel meta-agent as an ACP v2 subprocess over stdio "
             "(JSON-RPC 2.0 with newline-delimited JSON). An ACP client "
             "(e.g. Zed) launches this command and drives it over the pipe: "
             "initialize -> session/new -> session/prompt."
