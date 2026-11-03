@@ -102,5 +102,5 @@ Expected: a short, friendly assistant reply.
 
 - **Make it a chat bot** — see the messaging-gateway recipes: [Slack](../how-to/add-slack.md), [Telegram](../how-to/add-telegram.md), [MS Teams](../how-to/add-teams.md).
 - **Give it ~1000 tools** — [Wire 1000+ tools with Composio](../how-to/add-composio-tools.md).
-- **Pick a different backend** — see [Pick a backend](../how-to/pick-a-backend.md) for ADK vs. Claude Agent SDK vs. Anthropic Managed Agents.
+- **Pick a different backend** — see [Pick a backend](../how-to/pick-a-backend.md) for ADK vs. Claude Agent SDK vs. Hermes Agent.
 - **Deploy it** — [Deploy to Railway](../how-to/deploy-to-railway.md).

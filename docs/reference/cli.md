@@ -13,7 +13,7 @@ nuvel agent create <name> [options]
 | Argument / flag | Default | Description |
 |---|---|---|
 | `<name>` | *(required)* | Kebab-case agent name. Lowercase letters, digits, single hyphens; must start with a letter; max 40 chars. |
-| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `buzz`, `hermes`. |
+| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `hermes`, `claude-agent-sdk`. |
 | `--output-dir` | `./generated-agents` (or `$AGENTS_OUTPUT_DIR`) | Parent directory for the new agent. |
 | `--description` | `""` | Short agent description, baked into the README and the agent's metadata. |
 | `--system-prompt` | `""` | Inline system prompt seed. Overrides the per-overlay default frame. |
@@ -337,4 +337,4 @@ result = scaffold_agent(
 # on success: result["path"], result["files_created"], etc.
 ```
 
-The `buzz` and `hermes` backends export the same function signature. Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.
+The `hermes` and `claude_agent_sdk` backends export the same function, minus the ADK-only `with_litellm`. Flags those backends do not implement return `{"status": "error", "message": ...}` if set (`with_telegram` works on `hermes`). The CLI inspects each backend's signature and stops with an error naming any flag the backend does not declare.

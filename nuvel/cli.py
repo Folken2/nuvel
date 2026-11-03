@@ -35,17 +35,34 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk", "hermes")
-DEPRECATED_FRAMEWORKS = ("claude-agent-sdk", "anthropic-managed-agents")
+SUPPORTED_FRAMEWORKS = ("adk", "hermes", "claude-agent-sdk")
+DEPRECATED_FRAMEWORKS = ("anthropic-managed-agents",)
 # Frozen: still dispatchable for anyone who knows the name, but left out of the
 # usage line, the help listing and the "invalid choice" error.
 FROZEN_COMMANDS = ("acp",)
+# Everything `nuvel agent create` can hand a backend besides the agent name.
+# Each is passed only if the backend's scaffold_agent declares it.
+_SCAFFOLD_OPTIONS = (
+    "output_dir",
+    "description",
+    "system_prompt",
+    "persona",
+    "with_composio",
+    "with_slack",
+    "with_telegram",
+    "with_teams",
+    "workflow",
+    "with_acp",
+    "with_eval",
+    "with_litellm",
+)
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 
@@ -89,27 +106,43 @@ def _scaffold_agent_for(framework: str):
     raise ValueError(f"Unknown framework: {framework}")
 
 
+def _scaffold_kwargs(scaffold_agent, args: argparse.Namespace) -> dict:
+    """Build the kwargs a backend's scaffold_agent actually declares.
+
+    Raises ValueError naming any flag the user set that the backend lacks.
+    """
+    accepted = inspect.signature(scaffold_agent).parameters
+    unsupported = [
+        "--" + option.replace("_", "-")
+        for option in _SCAFFOLD_OPTIONS
+        if option not in accepted and getattr(args, option)
+    ]
+    if unsupported:
+        verb = "is" if len(unsupported) == 1 else "are"
+        raise ValueError(
+            f"{', '.join(unsupported)} {verb} not supported for the "
+            f"{args.framework} backend. Use --framework {DEFAULT_FRAMEWORK}."
+        )
+    return {
+        option: getattr(args, option)
+        for option in _SCAFFOLD_OPTIONS
+        if option in accepted
+    }
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
     if args.with_acp:
         print("\u26a0  Warning: --with-acp is experimental and unsupported.", file=sys.stderr)
 
     scaffold_agent = _scaffold_agent_for(args.framework)
 
-    result = scaffold_agent(
-        name=args.name,
-        output_dir=args.output_dir,
-        description=args.description,
-        system_prompt=args.system_prompt,
-        persona=args.persona,
-        with_composio=args.with_composio,
-        with_slack=args.with_slack,
-        with_telegram=args.with_telegram,
-        with_teams=args.with_teams,
-        workflow=args.workflow,
-        with_acp=args.with_acp,
-        with_eval=args.with_eval,
-        with_litellm=args.with_litellm,
-    )
+    try:
+        kwargs = _scaffold_kwargs(scaffold_agent, args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    result = scaffold_agent(name=args.name, **kwargs)
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
         print(f"Files created: {result['files_created']}")

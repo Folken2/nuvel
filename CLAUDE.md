@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-nuvel is a **toolkit for generating production-ready AI agents** across the frameworks that matter — Google ADK (default), Buzz, and Hermes Agent. It ships as three things at once:
+nuvel is a **toolkit for generating production-ready AI agents** across the frameworks that matter — Google ADK (default), Hermes Agent, and the Claude Agent SDK. It ships as three things at once:
 
 1. **Knowledge skills** (Anthropic skills format) under `nuvel/backends/<fw>/skills/` — portable into any compatible coding agent.
 2. **A CLI scaffolder** (`nuvel agent create`) that stamps out a full project skeleton from templates.

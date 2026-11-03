@@ -48,5 +48,5 @@ nuvel skills search composio --framework adk
 ## When *not* to use Composio
 
 - Your agent only needs one or two tools — write them directly as Python functions in `my_agent/tools/`. Lower latency, no third-party dependency.
-- You're on the Claude Agent SDK or Anthropic Managed Agents backend — Composio integration isn't supported there yet.
+- You're on the Claude Agent SDK or Hermes Agent backend — Composio integration isn't supported there yet.
 - You need full control over OAuth scopes — Composio's managed apps lock you into their scope set.

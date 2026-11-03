@@ -7,7 +7,7 @@ Skills are nuvel's progressive-disclosure knowledge primitive. The bundled skill
 ```bash
 nuvel skills list --framework adk
 nuvel skills list --framework claude-agent-sdk
-nuvel skills list --framework anthropic-managed-agents
+nuvel skills list --framework hermes
 ```
 
 Each entry shows the slug, name, and a one-line description.

@@ -4,7 +4,7 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 
 ## Choosing a backend
 
-- [Pick a backend](pick-a-backend.md) — when ADK, Claude Agent SDK, or Anthropic Managed Agents wins.
+- [Pick a backend](pick-a-backend.md) — when ADK, Claude Agent SDK, or Hermes Agent wins.
 
 ## Customizing an agent
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nuvel-cli"
 version = "0.5.0.dev0"
-description = "Production-ready agents, your way \u2014 skills, scaffolder, and meta-agent for Google ADK, Buzz, and Hermes Agent."
+description = "Production-ready agents, your way \u2014 skills, scaffolder, and meta-agent for Google ADK, Hermes Agent, and the Claude Agent SDK."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

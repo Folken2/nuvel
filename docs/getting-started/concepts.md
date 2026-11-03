@@ -10,7 +10,7 @@ A **backend** is the agent framework that powers the runtime: the LLM client, th
 |---|---|---|
 | **Google ADK** | `--framework adk` (default) | Google's open-source Agent Development Kit. Pythonic, FastAPI-friendly, mature session service. |
 | **Claude Agent SDK** | `--framework claude-agent-sdk` | Anthropic's Claude Agent SDK. Streaming-first, async, uses `query()`/`receive_response()`. |
-| **Anthropic Managed Agents** | `--framework anthropic-managed-agents` | Anthropic's hosted Agents API. Server-side state, Anthropic owns the runtime. |
+| **Hermes Agent** | `--framework hermes` | A Hermes profile: `SOUL.md`, `config.yaml`, and skills. Hermes owns the runtime. |
 
 Generated projects are **real, unwrapped framework code** — there's no nuvel runtime layer between your agent and the SDK. If you decide to leave nuvel a year from now, the agent keeps working.
 
