@@ -156,8 +156,12 @@ pip install nuvel-cli
 git clone https://github.com/Folken2/nuvel.git
 cd nuvel
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -r requirements-dev.txt
 ```
+
+`requirements-dev.txt` installs the CLI in editable mode together with the `nuvel-mcp` workspace
+member (which is not on an index yet) and the runtime dependencies. See
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup) for why the order matters.
 
 ## Getting Started
 
