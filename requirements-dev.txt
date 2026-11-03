@@ -1,0 +1,16 @@
+# Development install — one command from a clean checkout.
+#
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements-dev.txt
+#
+# Why a separate file: `pyproject.toml` takes the project's dependencies from
+# `requirements.txt` (`dependencies = { file = ["requirements.txt"] }`), so that file is the
+# *published* dependency list and pins `nuvel-mcp` as an external package. `nuvel-mcp` is a
+# workspace member (`packages/nuvel-mcp`) that is not on any index yet, so it can only be
+# resolved locally — hence the editable line first, in this file only.
+#
+# Never add a local path to requirements.txt: it would end up in the published metadata and
+# break every consumer of the released package.
+-e ./packages/nuvel-mcp
+-r requirements.txt
+-e .[test]
