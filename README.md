@@ -60,7 +60,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 - **Runtime personalities** — drop a markdown overlay at `~/.nuvel/personalities/<name>.md` and switch with `/personality <name>` per session. Lighter than `--persona` and composes with it. *(ADK only.)*
 - **Voice memo transcription** — set `GATEWAY_TRANSCRIBE_AUDIO=1` and Slack/Telegram voice notes are transcribed via Whisper (OpenAI or Groq) before reaching the agent. *(ADK only.)*
 - **Self-improving skills loop** — opt-in `SkillCuratorPlugin` watches each run and proposes new skills (or patches to existing ones) to `~/.nuvel/skill-proposals/` for human review. Never auto-applies. *(ADK only.)*
-- **`nuvel doctor`** — one command diagnoses the install and any generated agent in your cwd: missing env vars, broken deps, framework SDKs, Docker reachability.
+- **`nuvel doctor`** — one command diagnoses the install and any generated agent in your cwd: broken deps, config files, API keys, writable state, provider reachability, stale caches. Every problem comes with its next step; `--json` for bug reports.
 - **Vendor-neutral by default** — pick OpenRouter (ADK) or Anthropic direct (Claude Agent SDK), optional PostgreSQL for sessions, runs on any host that takes a Docker container.
 
 ## Bot Fleet Management
@@ -230,7 +230,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate it
 | `nuvel agent create <name> --output-dir ./agents` | Override the output directory |
 | `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
 | `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
-| `nuvel doctor [--path <dir>]` | Diagnose the install and the agent in cwd (env, deps, pricing) |
+| `nuvel doctor [--path <dir>] [--json]` | Diagnose the install and the agent in cwd (deps, config, keys, state, network, caches) |
 | `nuvel traces list \| show \| stats \| errors` | Inspect JSONL trace logs across all local agents |
 | `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs (also shows `nuvel.skill_run/1` skill runs and per-step error rates) |

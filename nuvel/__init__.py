@@ -9,7 +9,9 @@ def __getattr__(name):
         from . import agent as _agent
 
         return _agent
+    # Lazy too: it needs pyyaml, and `nuvel doctor` must start without it.
+    if name == "bots":
+        from . import bots as _bots
+
+        return _bots
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-from . import bots

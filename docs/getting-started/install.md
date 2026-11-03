@@ -37,6 +37,15 @@ nuvel --help
 
 You should see subcommands `new`, `skills`, and `run`. If `nuvel` isn't found, your `pip install` location isn't on `$PATH` — use `python -m nuvel.cli --help` instead, or activate the right virtualenv.
 
+Then run the health check:
+
+```bash
+export OPENROUTER_API_KEY=<your key>   # https://openrouter.ai/keys
+nuvel doctor
+```
+
+It exits 0 when everything is in place. Without the key it exits non-zero and prints the command that fixes each problem; see [`nuvel doctor`](../reference/cli.md#nuvel-doctor).
+
 ## Next
 
 Scaffold and run an agent in [Your first agent](first-agent.md).

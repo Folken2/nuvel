@@ -282,7 +282,23 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     from nuvel.doctor import run_doctor
 
     cwd = Path(args.path).resolve() if args.path else None
-    return run_doctor(cwd=cwd)
+    return run_doctor(cwd=cwd, as_json=args.json)
+
+
+def _add_doctor_parser(sub) -> None:
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="Diagnose the nuvel install and the agent in the current directory.",
+    )
+    p_doctor.add_argument(
+        "--path", default=None,
+        help="Directory to inspect (defaults to current working directory).",
+    )
+    p_doctor.add_argument(
+        "--json", action="store_true",
+        help="Emit the findings as JSON instead of a checklist.",
+    )
+    p_doctor.set_defaults(func=_cmd_doctor)
 
 
 def _add_framework_flag(parser: argparse.ArgumentParser) -> None:
@@ -408,15 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--dev", action="store_true", help="Run with DEV_MODE=true.")
     p_run.set_defaults(func=_cmd_run)
 
-    p_doctor = sub.add_parser(
-        "doctor",
-        help="Diagnose the nuvel install and the agent in the current directory.",
-    )
-    p_doctor.add_argument(
-        "--path", default=None,
-        help="Directory to inspect (defaults to current working directory).",
-    )
-    p_doctor.set_defaults(func=_cmd_doctor)
+    _add_doctor_parser(sub)
 
     from nuvel import traces_cli
     traces_cli.register(sub)
@@ -456,8 +464,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_doctor_parser() -> argparse.ArgumentParser:
+    """Just the doctor subcommand: it must run on the broken installs it diagnoses,
+    which the imports behind the full parser would crash on."""
+    parser = argparse.ArgumentParser(prog="nuvel")
+    _add_doctor_parser(parser.add_subparsers(dest="command", required=True))
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+    first = (sys.argv[1:] if argv is None else argv)[:1]
+    parser = _build_doctor_parser() if first == ["doctor"] else build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 

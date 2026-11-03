@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `nuvel doctor --json`, and new doctor checks: install integrity, `.env` and Hermes `config.yaml` validity, writable state dirs, provider reachability, stale caches. Every `[WARN]` and `[FAIL]` now prints one next step.
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
 - `nuvel-mcp client create --person <name> --company <name>` saves who is behind the new client in the same step (as `clients label` does; needs the database). A bad value or a missing database stops before any client is created.
 - Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.
