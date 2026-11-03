@@ -270,7 +270,7 @@ nuvel/
 │   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── plugins/               # Meta-agent chain (12, via Makefile PLUGIN_FLAGS)
+│   ├── plugins/               # Meta-agent chain (13, via Makefile PLUGIN_FLAGS)
 │   ├── config/                # LiteLLM/OpenRouter config
 │   └── backends/              # Per-framework scaffolders + skills
 │       ├── adk/               # Google ADK backend

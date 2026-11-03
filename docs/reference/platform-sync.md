@@ -6,7 +6,7 @@ It covers the meta-agent (`nuvel run`) and the `nuvel evalv2` and `nuvel pricing
 
 ## Enabling it
 
-Off by default. The plugin is always in the meta-agent's chain and does nothing until enabled.
+Off by default. The plugin is always in the meta-agent's chain and does nothing until enabled. Both variables are read from the environment, then from the `.env` in the working directory.
 
 | Var | Default | Description |
 |---|---|---|
@@ -29,7 +29,7 @@ The tables live in the `nuvel_platform` schema. The role needs `CREATE` on the d
 
 Telemetry never fails what it observes.
 
-- **Unconfigured or unreachable:** the run completes normally and the JSONL traces stay the only record. One warning is logged per outage, naming the exception type only, never the connection string.
+- **Unconfigured, malformed or unreachable:** the run completes normally and the JSONL traces stay the only record. One warning is logged per outage, naming the exception type only, never the connection string.
 - **Timing:** a run's write happens in the background after the run, so the database never delays a reply. Shutdown waits up to 4 seconds for writes in flight.
 - **Recovery:** later runs try again and the warning re-arms once a write succeeds. Runs that completed during an outage are not backfilled; their record is in the JSONL.
 
@@ -59,9 +59,9 @@ Versioned SQL lives in `nuvel/platform_sync/migrations/`, applied in order under
 | `model` | `text` null | First model that answered, or the suite's model. |
 | `started_at` | `timestamptz` | Run start. For evals, the suite's timestamp. |
 | `duration_ms` | `bigint` null | Null for evals. |
-| `llm_calls`, `tool_calls` | `integer` | Calls started (LLM) and finished (tool). |
-| `error_count` | `integer` | LLM errors, tool exceptions and tool results with `status: "error"`. |
-| `prompt_tokens`, `completion_tokens` | `bigint` | Totals for the run. |
+| `llm_calls`, `tool_calls` | `integer` | Calls started (LLM) and finished (tool). 0 for evals. |
+| `error_count` | `integer` | LLM errors, tool exceptions and tool results with `status: "error"`. 0 for evals. |
+| `prompt_tokens`, `completion_tokens` | `bigint` | Totals for the run. 0 for evals, whose results carry no token counts. |
 | `cost_usd` | `double precision` null | Null when no price matched. For evals, the sum over examples. |
 | `synced_at` | `timestamptz` | Last write. |
 

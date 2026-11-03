@@ -40,6 +40,7 @@ ENV_DATABASE_URL = "NUVEL_PLATFORM_DATABASE_URL"
 DEFAULT_SCHEMA = "nuvel_platform"
 DEGRADED_MESSAGE = "[platform_sync] database write failed (%s) — continuing file-only"
 
+_CONNECT_TIMEOUT = 5.0
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _MIGRATION_FILE = re.compile(r"\A(\d{4})_([a-z0-9_]+)\.sql\Z")
 _SCHEMA_NAME = re.compile(r"\A[a-z_][a-z0-9_]{0,62}\Z")
@@ -119,16 +120,14 @@ def _jsonb(value: Any) -> str:
 def normalize_dsn(dsn: str) -> str:
     """Make a connection string asyncpg accepts.
 
-    Takes SQLAlchemy's ``postgresql+asyncpg://`` too, so ``SESSION_SERVICE_URI``'s
-    value works here. Neon's default strings carry ``channel_binding``, which
-    asyncpg does not implement and would forward to the server as a setting
-    (rejected); ``sslmode`` is kept and still enforced.
+    Neon's default strings carry ``channel_binding``, which asyncpg does not
+    implement and would forward to the server as a setting (rejected);
+    ``sslmode`` is kept and still enforced.
     """
     parsed = urlsplit(dsn.strip())
     query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
              if k.lower() != "channel_binding"]
-    scheme = "postgresql" if parsed.scheme == "postgresql+asyncpg" else parsed.scheme
-    return urlunsplit(parsed._replace(scheme=scheme, query=urlencode(query)))
+    return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
 def migrations() -> list[tuple[int, str, str]]:
@@ -151,15 +150,12 @@ class PlatformStore:
     pool binds to one event loop, and Neon suspends idle computes anyway.
     """
 
-    def __init__(
-        self, dsn: str, *, schema: str = DEFAULT_SCHEMA, connect_timeout: float = 5.0
-    ) -> None:
+    def __init__(self, dsn: str, *, schema: str = DEFAULT_SCHEMA) -> None:
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError("invalid schema name")
         self._dsn = normalize_dsn(dsn)
         self.schema = schema
         self._q = f'"{schema}"'  # validated above, so quoting is enough
-        self._connect_timeout = connect_timeout
         self._migrated = False
 
     def __repr__(self) -> str:  # never the DSN: it may carry a password
@@ -170,7 +166,7 @@ class PlatformStore:
 
         return await asyncpg.connect(
             self._dsn,
-            timeout=self._connect_timeout,
+            timeout=_CONNECT_TIMEOUT,
             command_timeout=15,
             statement_cache_size=0,
         )
@@ -319,10 +315,10 @@ class PlatformStore:
 def store_from_env(environ: Optional[Mapping[str, str]] = None) -> Optional[PlatformStore]:
     """The configured store, or ``None`` when disabled or without a database.
 
-    Enabled without a URL is the one misconfiguration worth a warning, so each
-    caller should resolve this once.
+    A missing or malformed URL is the one misconfiguration worth a warning, so
+    each caller should resolve this once.
     """
-    environ = os.environ if environ is None else environ
+    environ = _environ() if environ is None else environ
     if environ.get(ENV_ENABLED, "").strip().lower() not in ("1", "true", "yes", "on"):
         return None
     url = environ.get(ENV_DATABASE_URL, "").strip()
@@ -332,11 +328,18 @@ def store_from_env(environ: Optional[Mapping[str, str]] = None) -> Optional[Plat
             ENV_ENABLED, ENV_DATABASE_URL,
         )
         return None
-    return PlatformStore(url)
+    try:
+        return PlatformStore(url)
+    except ValueError:  # names no part of the URL: it may carry a password
+        logger.warning(
+            "[platform_sync] %s is not a valid connection string — continuing file-only",
+            ENV_DATABASE_URL,
+        )
+        return None
 
 
-def _cli_environ() -> Mapping[str, str]:
-    """``os.environ`` over the cwd's ``.env``, which the CLI does not load itself."""
+def _environ() -> Mapping[str, str]:
+    """``os.environ`` over the cwd's ``.env``, so every entry point reads the same config."""
     try:
         from dotenv import dotenv_values, find_dotenv
     except ImportError:
@@ -351,7 +354,7 @@ def _cli_environ() -> Mapping[str, str]:
 def _sync_now(write: Callable[[PlatformStore], Awaitable[None]]) -> bool:
     """Run one write from a CLI command; ``True`` only if it reached the database."""
     try:
-        store = store_from_env(_cli_environ())
+        store = store_from_env()
         if store is None:
             return False
         asyncio.run(write(store))

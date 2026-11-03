@@ -124,12 +124,6 @@ def _warnings(caplog) -> list[str]:
             if r.levelno >= logging.WARNING and "platform_sync" in r.getMessage()]
 
 
-@pytest.fixture(autouse=True)
-def _no_platform_env(monkeypatch):
-    monkeypatch.delenv(platform_sync.ENV_ENABLED, raising=False)
-    monkeypatch.delenv(platform_sync.ENV_DATABASE_URL, raising=False)
-
-
 def _closed_port_dsn() -> str:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -223,6 +217,21 @@ async def test_enabled_without_url_warns_once_and_runs_complete(monkeypatch, cap
     assert platform_sync.ENV_DATABASE_URL in warnings[0]
 
 
+async def test_malformed_url_warns_once_and_runs_complete(monkeypatch, caplog):
+    monkeypatch.setenv(platform_sync.ENV_ENABLED, "1")
+    monkeypatch.setenv(platform_sync.ENV_DATABASE_URL, "postgresql://u:hunter2[x@h/db")
+    plugin = PlatformSyncPlugin()
+
+    for _ in range(3):
+        assert await _run_agent([plugin]) == "done"
+    await plugin.close()
+
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert platform_sync.ENV_DATABASE_URL in warnings[0]
+    assert "hunter2" not in caplog.text
+
+
 async def test_unreachable_database_degrades_to_file_only(tmp_path, caplog):
     trace = TracePlugin()
     trace._trace_dir = tmp_path
@@ -297,7 +306,6 @@ async def test_a_bug_in_a_callback_does_not_fail_the_run(monkeypatch):
 
 @pytest.mark.parametrize("dsn,expected", [
     ("postgresql://u:p@h/db", "postgresql://u:p@h/db"),
-    ("postgresql+asyncpg://u:p@h/db", "postgresql://u:p@h/db"),
     ("postgresql://u:p@h/db?sslmode=require&channel_binding=require",
      "postgresql://u:p@h/db?sslmode=require"),
 ])
@@ -335,6 +343,28 @@ def test_cli_sync_is_a_noop_when_disabled_and_never_raises(monkeypatch, caplog):
     assert sync_eval_result(_eval_result()) is False
     assert len(_warnings(caplog)) == 2
     assert "hunter2" not in caplog.text
+
+
+def _write_dotenv(directory, monkeypatch) -> None:
+    (directory / ".env").write_text(
+        f"{platform_sync.ENV_ENABLED}=1\n{platform_sync.ENV_DATABASE_URL}={_closed_port_dsn()}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(directory)
+
+
+def test_dotenv_in_the_working_directory_configures_the_store(tmp_path, monkeypatch):
+    _write_dotenv(tmp_path, monkeypatch)
+    monkeypatch.delenv(platform_sync.ENV_ENABLED)
+    monkeypatch.delenv(platform_sync.ENV_DATABASE_URL)
+    assert isinstance(store_from_env(), PlatformStore)
+
+
+def test_suite_ignores_a_dotenv_that_enables_sync(tmp_path, monkeypatch, caplog):
+    # conftest's isolation: an attempted write would warn about the closed port.
+    _write_dotenv(tmp_path, monkeypatch)
+    assert sync_prices({"m": {"input": 1.0, "output": 2.0}}) is False
+    assert caplog.text == ""
 
 
 def _eval_result() -> EvalSuiteResult:
@@ -578,17 +608,16 @@ async def test_pg_bundled_pricing_file_syncs(store):
 
 
 def test_pg_cli_helpers_write_to_the_configured_database(pg_dsn, monkeypatch):
-    # asyncio.run inside the helpers needs a sync test; these use the default schema.
-    monkeypatch.setenv(platform_sync.ENV_ENABLED, "1")
-    monkeypatch.setenv(platform_sync.ENV_DATABASE_URL, pg_dsn)
-    default = PlatformStore(pg_dsn)
+    # asyncio.run inside the helpers needs a sync test, so no `store` fixture.
+    scoped = PlatformStore(pg_dsn, schema=f"t_{uuid.uuid4().hex[:12]}")
+    monkeypatch.setattr(platform_sync, "store_from_env", lambda: scoped)
 
     async def counts():
-        return [await _count(default, t) for t in ("runs", "eval_results", "model_prices")]
+        return [await _count(scoped, t) for t in ("runs", "eval_results", "model_prices")]
 
     async def drop():
-        conn = await default._connect()
-        await conn.execute(f'DROP SCHEMA IF EXISTS "{default.schema}" CASCADE')
+        conn = await scoped._connect()
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{scoped.schema}" CASCADE')
         await conn.close()
 
     try:
@@ -632,7 +661,22 @@ def test_pricing_dry_run_writes_nothing(tmp_path, synced_prices):
     assert synced_prices == []
 
 
-def test_pricing_add_writes_prices(tmp_path, synced_prices):
+def test_pricing_add_writes_prices_when_unchanged(tmp_path, synced_prices):
     args = _pricing_args(tmp_path, model="m1")
     assert pricing._cmd_add(args) == 0
     assert synced_prices == [{"m1": {"input": 1.0, "output": 2.0}}]
+
+
+def test_pricing_add_writes_prices_when_added_or_updated(tmp_path, synced_prices, monkeypatch):
+    monkeypatch.setattr(pricing, "fetch_openrouter", lambda: {
+        "m1": {"input": 3.0, "output": 4.0},
+        "m2": {"input": 5.0, "output": 6.0},
+    })
+    args = _pricing_args(tmp_path, model="m2")
+    assert pricing._cmd_add(args) == 0
+    args.model = "m1"
+    assert pricing._cmd_add(args) == 0
+    assert synced_prices == [
+        {"m1": {"input": 1.0, "output": 2.0}, "m2": {"input": 5.0, "output": 6.0}},
+        {"m1": {"input": 3.0, "output": 4.0}, "m2": {"input": 5.0, "output": 6.0}},
+    ]
