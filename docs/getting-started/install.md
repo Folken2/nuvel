@@ -13,7 +13,13 @@
 pip install nuvel-cli
 ```
 
-This installs the `nuvel` CLI plus everything needed to scaffold and run agents on any of the supported backends.
+This installs the `nuvel` CLI and everything needed to **scaffold** on any supported backend. Running what you scaffold takes a little more, depending on the backend:
+
+| Backend | What it also needs at runtime |
+|---|---|
+| Google ADK | The generated project's own `requirements.txt`. |
+| Claude Agent SDK | The generated project's own `requirements.txt`, and an `ANTHROPIC_API_KEY`. |
+| Hermes Agent | The [Hermes runtime](https://github.com/NousResearch/hermes-agent), installed separately. A generated Hermes profile has no `requirements.txt`, and this install doesn't include Hermes. |
 
 !!! note "Why `nuvel-cli` and not `nuvel`?"
     The PyPI distribution is named **`nuvel-cli`** because the bare name was too close to an existing package. The CLI command (`nuvel`) and every Python import (`from nuvel.cli import ...`) stay unchanged. Only the name you type after `pip install` differs.

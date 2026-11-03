@@ -2,7 +2,7 @@
 
 `--with-teams` adds a Microsoft Teams gateway as a **standalone aiohttp sidecar process**, separate from the FastAPI agent server. It uses the [Microsoft 365 Agents SDK](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/) for inbound JWT validation and outbound activity posting.
 
-ADK only.
+ADK only ([flag support](pick-a-backend.md#nuvel-feature-support)).
 
 !!! warning "Teams runs as a second process"
     Slack and Telegram mount on the existing agent server. Teams runs as `python -m {agent_package}.gateways.teams_bridge` — a separate process listening on its own port. You'll need to run **two** processes when Teams is enabled.

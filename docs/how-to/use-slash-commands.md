@@ -1,6 +1,8 @@
 # Use slash commands
 
-Every gateway-enabled agent (`--with-slack`, `--with-telegram`, `--with-teams`) ships with a unified slash-command surface. The same commands work the same way on every channel — typed as the first word of a message.
+Every gateway-enabled ADK agent (`--with-slack`, `--with-telegram`, `--with-teams`) ships with a unified slash-command surface. The same commands work the same way on every channel — typed as the first word of a message.
+
+This page covers ADK ([flag support](pick-a-backend.md#nuvel-feature-support)). A Hermes profile scaffolded with `--with-telegram` uses the Hermes runtime's gateway instead.
 
 ## Built-in commands
 

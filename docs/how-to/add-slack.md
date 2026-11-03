@@ -2,7 +2,7 @@
 
 `--with-slack` adds a Slack inbound webhook and outbound replies to a generated ADK agent, using Composio's Slackbot toolkit end-to-end. Setup is two env vars + one CLI command per trigger.
 
-ADK only. Auto-enables `--with-composio`.
+ADK only ([flag support](pick-a-backend.md#nuvel-feature-support)). Auto-enables `--with-composio`.
 
 ## Scaffold
 

@@ -2,7 +2,7 @@
 
 `--workflow` makes the root agent an ADK 2.0 `Workflow` graph instead of a single `LlmAgent`. You get a plan → route → execute skeleton with typed contracts between the nodes and a deterministic branch.
 
-ADK only.
+ADK only ([flag support](pick-a-backend.md#nuvel-feature-support)).
 
 ## When to use it
 

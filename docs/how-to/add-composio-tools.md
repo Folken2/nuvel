@@ -2,7 +2,7 @@
 
 The `--with-composio` overlay attaches the [Composio Tool Router](https://composio.dev) to a generated ADK agent. The Tool Router is a single hosted MCP endpoint that exposes ~1000 third-party toolkits (Gmail, GitHub, Slack, Notion, Calendar, Drive, Linear, Stripe, …) with one wire-up.
 
-Available on **ADK only** today. Other backends accept the flag but error out.
+Available on **ADK only** today ([flag support](pick-a-backend.md#nuvel-feature-support)). Other backends accept the flag but error out.
 
 ## Scaffold with Composio
 
@@ -48,5 +48,5 @@ nuvel skills search composio --framework adk
 ## When *not* to use Composio
 
 - Your agent only needs one or two tools — write them directly as Python functions in `my_agent/tools/`. Lower latency, no third-party dependency.
-- You're on the Claude Agent SDK or Anthropic Managed Agents backend — Composio integration isn't supported there yet.
+- You're on the Claude Agent SDK or Hermes Agent backend — Composio integration isn't supported there yet.
 - You need full control over OAuth scopes — Composio's managed apps lock you into their scope set.
