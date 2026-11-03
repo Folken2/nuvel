@@ -26,13 +26,27 @@ git clone https://github.com/Folken2/nuvel.git
 cd nuvel
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -r requirements-dev.txt
 cp .env.example .env
 # add your OPENROUTER_API_KEY
 ```
 
-Contributors using `uv` can instead run `uv sync --all-extras` to install the
-project with every extra (the `nuvel-mcp` package is a workspace member).
+One command installs everything: the CLI in editable mode, the `nuvel-mcp` workspace member
+(it is not on any index yet), the runtime dependencies from `requirements.txt`, and the test
+extras.
+
+Contributors using `uv` can instead run `uv sync --all-extras`.
+
+### Why the workspace member comes first
+
+`pyproject.toml` reads the project's dependencies from `requirements.txt`
+(`dependencies = { file = ["requirements.txt"] }`), so that file is the *published* dependency
+list and pins `nuvel-mcp` as an external package. Installing `requirements.txt` on its own
+therefore fails on a clean checkout: nothing on any index provides `nuvel-mcp`. The editable
+install in `requirements-dev.txt` satisfies the pin locally.
+
+Do **not** add a local path to `requirements.txt` — it would land in the published metadata and
+break consumers of the released package. Publishing `nuvel-mcp` is tracked separately.
 
 Run the test suite:
 

@@ -26,12 +26,35 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/nuvel-mcp
-          pip install -r requirements.txt
-          pip install -e ".[test]"
+          pip install -r requirements-dev.txt
 
       - name: Run tests
         run: pytest tests packages/nuvel-mcp/tests -v
+
+  # Proves the documented development install works on a clean machine: one command from
+  # CONTRIBUTING.md, then a smoke check that the CLI and the workspace member are usable.
+  # If this job fails, the first command a new contributor runs is broken.
+  dev-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exactly as CONTRIBUTING documents
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+
+      - name: Smoke check
+        run: |
+          .venv/bin/python -c "import nuvel, nuvel_mcp; print('imports ok')"
+          .venv/bin/nuvel --help
+          .venv/bin/python -m pytest tests/test_config.py -q
 
   # The Postgres stores, against a real server. The matrix above runs without
   # psycopg, so it also proves nuvel-mcp still works with no dependencies.
