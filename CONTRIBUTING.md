@@ -130,15 +130,18 @@ A new channel needs:
 
 1. `gateway-<name>/{{agent_package}}/gateways/<name>.py` — FastAPI APIRouter (or a
    sidecar module if the channel's SDK is incompatible with FastAPI, like Teams).
-2. A `--with-<name>` flag added to `nuvel/cli.py` and threaded through
-   `scaffold_agent()` in `nuvel/backends/adk/scaffold.py`.
+2. A `--with-<name>` flag added to `_add_new_agent_args` in `nuvel/cli.py`, with
+   an `(adk only)` marker opening its help text, and threaded through
+   `scaffold_agent()` in `nuvel/backends/adk/scaffold.py`. It also needs a row in
+   `README.md`, in `docs/reference/cli.md` and in the
+   [flag table](docs/how-to/pick-a-backend.md#nuvel-feature-support); the docs
+   tests compare all of them with what the scaffolders accept.
 3. ENV / README contributions in `_build_replacements` (see how `_TELEGRAM_ENV_BLOCK`
    is wired).
 4. Tests under `tests/test_gateway_<name>.py` and a scaffold-flag test in
    `tests/test_scaffold_gateways.py`.
-5. The same flag added to the rejection lists in
-   `nuvel/backends/claude_agent_sdk/scaffold.py` and
-   `nuvel/backends/anthropic_managed_agents/scaffold.py`.
+5. No change to the other backends. `nuvel agent create` refuses any flag a
+   backend's `scaffold_agent()` does not declare, naming the flag and the backend.
 
 ## License
 

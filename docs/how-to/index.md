@@ -4,7 +4,7 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 
 ## Choosing a backend
 
-- [Pick a backend](pick-a-backend.md) — when ADK, Claude Agent SDK, or Anthropic Managed Agents wins.
+- [Pick a backend](pick-a-backend.md) — when ADK, Claude Agent SDK, or Hermes Agent wins.
 
 ## Customizing an agent
 
@@ -22,7 +22,7 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 
 ## Operating an agent
 
-- [Diagnose with `nuvel doctor`](../reference/cli.md#nuvel-doctor) — health check for the install and any generated agent.
+- [Diagnose with `nuvel doctor`](../reference/cli.md#nuvel-doctor) — health check for the install and any generated ADK or Claude Agent SDK agent.
 
 ## Shipping it
 

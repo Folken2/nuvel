@@ -1,8 +1,38 @@
 # Environment variables
 
-Every env var a scaffolded agent reads, grouped by feature. The full set surfaces in `.env.example` after scaffolding — this page is the one-stop reference.
+Every env var a scaffolded agent reads, grouped by backend and feature. The [Claude Agent SDK](#claude-agent-sdk) and [Hermes Agent](#hermes-agent) each have one section; every other section on this page covers ADK. On ADK and Hermes the full set surfaces in `.env.example` after scaffolding — this page is the one-stop reference.
 
-## Core (always present)
+## Claude Agent SDK
+
+| Var | Required | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | — | Anthropic API key, read by the SDK. |
+| `CLAUDE_MODEL` | no | `claude-sonnet-4-5` | Model for the agent. |
+| `CLAUDE_FALLBACK_MODEL` | no | `claude-haiku-4-5` | Fallback model. |
+| `PERMISSION_MODE` | no | `acceptEdits` | SDK permission mode: `default`, `acceptEdits`, `plan`, `bypassPermissions`, `dontAsk` or `auto`. |
+| `MAX_TURNS` | no | `20` | Maximum turns per run. |
+| `MAX_BUDGET_USD` | no | `1.0` | Maximum spend per run, in USD. |
+| `AGENT_CWD` | no | project root | Working directory for the agent. Not listed in `.env.example`. |
+| `PORT` | no | `8000` | Port the FastAPI server binds to. |
+| `API_KEY` | no | — | If set, `/run_sse/` requires it as a bearer token. |
+| `LOG_LEVEL` | no | `INFO` | Python log level for the server. |
+
+`.env.example` also lists `TRACE_ENABLED` and `TRACE_DIR`, but no generated code reads them on this backend.
+
+## Hermes Agent
+
+nuvel generates no code that reads these: they are read by the Hermes runtime, and the profile's `.env.example` lists them.
+
+| Var | Required | Description |
+|---|---|---|
+| `OPENROUTER_API_KEY` | yes, with the default `model.provider` | Key for the provider named by `model.provider` in `config.yaml`. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY` | if you switch `model.provider` | Keys for the other providers. |
+| `OPENROUTER_BASE_URL` | no | Any OpenAI-compatible endpoint. Default `https://openrouter.ai/api/v1`. |
+| `TELEGRAM_BOT_TOKEN` | when `platforms.telegram.enabled` is true | Bot token from `@BotFather`. |
+| `HERMES_HOME` | no | Where Hermes keeps profiles. Default `~/.hermes`. |
+| `LOG_LEVEL` | no | `DEBUG`, `INFO`, `WARNING` (default) or `ERROR`. |
+
+## Core (ADK, always present)
 
 | Var | Required | Default | Description |
 |---|---|---|---|

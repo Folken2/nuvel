@@ -43,8 +43,8 @@ Sleep 600ms
 Enter
 Sleep 2500ms
 
-# 3. Anthropic Managed Agents
-Type "nuvel new research-bot --framework anthropic-managed-agents --description 'long-form research'"
+# 3. Hermes Agent
+Type "nuvel new research-bot --framework hermes --description 'long-form research'"
 Sleep 600ms
 Enter
 Sleep 2500ms

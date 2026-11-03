@@ -2,19 +2,19 @@
 
 **Production-ready agents, your way.**
 
-Skills, scaffolder, or meta-agent — build agents on **Google ADK**, the **Claude Agent SDK**, or **Anthropic Managed Agents** with the workflow you already have.
+Skills, scaffolder, or meta-agent — build agents on **Google ADK**, **Hermes Agent**, or the **Claude Agent SDK** with the workflow you already have.
 
 ---
 
 ## What nuvel gives you
 
-- **A scaffolder** — `nuvel agent create my-agent` drops a complete, deployable agent project into your filesystem. Pick a backend with `--framework`. No abstraction layer between you and the framework SDK.
-- **Portable skills** — progressive-disclosure skills shared across the backends (web search, file tools, memory, Composio Tool Router, persona, more). Skills load only when relevant, so they don't bloat your context.
-- **Optional bundles, all flag-driven** — every advanced capability is opt-in:
-    - `--with-composio` — ~1000 third-party integrations via the Composio Tool Router.
-    - `--persona` — a self-evolving SOUL.md / awakening pattern for agents meant to live for months.
-    - `--with-slack` / `--with-telegram` / `--with-teams` — messaging-app gateways so a deployed agent is reachable from a chat platform.
-- **A meta-agent** — `nuvel run` launches an interactive agent that scaffolds, configures, and ships other agents on your behalf.
+- **A scaffolder** — `nuvel agent create my-agent` drops a complete, deployable ADK project into your filesystem. Pick another backend with `--framework`: the Claude Agent SDK also gets a deployable project with a Dockerfile, while Hermes gets a four-file profile that the Hermes runtime loads. No abstraction layer between you and the framework SDK.
+- **Knowledge skills per backend** — progressive-disclosure skills in the portable Anthropic format: [15 for ADK, 6 for the Claude Agent SDK, 1 for Hermes](how-to/add-skills.md). Skills load only when relevant, so they don't bloat your context.
+- **Optional bundles, all flag-driven** — every advanced capability is opt-in ([support per backend](how-to/pick-a-backend.md#nuvel-feature-support)):
+    - `--with-composio` *(adk only)* — ~1000 third-party integrations via the Composio Tool Router.
+    - `--persona` *(adk only)* — a self-evolving SOUL.md / awakening pattern for agents meant to live for months.
+    - `--with-slack` / `--with-teams` *(adk only)*, `--with-telegram` *(adk, hermes)* — messaging-app gateways so a deployed agent is reachable from a chat platform.
+- **A meta-agent** — `nuvel run` launches an interactive agent that scaffolds and configures ADK agents on your behalf.
 
 ## Where to go next
 
@@ -56,7 +56,7 @@ Skills, scaffolder, or meta-agent — build agents on **Google ADK**, the **Clau
 
 ## Project status
 
-nuvel is alpha (`0.1.x`). The CLI surface, scaffolded layout, and skill format are stable in spirit but may change in detail before `1.0`. Generated agents are real Python projects you own — they will keep working even if nuvel itself moves on.
+nuvel is alpha (`0.1.x`). The CLI surface, scaffolded layout, and skill format are stable in spirit but may change in detail before `1.0`. Generated agents are yours — real Python projects on ADK and the Claude Agent SDK, a Hermes profile on Hermes — and they will keep working even if nuvel itself moves on.
 
 ## License
 
