@@ -4,6 +4,7 @@ PLUGIN_FLAGS = \
 	--extra_plugins nuvel.plugins.cost_guard \
 	--extra_plugins nuvel.plugins.context_window \
 	--extra_plugins nuvel.plugins.trace \
+	--extra_plugins nuvel.plugins.platform_sync \
 	--extra_plugins nuvel.plugins.context_filter \
 	--extra_plugins nuvel.plugins.console_logger \
 	--extra_plugins nuvel.plugins.tool_events \

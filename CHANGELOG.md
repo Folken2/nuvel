@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `platform_sync`: with `NUVEL_PLATFORM_SYNC=1` and `NUVEL_PLATFORM_DATABASE_URL`, the meta-agent writes each completed run to Postgres (`runs`, `trace_events`), `nuvel evalv2 run` writes `eval_results` and `nuvel pricing sync|add` writes `model_prices`. Re-syncing never duplicates rows; with the database unconfigured or unreachable the run completes normally and logs one warning. Schema and row shapes: `docs/reference/platform-sync.md`.
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
 - `nuvel-mcp client create --person <name> --company <name>` saves who is behind the new client in the same step (as `clients label` does; needs the database). A bad value or a missing database stops before any client is created.
 - Feedback-only mode: `serve` without `--skills-dir` exposes just the feedback tools.

@@ -98,6 +98,7 @@ nav:
     - reference/index.md
     - CLI: reference/cli.md
     - Skill run traces: reference/skill-run-traces.md
+    - Platform sync: reference/platform-sync.md
     - Environment variables: reference/env-vars.md
     - Repository layout: reference/repo-layout.md
   - Contributing: contributing.md

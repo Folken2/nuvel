@@ -86,6 +86,7 @@ include = ["nuvel*"]
     "prompt/*",
     "plugins/pricing.json",
     "plugins/context_windows.json",
+    "platform_sync/migrations/*.sql",
 ]
 "nuvel.dashboard" = ["fixtures/*.jsonl", "templates/*.html", "static/*"]
 

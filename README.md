@@ -270,7 +270,7 @@ nuvel/
 │   ├── run_adk.py             # FastAPI server (launched by `nuvel run`)
 │   ├── prompt/instructions.py # Meta-agent system prompt
 │   ├── tools/                 # scaffold, write_file, read_file, list_files, validate
-│   ├── plugins/               # Meta-agent chain (12, via Makefile PLUGIN_FLAGS)
+│   ├── plugins/               # Meta-agent chain (13, via Makefile PLUGIN_FLAGS)
 │   ├── config/                # LiteLLM/OpenRouter config
 │   └── backends/              # Per-framework scaffolders + skills
 │       ├── adk/               # Google ADK backend
@@ -460,6 +460,8 @@ The consolidated JSON includes: full system prompt, user input, LLM thinking/rea
 | `TRACE_ENABLED` | `true` | Master on/off for all tracing |
 | `TRACE_DIR` | `./traces` | Directory for JSONL + conversation trace files |
 | `TRACE_DB` | `false` | Also write traces to PostgreSQL (`agent_traces` table) |
+| `NUVEL_PLATFORM_SYNC` | `false` | Write completed runs, eval results and prices to Postgres ([platform sync](docs/reference/platform-sync.md)) |
+| `NUVEL_PLATFORM_DATABASE_URL` | (optional) | Database for platform sync |
 | `LOG_FORMAT` | `text` | `json` for production (structured), `text` for dev (colored) |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
