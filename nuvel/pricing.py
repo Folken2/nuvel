@@ -144,6 +144,11 @@ def fetch_openrouter() -> dict[str, dict[str, float]]:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+    except TimeoutError as exc:
+        # A stall during resp.read() surfaces as a bare socket.timeout, not URLError.
+        raise RuntimeError(f"OpenRouter request timed out: {exc}") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"OpenRouter returned invalid JSON: {exc}") from exc
 
     out: dict[str, dict[str, float]] = {}
     for model in payload.get("data", []):

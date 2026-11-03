@@ -252,6 +252,34 @@ def test_fetch_openrouter_network_error_becomes_runtime_error(monkeypatch):
         pricing.fetch_openrouter()
 
 
+def test_fetch_openrouter_non_json_body_becomes_runtime_error(monkeypatch):
+    _patch_urlopen(monkeypatch, body=b"<html>proxy interstitial</html>")
+    with pytest.raises(RuntimeError, match="OpenRouter returned invalid JSON") as info:
+        pricing.fetch_openrouter()
+    assert isinstance(info.value.__cause__, json.JSONDecodeError)
+
+
+def test_fetch_openrouter_undecodable_body_becomes_runtime_error(monkeypatch):
+    _patch_urlopen(monkeypatch, body=b"\xff\xfe\x00not utf-8")
+    with pytest.raises(RuntimeError, match="OpenRouter returned invalid JSON") as info:
+        pricing.fetch_openrouter()
+    assert isinstance(info.value.__cause__, UnicodeDecodeError)
+
+
+def test_fetch_openrouter_read_timeout_becomes_runtime_error(monkeypatch):
+    class _StalledResponse(_FakeResponse):
+        def read(self, *args, **kwargs):
+            raise TimeoutError("timed out")
+
+    def fake_urlopen(req, timeout):
+        return _StalledResponse(b"")
+
+    monkeypatch.setattr(pricing.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="OpenRouter request timed out") as info:
+        pricing.fetch_openrouter()
+    assert isinstance(info.value.__cause__, TimeoutError)
+
+
 # ── Formatting ───────────────────────────────────────────────────────
 
 
