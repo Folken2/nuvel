@@ -59,7 +59,7 @@ Channels are overlays under `nuvel/backends/adk/templates_overlays/gateway-*/`. 
 2. **Add the flag** `--with-<name>` in `_add_new_agent_args` in `nuvel/cli.py`, with an `(adk only)` marker opening its help text, and thread it through `scaffold_agent()` in `nuvel/backends/adk/scaffold.py`. Give it a row in `README.md`, in `docs/reference/cli.md` and in the [flag table](how-to/pick-a-backend.md#nuvel-feature-support); the docs tests compare all of them with what the scaffolders accept.
 3. **Wire the placeholders** in `_build_replacements` — at minimum, populate `gateway_imports_lines`, `gateway_mounts_lines` (skip if sidecar), `gateway_env_blocks`, and `gateway_readme_blocks`. Add a `_<NAME>_ENV_BLOCK` and `_<NAME>_README_BLOCK` constant.
 4. **Write tests** under `tests/test_gateway_<name>.py` (router unit tests with FastAPI TestClient + mocked runner) and a scaffold-flag test class in `tests/test_scaffold_gateways.py`.
-5. **Reject the flag in non-ADK backends.** Add the same flag to the rejection list in every other `nuvel/backends/*/scaffold.py`.
+5. **Leave the other backends alone.** `nuvel agent create` refuses any flag a backend's `scaffold_agent()` does not declare, naming the flag and the backend.
 
 For a concrete reference implementation, see commits on the [messaging-gateways feature branch history](https://github.com/Folken2/nuvel/pulls?q=is%3Apr+messaging-gateways) and the design spec at `docs/superpowers/specs/2026-05-09-messaging-gateways-design.md` in the repo.
 

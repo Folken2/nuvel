@@ -90,6 +90,14 @@ def _scaffold_agent_for(framework: str):
     raise ValueError(f"Unknown framework: {framework}")
 
 
+def _unsupported_message(flags: list[str], framework: str) -> str:
+    verb = "is" if len(flags) == 1 else "are"
+    return (
+        f"{', '.join(flags)} {verb} not supported for the "
+        f"{framework} backend. Use --framework {DEFAULT_FRAMEWORK}."
+    )
+
+
 def _scaffold_options() -> list[str]:
     """Everything `nuvel agent create` can hand a backend besides the agent name.
 
@@ -98,6 +106,7 @@ def _scaffold_options() -> list[str]:
     """
     parser = argparse.ArgumentParser()
     _add_new_agent_args(parser)
+    # The agent name is the parser's only required argument.
     return [
         option
         for option in vars(parser.parse_args(["placeholder"]))
@@ -118,11 +127,7 @@ def _scaffold_kwargs(scaffold_agent, args: argparse.Namespace) -> dict:
         if option not in accepted and getattr(args, option)
     ]
     if unsupported:
-        verb = "is" if len(unsupported) == 1 else "are"
-        raise ValueError(
-            f"{', '.join(unsupported)} {verb} not supported for the "
-            f"{args.framework} backend. Use --framework {DEFAULT_FRAMEWORK}."
-        )
+        raise ValueError(_unsupported_message(unsupported, args.framework))
     return {
         option: getattr(args, option)
         for option in options
@@ -132,13 +137,9 @@ def _scaffold_kwargs(scaffold_agent, args: argparse.Namespace) -> dict:
 
 def _cmd_new(args: argparse.Namespace) -> int:
     # Answered here because the frozen flag's only supported home is ADK, and
-    # a backend's own refusal may point at a framework we no longer offer.
+    # a backend's own refusal may not name the backend.
     if args.with_acp and args.framework != DEFAULT_FRAMEWORK:
-        print(
-            f"Error: --with-acp is not supported for the {args.framework} backend. "
-            f"Use --framework {DEFAULT_FRAMEWORK}.",
-            file=sys.stderr,
-        )
+        print(f"Error: {_unsupported_message(['--with-acp'], args.framework)}", file=sys.stderr)
         return 1
     if args.with_acp:
         print("\u26a0  Warning: --with-acp is experimental and unsupported.", file=sys.stderr)

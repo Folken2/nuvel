@@ -244,7 +244,7 @@ def scaffold_agent(
             "message": (
                 "--with-acp is not supported for the hermes backend — Hermes owns the "
                 "runtime, so there is no process for nuvel to hand an ACP adapter to. "
-                "Use --framework buzz for an ACP-native agent, or --framework adk."
+                "Use --framework adk."
             ),
         }
     for flag_name, flag_set in (

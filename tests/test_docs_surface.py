@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -36,12 +37,13 @@ FLAG_TABLE_COLUMNS = {"ADK": "adk", "Claude SDK": "claude-agent-sdk", "Hermes": 
 
 
 def _surface(root: Path = ROOT) -> list[Path]:
-    """README and every text file under docs/ not in EXCLUDED.
+    """README, CONTRIBUTING, mkdocs.yml and every text file under docs/ not in EXCLUDED.
 
-    Source, tests, CHANGELOG history, packaging metadata and the root contributor
-    guides are not reader-facing pages, so they are not scanned.
+    mkdocs.yml is here because its site_description renders on every built page.
+    Source, tests, CHANGELOG history, packaging metadata and the agent guides
+    (CLAUDE.md, AGENTS.md) are not reader-facing pages, so they are not scanned.
     """
-    files = [root / "README.md"]
+    files = [root / "README.md", root / "CONTRIBUTING.md", root / "mkdocs.yml"]
     for path in sorted((root / "docs").rglob("*")):
         if not path.is_file() or path.suffix in BINARY_SUFFIXES:
             continue
@@ -61,6 +63,8 @@ def test_surface_covers_the_pages_that_matter():
     surface = {p.relative_to(ROOT).as_posix() for p in _surface()}
     assert {
         "README.md",
+        "CONTRIBUTING.md",
+        "mkdocs.yml",
         "docs/index.md",
         "docs/contributing.md",
         "docs/reference/cli.md",
@@ -72,13 +76,13 @@ def test_surface_covers_the_pages_that_matter():
 
 
 def test_surface_picks_up_new_files_by_default(tmp_path):
-    for name in ("README.md", "docs/new/page.md", "docs/new/notes.txt",
+    for name in ("README.md", "CONTRIBUTING.md", "mkdocs.yml", "docs/new/page.md", "docs/new/notes.txt",
                  "docs/experimental.md", "docs/superpowers/specs/deep/spec.md"):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x", encoding="utf-8")
     assert {p.relative_to(tmp_path).as_posix() for p in _surface(tmp_path)} == {
-        "README.md", "docs/new/page.md", "docs/new/notes.txt",
+        "README.md", "CONTRIBUTING.md", "mkdocs.yml", "docs/new/page.md", "docs/new/notes.txt",
     }
 
 
@@ -97,6 +101,14 @@ def test_frozen_capability_absent_from_surface(capability):
         text = path.read_text(encoding="utf-8")
         bad += [f"{path.relative_to(ROOT)}:{number}" for number in _hits(FROZEN[capability], text)]
     assert not bad, "\n".join(bad)
+
+
+def test_package_description_names_only_supported_backends():
+    with (ROOT / "pyproject.toml").open("rb") as f:
+        description = tomllib.load(f)["project"]["description"]
+    assert not [name for name, pattern in FROZEN.items() if pattern.search(description)]
+    for backend in ("Google ADK", "Hermes Agent", "Claude Agent SDK"):
+        assert backend in description
 
 
 @pytest.mark.parametrize("capability", FROZEN)
@@ -168,6 +180,12 @@ def honoured(tmp_path_factory) -> dict[str, set[str]]:
     return support
 
 
+def _flag_table_columns(lines: list[str]) -> list[str]:
+    """Column headings of the flag table, after its Feature column."""
+    header = next(line for line in lines if line.startswith("| Feature |"))
+    return [cell.strip() for cell in header.split("|")[2:-1]]
+
+
 def _marker(text: str) -> set[str]:
     """The frameworks in a leading "(adk only)" / "(adk, hermes)" marker."""
     return set(re.search(r"\(([^)]*)\)", text).group(1).replace(" only", "").split(", "))
@@ -198,8 +216,7 @@ def test_flag_markers_agree_with_scaffolders(honoured, doc, row):
 def test_flag_table_agrees_with_scaffolders(honoured):
     assert set(FLAG_TABLE_COLUMNS.values()) == set(SUPPORTED_FRAMEWORKS)
     lines = (ROOT / "docs/how-to/pick-a-backend.md").read_text(encoding="utf-8").splitlines()
-    header = next(line for line in lines if line.startswith("| Feature |"))
-    columns = [cell.strip() for cell in header.split("|")[2:-1]]
+    columns = _flag_table_columns(lines)
     documented = {}
     for line in lines:
         cells = [cell.strip() for cell in line.split("|")[1:-1]]
@@ -213,10 +230,9 @@ def test_flag_table_agrees_with_scaffolders(honoured):
 
 
 def test_flag_table_skill_counts_match_the_bundled_skills():
-    text = (ROOT / "docs/how-to/pick-a-backend.md").read_text(encoding="utf-8")
-    row = next(line for line in text.splitlines() if line.startswith("| Knowledge skills"))
-    header = next(line for line in text.splitlines() if line.startswith("| Feature |"))
-    columns = [cell.strip() for cell in header.split("|")[2:-1]]
+    lines = (ROOT / "docs/how-to/pick-a-backend.md").read_text(encoding="utf-8").splitlines()
+    row = next(line for line in lines if line.startswith("| Knowledge skills"))
+    columns = _flag_table_columns(lines)
     counts = {
         FLAG_TABLE_COLUMNS[column]: int(cell)
         for column, cell in zip(columns, (c.strip() for c in row.split("|")[2:-1]))

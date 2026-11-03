@@ -27,7 +27,7 @@ watchfiles>=0.21,<2.0
 
 - [ ] **Step 2: Reinstall in the worktree's venv**
 
-Run: `pip install -r requirements-dev.txt`
+Run: `pip install -e .`
 Expected: jinja2, watchfiles, and pytest-asyncio installed successfully.
 
 - [ ] **Step 2b: Enable asyncio test mode**

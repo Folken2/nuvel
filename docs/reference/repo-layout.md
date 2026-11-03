@@ -81,7 +81,7 @@ That's the entire mechanism. There's no runtime layer between a generated agent 
 | To add… | Edit |
 |---|---|
 | A new framework backend | `nuvel/backends/<name>/{scaffold.py,templates/,skills/}` + register in `nuvel/cli.py::SUPPORTED_FRAMEWORKS` |
-| A new ADK overlay (feature) | `nuvel/backends/adk/templates_overlays/<feature>/` + flag in `cli.py::_add_new_agent_args`, its help opening with an `(adk only)` marker + a row in `README.md`, `docs/reference/cli.md` and the [flag table](../how-to/pick-a-backend.md#nuvel-feature-support) + threading in `nuvel/backends/adk/scaffold.py::_build_replacements` and `scaffold_agent` + rejection in non-ADK scaffolders |
+| A new ADK overlay (feature) | `nuvel/backends/adk/templates_overlays/<feature>/` + flag in `cli.py::_add_new_agent_args`, its help opening with an `(adk only)` marker + a row in `README.md`, `docs/reference/cli.md` and the [flag table](../how-to/pick-a-backend.md#nuvel-feature-support) + threading in `nuvel/backends/adk/scaffold.py::_build_replacements` and `scaffold_agent` |
 | A new bundled skill | `nuvel/backends/<framework>/skills/<slug>/SKILL.md` (+ helper files as needed) |
 | A new messaging-app channel | See [Contributing](../contributing.md) — there's a 5-step checklist |
 
