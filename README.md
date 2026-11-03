@@ -237,7 +237,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate an
 | `nuvel agent create <name> --description "..."` | Scaffold with a one-liner description |
 | `nuvel agent create <name> --persona` | *(adk only)* Self-evolving agent (SOUL.md, awakening flow) |
 | `nuvel agent create <name> --with-composio` | *(adk only)* Bundle ~1000 integrations via Composio Tool Router |
-| `nuvel agent create <name> --with-slack` | *(adk only)* Add a Slack Events API gateway (auto-enables `--with-composio`) |
+| `nuvel agent create <name> --with-slack` | *(adk only)* Add a Slack gateway via Composio Slackbot (auto-enables `--with-composio`) |
 | `nuvel agent create <name> --with-telegram` | *(adk, hermes)* Add a Telegram gateway: a Bot webhook on ADK, `platforms.telegram` enabled in `config.yaml` on Hermes |
 | `nuvel agent create <name> --with-teams` | *(adk only)* Add a Microsoft Teams bot bridge via Azure Bot Service |
 | `nuvel agent create <name> --workflow` | *(adk only)* Workflow-native root agent — an ADK 2.0 `Workflow` graph with task-mode nodes, typed contracts, and conditional routing |

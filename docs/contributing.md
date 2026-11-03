@@ -8,7 +8,7 @@ The canonical guide is [`CONTRIBUTING.md`](https://github.com/Folken2/nuvel/blob
 git clone https://github.com/Folken2/nuvel.git
 cd nuvel
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[docs]"        # editable install + MkDocs for docs site
+pip install -r requirements-dev.txt        # editable install + test dependencies
 ```
 
 ## Running the test suite

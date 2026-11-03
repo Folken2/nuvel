@@ -30,7 +30,7 @@ This installs the `nuvel` CLI and everything needed to **scaffold** on any suppo
 git clone https://github.com/Folken2/nuvel.git
 cd nuvel
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -r requirements-dev.txt
 ```
 
 Editable install is recommended if you plan to contribute to nuvel itself.
