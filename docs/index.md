@@ -2,7 +2,7 @@
 
 **Production-ready agents, your way.**
 
-Skills, scaffolder, or meta-agent — build agents on **Google ADK**, the **Claude Agent SDK**, or **Anthropic Managed Agents** with the workflow you already have.
+Skills, scaffolder, or meta-agent — build agents on **Google ADK**, **Hermes Agent**, or the **Claude Agent SDK** with the workflow you already have.
 
 ---
 

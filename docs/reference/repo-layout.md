@@ -39,9 +39,10 @@ nuvel/                                  # the Python package
 │   │   ├── scaffold.py
 │   │   ├── templates/                  # base Claude Agent SDK template
 │   │   └── skills/
-│   └── anthropic_managed_agents/
+│   └── hermes/
 │       ├── scaffold.py
-│       ├── templates/                  # base Anthropic Managed Agents template
+│       ├── templates/                  # base Hermes profile template
+│       ├── templates_overlays/         # hermes-gateway (--with-telegram)
 │       └── skills/
 ├── prompt/                             # meta-agent's instruction frame
 ├── tools/                              # meta-agent's tools

@@ -13,7 +13,7 @@ nuvel agent create <name> [options]
 | Argument / flag | Default | Description |
 |---|---|---|
 | `<name>` | *(required)* | Kebab-case agent name. Lowercase letters, digits, single hyphens; must start with a letter; max 40 chars. |
-| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `buzz`, `hermes`. |
+| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `hermes`, `claude-agent-sdk`. See [Experimental](../experimental.md) for what is not supported. |
 | `--output-dir` | `./generated-agents` (or `$AGENTS_OUTPUT_DIR`) | Parent directory for the new agent. |
 | `--description` | `""` | Short agent description, baked into the README and the agent's metadata. |
 | `--system-prompt` | `""` | Inline system prompt seed. Overrides the per-overlay default frame. |
@@ -27,7 +27,7 @@ nuvel agent create <name> [options]
 ### Validation
 
 - `<name>` must match `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. Underscores, spaces, leading digits, double hyphens, trailing hyphens, and any uppercase character all fail.
-- `--with-slack`, `--with-telegram`, `--with-teams`, `--workflow` are accepted on non-ADK backends but exit with a clear "not yet supported on this backend" error message.
+- `--with-slack`, `--with-telegram`, `--with-teams`, `--workflow` are accepted on non-ADK backends but exit with a clear error message. The one exception is `--with-telegram` on `hermes`, which enables the Telegram platform in the generated profile.
 
 ### When to use `--workflow`
 
@@ -337,4 +337,4 @@ result = scaffold_agent(
 # on success: result["path"], result["files_created"], etc.
 ```
 
-The `buzz` and `hermes` backends export the same function signature. Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.
+The `hermes` and `claude_agent_sdk` backends also export `scaffold_agent()` and accept these keyword arguments. Flags a backend does not support return `{"status": "error", "message": ...}` if set; `with_telegram` is supported on `hermes`.
