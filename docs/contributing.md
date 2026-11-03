@@ -22,6 +22,9 @@ pytest tests/ -q
 ## Working on the docs site
 
 ```bash
+# Install MkDocs (after the setup above, which provides nuvel-mcp)
+pip install -e ".[docs]"
+
 # Live reload at http://127.0.0.1:8000
 mkdocs serve
 
