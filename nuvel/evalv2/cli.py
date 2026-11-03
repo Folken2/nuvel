@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from nuvel.platform_sync import sync_eval_result
+
 from .cache import SampleCache
 from .compare import ComparisonReport, compare_results
 from .exceptions import EvalError
@@ -146,6 +148,7 @@ def run_eval(
     result = EvalRunner(suite, config).run()
 
     _persist_result(result, skill, results_dir or get_results_dir(), save_baseline)
+    sync_eval_result(result)
 
     if json_out:
         print(result.to_json(), file=stream)

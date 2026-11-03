@@ -93,6 +93,20 @@ def test_run_json_emits_valid_json(summarize_skill_dir, tmp_path, capsys):
     assert payload["summary"]["total"] >= 1
 
 
+def test_run_syncs_the_finished_result_to_the_platform(summarize_skill_dir, tmp_path, monkeypatch):
+    synced = []
+    monkeypatch.setattr(cli, "sync_eval_result", synced.append)
+    cli.run_eval(
+        "summarize-skill",
+        skills_dir=summarize_skill_dir.parent,
+        results_dir=tmp_path,
+        executor=_fake_executor,
+        judge_fn=_fake_judge,
+    )
+    assert [r.skill for r in synced] == ["summarize"]
+    assert synced[0].examples
+
+
 def test_run_persists_result_and_baseline(summarize_skill_dir, tmp_path):
     cli.run_eval(
         "summarize-skill",
