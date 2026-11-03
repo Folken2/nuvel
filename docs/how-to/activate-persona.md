@@ -2,7 +2,7 @@
 
 `--persona` ships a self-evolving SOUL.md / awakening pattern for agents meant to live for **months** and develop a stable character. It's deliberate engineering, not flavor text — the agent re-reads its own SOUL.md every turn and can rewrite it through the `update_soul` tool.
 
-ADK only. Inappropriate for stateless task bots.
+ADK only ([flag support](pick-a-backend.md#nuvel-feature-support)). Inappropriate for stateless task bots.
 
 !!! info "Inspiration"
     The SOUL.md / awakening pattern is **inspired by OpenClaw** and its approach to long-running agent identity. nuvel's `--persona` overlay adapts those ideas for ADK-scaffolded agents.
@@ -45,7 +45,7 @@ The overlay adds:
 `--persona` composes cleanly with `--with-composio` and the messaging-gateway flags:
 
 ```bash
-nuvel new soulful-bot \
+nuvel agent create soulful-bot \
   --framework adk \
   --persona \
   --with-composio \

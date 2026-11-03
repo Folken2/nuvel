@@ -39,9 +39,10 @@ nuvel/                                  # the Python package
 │   │   ├── scaffold.py
 │   │   ├── templates/                  # base Claude Agent SDK template
 │   │   └── skills/
-│   └── anthropic_managed_agents/
+│   └── hermes/
 │       ├── scaffold.py
-│       ├── templates/                  # base Anthropic Managed Agents template
+│       ├── templates/                  # base Hermes profile template
+│       ├── templates_overlays/         # hermes-gateway (--with-telegram)
 │       └── skills/
 ├── prompt/                             # meta-agent's instruction frame
 ├── tools/                              # meta-agent's tools
@@ -68,7 +69,7 @@ generated-agents/                       # default output dir for `nuvel agent cr
 
 ## How the scaffold works
 
-1. `nuvel cli new` calls `scaffold_agent()` in the chosen backend.
+1. `nuvel agent create` calls `scaffold_agent()` in the chosen backend, passing only the options that function declares.
 2. `scaffold_agent()` builds a replacements dict (`{{agent_name}}`, `{{agent_package}}`, plus per-overlay placeholders).
 3. `_stamp_tree(TEMPLATES_DIR, target, replacements)` walks the base template, copying files, renaming `{{agent_package}}` directories to the snake-cased name, and substituting placeholders in text files.
 4. For each enabled overlay, `_stamp_tree(OVERLAYS_DIR / "<overlay>", target, replacements)` runs again — overlays are additive, can override base files.
@@ -80,7 +81,7 @@ That's the entire mechanism. There's no runtime layer between a generated agent 
 | To add… | Edit |
 |---|---|
 | A new framework backend | `nuvel/backends/<name>/{scaffold.py,templates/,skills/}` + register in `nuvel/cli.py::SUPPORTED_FRAMEWORKS` |
-| A new ADK overlay (feature) | `nuvel/backends/adk/templates_overlays/<feature>/` + flag in `cli.py` + threading in `nuvel/backends/adk/scaffold.py::_build_replacements` and `scaffold_agent` + rejection in non-ADK scaffolders |
+| A new ADK overlay (feature) | `nuvel/backends/adk/templates_overlays/<feature>/` + flag in `cli.py::_add_new_agent_args`, its help opening with an `(adk only)` marker + a row in `README.md`, `docs/reference/cli.md` and the [flag table](../how-to/pick-a-backend.md#nuvel-feature-support) + threading in `nuvel/backends/adk/scaffold.py::_build_replacements` and `scaffold_agent` + rejection in non-ADK scaffolders |
 | A new bundled skill | `nuvel/backends/<framework>/skills/<slug>/SKILL.md` (+ helper files as needed) |
 | A new messaging-app channel | See [Contributing](../contributing.md) — there's a 5-step checklist |
 

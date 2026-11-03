@@ -8,7 +8,7 @@ The canonical guide is [`CONTRIBUTING.md`](https://github.com/Folken2/nuvel/blob
 git clone https://github.com/Folken2/nuvel.git
 cd nuvel
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[docs]"        # editable install + MkDocs for docs site
+pip install -r requirements-dev.txt        # editable install + test dependencies
 ```
 
 ## Running the test suite
@@ -22,6 +22,9 @@ pytest tests/ -q
 ## Working on the docs site
 
 ```bash
+# Install MkDocs (after the setup above, which provides nuvel-mcp)
+pip install -e ".[docs]"
+
 # Live reload at http://127.0.0.1:8000
 mkdocs serve
 
@@ -53,10 +56,10 @@ description: <one-line trigger description>
 Channels are overlays under `nuvel/backends/adk/templates_overlays/gateway-*/`. Five steps:
 
 1. **Create the overlay file** at `gateway-<name>/{{agent_package}}/gateways/<name>.py` — a FastAPI APIRouter (or a sidecar module if the channel's SDK isn't FastAPI-compatible, like Teams).
-2. **Add the flag** `--with-<name>` in `nuvel/cli.py` and thread it through `scaffold_agent()` in `nuvel/backends/adk/scaffold.py`.
+2. **Add the flag** `--with-<name>` in `_add_new_agent_args` in `nuvel/cli.py`, with an `(adk only)` marker opening its help text, and thread it through `scaffold_agent()` in `nuvel/backends/adk/scaffold.py`. Give it a row in `README.md`, in `docs/reference/cli.md` and in the [flag table](how-to/pick-a-backend.md#nuvel-feature-support); the docs tests compare all of them with what the scaffolders accept.
 3. **Wire the placeholders** in `_build_replacements` — at minimum, populate `gateway_imports_lines`, `gateway_mounts_lines` (skip if sidecar), `gateway_env_blocks`, and `gateway_readme_blocks`. Add a `_<NAME>_ENV_BLOCK` and `_<NAME>_README_BLOCK` constant.
 4. **Write tests** under `tests/test_gateway_<name>.py` (router unit tests with FastAPI TestClient + mocked runner) and a scaffold-flag test class in `tests/test_scaffold_gateways.py`.
-5. **Reject the flag in non-ADK backends.** Add the same flag to `nuvel/backends/claude_agent_sdk/scaffold.py` and `nuvel/backends/anthropic_managed_agents/scaffold.py`'s rejection lists.
+5. **Reject the flag in non-ADK backends.** Add the same flag to the rejection list in every other `nuvel/backends/*/scaffold.py`.
 
 For a concrete reference implementation, see commits on the [messaging-gateways feature branch history](https://github.com/Folken2/nuvel/pulls?q=is%3Apr+messaging-gateways) and the design spec at `docs/superpowers/specs/2026-05-09-messaging-gateways-design.md` in the repo.
 
