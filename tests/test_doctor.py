@@ -1067,13 +1067,6 @@ class TestHermesSetup(_TmpDirCase):
         code, out = self._run(cwd=project)
         self.assertEqual(code, 0, out)
 
-    def test_litellm_flag_is_rejected_not_a_typeerror(self):
-        from nuvel.backends.hermes.scaffold import scaffold_agent
-
-        result = scaffold_agent("bot", output_dir=str(self.root), with_litellm=True)
-        self.assertEqual(result["status"], "error")
-        self.assertIn("--with-litellm", result["message"])
-
     def test_enabled_platform_needs_its_token(self):
         project = self._create("bot", "--with-telegram")
         self._configure(project, "bot")

@@ -13,21 +13,23 @@ nuvel agent create <name> [options]
 | Argument / flag | Default | Description |
 |---|---|---|
 | `<name>` | *(required)* | Kebab-case agent name. Lowercase letters, digits, single hyphens; must start with a letter; max 40 chars. |
-| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `buzz`, `hermes`. |
+| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `hermes`, `claude-agent-sdk`. See [Experimental](../experimental.md) for what is not supported. |
 | `--output-dir` | `./generated-agents` (or `$AGENTS_OUTPUT_DIR`) | Parent directory for the new agent. |
-| `--description` | `""` | Short agent description, baked into the README and the agent's metadata. |
-| `--system-prompt` | `""` | Inline system prompt seed. Overrides the per-overlay default frame. |
+| `--description` | `""` | Short agent description, baked into the README and the agent's metadata (`SOUL.md` on Hermes). |
+| `--system-prompt` | `""` | Inline system prompt seed. Overrides the per-overlay default frame on ADK, fills `prompt/system_prompt.md` on the Claude Agent SDK, and becomes the `# Purpose` section of `SOUL.md` on Hermes. |
 | `--persona` | off | *(adk only)* Activate the persona overlay (SOUL.md, AWAKENING.md, author_skill, complete_awakening). For agents meant to live for months. |
 | `--with-composio` | off | *(adk only)* Wire the Composio Tool Router MCP (~1000 toolkits via one hosted endpoint). |
 | `--with-slack` | off | *(adk only)* Add a Slack gateway via Composio Slackbot. **Implies `--with-composio`.** |
-| `--with-telegram` | off | *(adk only)* Add a Telegram gateway (webhook + Bot API outbound). |
+| `--with-telegram` | off | *(adk, hermes)* Add a Telegram gateway: webhook + Bot API outbound on ADK, `platforms.telegram` enabled in `config.yaml` on Hermes. |
 | `--with-teams` | off | *(adk only)* Add an MS Teams gateway as a separate aiohttp sidecar. |
 | `--workflow` | off | *(adk only)* Make the root agent an ADK 2.0 `Workflow` graph (`agent_workflow.py`) instead of a single `LlmAgent`: plan → execute nodes in `mode='task'` with typed contracts and deterministic routing. `agent.py` becomes a shim re-exporting `root_agent`, so all import paths stay unchanged. |
+| `--with-eval` | off | *(adk only)* Stamp a starter evalv2 suite into the agent. |
+| `--with-litellm` | off | *(adk only)* Generate a ready-to-run LiteLLM proxy alongside the agent. |
 
 ### Validation
 
 - `<name>` must match `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. Underscores, spaces, leading digits, double hyphens, trailing hyphens, and any uppercase character all fail.
-- `--with-slack`, `--with-telegram`, `--with-teams`, `--workflow` are accepted on non-ADK backends but exit with a clear "not yet supported on this backend" error message.
+- A backend refuses a flag it doesn't support rather than silently ignoring it: the command exits non-zero with an error naming the flag and the backend. [Pick a backend](../how-to/pick-a-backend.md#nuvel-feature-support) lists which flags each backend honours.
 
 ### When to use `--workflow`
 
@@ -85,7 +87,7 @@ Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines, and every
 | Flag | Description |
 |---|---|
 | `--path` | Run against this directory instead of the cwd. |
-| `--json` | Emit the same findings as JSON: `ok`, `exit_code`, `cwd`, `summary`, and `checks[]` with `section`, `name`, `status`, `detail`, `fix`, plus `zed_config` for `--with-acp` agents. `cwd` is `null` if the current directory was deleted. |
+| `--json` | Emit the same findings as JSON: `ok`, `exit_code`, `cwd`, `summary`, and `checks[]` with `section`, `name`, `status`, `detail`, `fix`. `cwd` is `null` if the current directory was deleted. |
 
 **Getting to green:**
 
@@ -100,7 +102,6 @@ Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines, and every
 - **State** — the traces dir, `AGENTS_OUTPUT_DIR` (for `nuvel run`), `~/.nuvel`, `~/.cache/nuvel`, and the nuvel data dir are writable. Directories that don't exist yet are probed through their parent and not created.
 - **Network** — each configured provider answers an unauthenticated `HEAD`. No key is sent; any HTTP response under 500 counts as reachable. Failing this check fails doctor, so it exits non-zero offline. A provider with no known endpoint is a warning, not probed. Ollama is probed at `OLLAMA_API_BASE` when that's set, and at `localhost:11434` otherwise.
 - **Caches** — evalv2 cache entries and the auto-cloned skills hub older than 30 days (warning only).
-- **ACP adapter** *(for `--with-acp` agents)* — the stdio `initialize` handshake.
 
 ## `nuvel traces`
 
@@ -348,4 +349,4 @@ result = scaffold_agent(
 # on success: result["path"], result["files_created"], etc.
 ```
 
-The `buzz` and `hermes` backends export a `scaffold_agent()` with the same core arguments plus their own (`hermes` also accepts `with_litellm`, only to reject it). Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.
+The `hermes` and `claude_agent_sdk` backends also export `scaffold_agent()` and declare these keyword arguments. Those they do not support return `{"status": "error", "message": ...}` if set; see [Pick a backend](../how-to/pick-a-backend.md#nuvel-feature-support) for which those are. `with_litellm` is declared only by the ADK backend, so passing it to the other two raises `TypeError`. `nuvel agent create` inspects each signature first, so on the command line that case is a normal error naming the flag and the backend. Hermes also takes `model` and `telegram_bot_token`.

@@ -189,7 +189,6 @@ def scaffold_agent(
     workflow: bool = False,
     with_acp: bool = False,
     with_eval: bool = False,
-    with_litellm: bool = False,
     model: str = DEFAULT_HERMES_MODEL,
     telegram_bot_token: str = "",
 ) -> dict:
@@ -210,7 +209,7 @@ def scaffold_agent(
         telegram_bot_token: Seed for `TELEGRAM_BOT_TOKEN` in .env.example.
                             Blank by default — the token is a credential.
 
-    The persona / composio / slack / teams / workflow / eval / acp / litellm bundles are
+    The persona / composio / slack / teams / workflow / eval / acp bundles are
     ADK-only; passing them here returns an error rather than silently ignoring.
 
     Returns:
@@ -239,18 +238,13 @@ def scaffold_agent(
             "status": "error",
             "message": "--with-eval is not yet supported for the hermes backend. Use --framework adk.",
         }
-    if with_litellm:
-        return {
-            "status": "error",
-            "message": "--with-litellm is an ADK-only bundle; use --framework adk if you want it.",
-        }
     if with_acp:
         return {
             "status": "error",
             "message": (
                 "--with-acp is not supported for the hermes backend — Hermes owns the "
                 "runtime, so there is no process for nuvel to hand an ACP adapter to. "
-                "Use --framework buzz for an ACP-native agent, or --framework adk."
+                "Use --framework adk."
             ),
         }
     for flag_name, flag_set in (

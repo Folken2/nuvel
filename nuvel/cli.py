@@ -35,14 +35,15 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
-SUPPORTED_FRAMEWORKS = ("adk", "hermes")
-DEPRECATED_FRAMEWORKS = ("claude-agent-sdk", "anthropic-managed-agents")
+SUPPORTED_FRAMEWORKS = ("adk", "hermes", "claude-agent-sdk")
+DEPRECATED_FRAMEWORKS = ("anthropic-managed-agents",)
 # Frozen: still dispatchable for anyone who knows the name, but left out of the
 # usage line, the help listing and the "invalid choice" error.
 FROZEN_COMMANDS = ("acp",)
@@ -89,27 +90,69 @@ def _scaffold_agent_for(framework: str):
     raise ValueError(f"Unknown framework: {framework}")
 
 
+def _unsupported_message(flags: list[str], framework: str) -> str:
+    verb = "is" if len(flags) == 1 else "are"
+    return (
+        f"{', '.join(flags)} {verb} not supported for the "
+        f"{framework} backend. Use --framework {DEFAULT_FRAMEWORK}."
+    )
+
+
+def _scaffold_options() -> list[str]:
+    """Everything `nuvel agent create` can hand a backend besides the agent name.
+
+    Read from the parser, so a flag added to _add_new_agent_args is dispatched
+    with no further wiring. Each is passed only if the backend declares it.
+    """
+    parser = argparse.ArgumentParser()
+    _add_new_agent_args(parser)
+    # The agent name is the parser's only required argument.
+    return [
+        option
+        for option in vars(parser.parse_args(["placeholder"]))
+        if option not in ("name", "framework")
+    ]
+
+
+def _scaffold_kwargs(scaffold_agent, args: argparse.Namespace) -> dict:
+    """Build the kwargs a backend's scaffold_agent actually declares.
+
+    Raises ValueError naming any flag the user set that the backend lacks.
+    """
+    accepted = inspect.signature(scaffold_agent).parameters
+    options = _scaffold_options()
+    unsupported = [
+        "--" + option.replace("_", "-")
+        for option in options
+        if option not in accepted and getattr(args, option)
+    ]
+    if unsupported:
+        raise ValueError(_unsupported_message(unsupported, args.framework))
+    return {
+        option: getattr(args, option)
+        for option in options
+        if option in accepted
+    }
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
+    # Answered here because the frozen flag's only supported home is ADK, and
+    # a backend's own refusal may not name the backend.
+    if args.with_acp and args.framework != DEFAULT_FRAMEWORK:
+        print(f"Error: {_unsupported_message(['--with-acp'], args.framework)}", file=sys.stderr)
+        return 1
     if args.with_acp:
         print("\u26a0  Warning: --with-acp is experimental and unsupported.", file=sys.stderr)
 
     scaffold_agent = _scaffold_agent_for(args.framework)
 
-    result = scaffold_agent(
-        name=args.name,
-        output_dir=args.output_dir,
-        description=args.description,
-        system_prompt=args.system_prompt,
-        persona=args.persona,
-        with_composio=args.with_composio,
-        with_slack=args.with_slack,
-        with_telegram=args.with_telegram,
-        with_teams=args.with_teams,
-        workflow=args.workflow,
-        with_acp=args.with_acp,
-        with_eval=args.with_eval,
-        with_litellm=args.with_litellm,
-    )
+    try:
+        kwargs = _scaffold_kwargs(scaffold_agent, args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    result = scaffold_agent(name=args.name, **kwargs)
     if result["status"] == "ok":
         print(f"Agent scaffolded at: {result['path']}")
         print(f"Files created: {result['files_created']}")
@@ -138,7 +181,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
         if channels:
             print(f"Channels: {', '.join(channels)}")
         return 0
-    print(f"Error: {result['message']}", file=sys.stderr)
+    # Not every backend's refusal says which backend is refusing.
+    print(f"Error: {args.framework} backend: {result['message']}", file=sys.stderr)
     return 1
 
 
@@ -337,7 +381,8 @@ def _add_new_agent_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--with-telegram", action="store_true",
-        help="(adk only) Add a Telegram gateway (webhook + Bot API outbound).",
+        help="(adk, hermes) Add a Telegram gateway: webhook + Bot API outbound on adk, "
+             "platforms.telegram enabled in config.yaml on hermes.",
     )
     parser.add_argument(
         "--with-teams", action="store_true",

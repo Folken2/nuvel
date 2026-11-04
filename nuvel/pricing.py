@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from nuvel.platform_sync import sync_prices
+
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _HTTP_TIMEOUT = 15.0
 _TEMPLATE_PRICING = (
@@ -305,6 +307,8 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         apply_diff(pf, diff)
         save(pf)
         print(f"\nwrote {path}")
+    if not args.dry_run:
+        sync_prices(pf.entries)
     return 0
 
 
@@ -326,12 +330,15 @@ def _cmd_add(args: argparse.Namespace) -> int:
     if args.model in pf.entries and _same(pf.entries[args.model], fresh):
         print(f"unchanged: {args.model}  in {_fmt_price(fresh['input'])}  "
               f"out {_fmt_price(fresh['output'])}")
+        if not args.dry_run:
+            sync_prices(pf.entries)
         return 0
 
     action = "updated" if args.model in pf.entries else "added"
     pf.entries[args.model] = fresh
     if not args.dry_run:
         save(pf)
+        sync_prices(pf.entries)
     print(f"{action}: {args.model}  in {_fmt_price(fresh['input'])}  "
           f"out {_fmt_price(fresh['output'])}")
     if args.dry_run:

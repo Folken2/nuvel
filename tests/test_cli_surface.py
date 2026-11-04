@@ -1,8 +1,8 @@
 """The CLI's advertised surface: real ``--help`` output, parsed from stdout.
 
-Support for v1 is adk and hermes. ACP, buzz and anthropic_managed_agents are
-frozen; claude_agent_sdk stays off the list until `nuvel agent create` can
-scaffold it end to end. Frozen code stays importable but must not be offered.
+Support for v1 is adk, hermes and claude-agent-sdk. ACP, buzz and
+anthropic_managed_agents are frozen. Frozen code stays importable but must not
+be offered.
 """
 
 from __future__ import annotations
@@ -19,11 +19,10 @@ import pytest
 from nuvel.cli import SUPPORTED_FRAMEWORKS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EXPECTED_FRAMEWORKS = {"adk", "hermes"}
+EXPECTED_FRAMEWORKS = {"adk", "hermes", "claude-agent-sdk"}
 
 _FROZEN = re.compile(
-    r"\bacp\b|agent client protocol|\bbuzz\b|anthropic[-_ ]*managed|"
-    r"claude[-_ ]*agent[-_ ]*sdk",
+    r"\bacp\b|agent client protocol|\bbuzz\b|anthropic[-_ ]*managed",
     re.IGNORECASE,
 )
 _SUBCOMMANDS = re.compile(r"^  \{([^}]+)\}$", re.MULTILINE)
@@ -76,8 +75,7 @@ def test_no_frozen_name_in_any_help_page(help_pages):
 @pytest.mark.parametrize(
     "text",
     ["acp", "acp serve", "--with-acp", "python -m pkg.acp", "ACP v2", "buzz",
-     "anthropic-managed", "anthropic-managed-agents", "anthropic_managed_agents",
-     "claude-agent-sdk", "claude_agent_sdk"],
+     "anthropic-managed", "anthropic-managed-agents", "anthropic_managed_agents"],
 )
 def test_frozen_pattern_catches_every_spelling(text):
     assert _FROZEN.search(text)
@@ -103,8 +101,7 @@ def test_supported_frameworks_constant():
 
 @pytest.mark.parametrize(
     "framework",
-    ["nope", "buzz", "anthropic-managed-agents", "anthropic_managed_agents",
-     "claude-agent-sdk", "claude_agent_sdk"],
+    ["nope", "buzz", "anthropic-managed-agents", "anthropic_managed_agents"],
 )
 def test_unsupported_framework_error_lists_only_supported(framework, tmp_path):
     result = _nuvel(
@@ -143,7 +140,6 @@ def test_with_acp_flag_warns_it_is_unsupported(tmp_path):
     "module",
     ["nuvel.backends.buzz.scaffold",
      "nuvel.backends.anthropic_managed_agents.scaffold",
-     "nuvel.backends.claude_agent_sdk.scaffold",
      "nuvel.acp.server",
      "nuvel.commands.acp_serve"],
 )

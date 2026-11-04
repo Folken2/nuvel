@@ -29,6 +29,7 @@ from .resilience_plugin import ResiliencePlugin
 from .cost_guard_plugin import CostGuardPlugin
 from .context_window_plugin import ContextWindowPlugin
 from .trace_plugin import TracePlugin
+from .platform_sync_plugin import PlatformSyncPlugin
 from .skill_curator_plugin import SkillCuratorPlugin
 
 from nuvel.guardrails import GuardrailsPlugin
@@ -39,6 +40,8 @@ from nuvel.memory import SIBLING_RUNNER
 cost_guard = CostGuardPlugin()
 context_window = ContextWindowPlugin()
 trace = TracePlugin()
+# Writes completed runs to Postgres. Inert unless NUVEL_PLATFORM_SYNC=1.
+platform_sync = PlatformSyncPlugin()
 context_filter = ContextFilterPlugin(
     num_invocations_to_keep=int(os.getenv("CONTEXT_FILTER_KEEP", "10")),
 )
@@ -72,6 +75,7 @@ PLUGIN_PATHS = [
     "nuvel.plugins.cost_guard",
     "nuvel.plugins.context_window",
     "nuvel.plugins.trace",
+    "nuvel.plugins.platform_sync",
     "nuvel.plugins.context_filter",
     "nuvel.plugins.console_logger",
     "nuvel.plugins.tool_events",
@@ -92,6 +96,7 @@ __all__ = [
     "ToolEventsPlugin",
     "ResiliencePlugin",
     "TracePlugin",
+    "PlatformSyncPlugin",
     "ContextWindowPlugin",
     "SkillCuratorPlugin",
     "GuardrailsPlugin",

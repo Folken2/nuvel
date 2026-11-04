@@ -2,7 +2,7 @@
 
 `--with-telegram` adds a Telegram Bot API inbound webhook and direct outbound replies to a generated ADK agent. Two env vars + one `setWebhook` curl.
 
-ADK only.
+This page covers ADK. On Hermes the same flag instead enables Telegram in the profile's `config.yaml`, with no webhook to set up; see [Pick a backend](pick-a-backend.md#nuvel-feature-support).
 
 ## Scaffold
 
