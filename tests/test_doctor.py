@@ -7,8 +7,10 @@ import http.server
 import io
 import json
 import os
+import re
 import shlex
 import shutil
+import site
 import socket
 import subprocess
 import sys
@@ -30,7 +32,6 @@ _patchers = [
         side_effect=lambda name, provider, **_: doctor.Check(f"{name} reachable", doctor.OK),
     ),
     mock.patch.dict(os.environ, {"HOME": _home.name}),
-    mock.patch("nuvel.pricing.fetch_openrouter", return_value={}),
 ]
 
 
@@ -1351,17 +1352,12 @@ class TestApiKeyValue(unittest.TestCase):
         self.assertEqual(check.status, doctor.FAIL)
         self.assertIn("long random string from acme's dashboard", check.fix)
 
-    def test_custom_endpoint_does_not_excuse_a_value_that_is_not_a_key(self):
-        for env in ({"OPENROUTER_API_BASE": "http://proxy:4000"}, {"OPENROUTER_BASE_URL": "http://proxy:4000"}):
-            for value in ("not a key", "<your key>", "placeholder-placeholder"):
-                with self.subTest(env=env, value=value):
-                    self.assertEqual(self._check(value, **env).status, doctor.FAIL)
-
-    def test_custom_endpoint_accepts_the_proxys_own_key_format(self):
-        for env in ({"OPENROUTER_API_BASE": "http://proxy:4000"}, {"OPENROUTER_BASE_URL": "http://proxy:4000"}):
-            with self.subTest(env=env):
-                self.assertEqual(self._check("sk-1234", **env).status, doctor.OK)
-        self.assertEqual(self._check("sk-1234").status, doctor.FAIL)
+    def test_custom_endpoint_does_not_relax_the_key_rules(self):
+        for suffix in ("_API_BASE", "_BASE_URL"):
+            for value in ("***", "<your key>", "placeholder-placeholder", "not a key", "sk-1234"):
+                with self.subTest(suffix=suffix, value=value):
+                    env = {f"OPENAI{suffix}": "http://proxy:4000"}
+                    self.assertEqual(self._check(value, "openai", **env).status, doctor.FAIL)
 
     def test_placeholder_without_a_known_key_shape_fails(self):
         self.assertEqual(self._check("placeholder-placeholder", "gemini").status, doctor.FAIL)
@@ -1521,14 +1517,12 @@ class TestHintsActuallyRun(_TmpDirCase):
                 self.assertNotRegex(check.fix, r"(export \w+=|curl -I |--path |echo |http://)\S*<")
                 self.assertNotRegex(check.fix, r"<(its|\w+ base|dir|host)")
 
-    def _pricing_fix(self, model: str, catalog: dict | None) -> tuple[str, Path]:
+    def _pricing_fix(self, model: str) -> tuple[str, Path]:
         plugins = self.root / "my pkg" / "plugins"
         plugins.mkdir(parents=True)
         pricing = plugins / "pricing.json"
         pricing.write_text("{}\n")
-        side_effect = RuntimeError("offline") if catalog is None else None
-        with mock.patch("nuvel.pricing.fetch_openrouter", return_value=catalog, side_effect=side_effect):
-            checks = doctor.check_pricing_coverage(self.root, {"FAST_MODEL": model, "REASONING_MODEL": model})
+        checks = doctor.check_pricing_coverage(self.root, {"FAST_MODEL": model, "REASONING_MODEL": model})
         self.assertEqual(checks[0].status, doctor.WARN)
         return checks[0].fix, pricing
 
@@ -1536,8 +1530,8 @@ class TestHintsActuallyRun(_TmpDirCase):
         from nuvel.cli import main
 
         price = {"input": 1e-06, "output": 2e-06}
-        fix, pricing = self._pricing_fix("openrouter/acme/m", {"acme/m": price})
-        argv = shlex.split(fix.split(": ", 1)[1])
+        fix, pricing = self._pricing_fix("openrouter/acme/m")
+        argv = shlex.split(fix.split("run: ", 1)[1].split(". Otherwise", 1)[0])
         self.assertEqual(argv[0], "nuvel")
         with mock.patch("nuvel.pricing.fetch_openrouter", return_value={"acme/m": price}):
             code = main(argv[1:])
@@ -1545,70 +1539,171 @@ class TestHintsActuallyRun(_TmpDirCase):
         self.assertEqual(json.loads(pricing.read_text())["acme/m"]["input"], 1e-06)
         self.assertTrue(doctor._find_pricing_entry("openrouter/acme/m", json.loads(pricing.read_text())))
 
-    def test_pricing_hint_for_an_unlisted_model_does_not_offer_the_command(self):
-        fix, pricing = self._pricing_fix("ollama/llama3", {"acme/m": {"input": 0.0, "output": 0.0}})
-        self.assertNotIn("nuvel pricing add", fix)
+    def test_pricing_hint_offers_the_by_hand_route(self):
+        fix, pricing = self._pricing_fix("ollama/llama3")
         self.assertIn(str(pricing), fix)
         self.assertIn('"ollama/llama3"', fix)
 
-    def test_pricing_hint_says_so_when_the_catalog_is_out_of_reach(self):
-        fix, pricing = self._pricing_fix("acme/m", None)
-        self.assertIn("Once OpenRouter is reachable", fix)
-        self.assertIn(f"nuvel pricing add --target {shlex.quote(str(pricing))} acme/m", fix)
-        self.assertIn("by hand", fix)
-
-    def test_pricing_catalog_is_fetched_once_and_only_when_needed(self):
+    def test_pricing_check_fetches_nothing(self):
         plugins = self.root / "pkg" / "plugins"
         plugins.mkdir(parents=True)
-        (plugins / "pricing.json").write_text('{"acme/m": {"input": 0, "output": 0}}')
-        with mock.patch("nuvel.pricing.fetch_openrouter", return_value={}) as fetch:
-            doctor.check_pricing_coverage(self.root, {"FAST_MODEL": "acme/m", "REASONING_MODEL": "acme/m"})
-            fetch.assert_not_called()
+        (plugins / "pricing.json").write_text("{}")
+        with (
+            mock.patch("nuvel.pricing.fetch_openrouter") as fetch,
+            mock.patch.object(doctor.urllib.request, "urlopen") as urlopen,
+        ):
             doctor.check_pricing_coverage(self.root, {"FAST_MODEL": "a/b", "REASONING_MODEL": "c/d"})
-            fetch.assert_called_once()
+        fetch.assert_not_called()
+        urlopen.assert_not_called()
 
 
-@unittest.skipUnless(
-    os.environ.get("NUVEL_TEST_INSTALL_HINT"),
-    "builds a venv and downloads every dependency; set NUVEL_TEST_INSTALL_HINT=1",
-)
-class TestSourceReinstallHintInFreshVenv(_TmpDirCase):
+# Stands in for setuptools, which a test environment needn't have and pip would otherwise download.
+_OFFLINE_BUILD_BACKEND = '''\
+import base64, hashlib, pathlib, tomllib, zipfile
+
+
+def _project():
+    pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+    project = pyproject["project"]
+    if "dependencies" in project.get("dynamic", ()):
+        files = pyproject["tool"]["setuptools"]["dynamic"]["dependencies"]["file"]
+        lines = "\\n".join(pathlib.Path(f).read_text(encoding="utf-8") for f in files).splitlines()
+        project["dependencies"] = [spec for spec in (l.split("#")[0].strip() for l in lines) if spec]
+    return project
+
+
+def _metadata_files():
+    project = _project()
+    info = f"{project['name'].replace('-', '_')}-{project['version']}.dist-info"
+    metadata = f"Metadata-Version: 2.1\\nName: {project['name']}\\nVersion: {project['version']}\\n"
+    metadata += "".join(f"Requires-Dist: {spec}\\n" for spec in project.get("dependencies", ()))
+    wheel = "Wheel-Version: 1.0\\nGenerator: offline\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n"
+    return info, {"METADATA": metadata, "WHEEL": wheel}
+
+
+def get_requires_for_build_editable(config_settings=None):
+    return []
+
+
+def prepare_metadata_for_build_editable(directory, config_settings=None):
+    info, files = _metadata_files()
+    for name, text in files.items():
+        (pathlib.Path(directory) / info).mkdir(exist_ok=True)
+        (pathlib.Path(directory) / info / name).write_text(text, encoding="utf-8")
+    return info
+
+
+def build_editable(directory, config_settings=None, metadata_directory=None):
+    info, files = _metadata_files()
+    tree = {f"{info}/{name}": text for name, text in files.items()}
+    tree["offline_editable_%s.pth" % info.split("-")[0]] = str(pathlib.Path.cwd()) + "\\n"
+    rows = []
+    for name, text in tree.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=").decode()
+        rows.append(f"{name},sha256={digest},{len(text.encode())}")
+    rows.append(f"{info}/RECORD,,")
+    tree[f"{info}/RECORD"] = "\\n".join(rows) + "\\n"
+    wheel = f"{info.removesuffix('.dist-info')}-py3-none-any.whl"
+    with zipfile.ZipFile(pathlib.Path(directory) / wheel, "w") as archive:
+        for name, text in tree.items():
+            archive.writestr(name, text)
+    return wheel
+'''
+
+
+class _OfflineInstallCase(_TmpDirCase):
+    """Runs install hints with the real pip and no network, against this environment's dependencies.
+
+    Everything but nuvel itself is on PYTHONPATH, so pip still has to find nuvel-cli and
+    nuvel-mcp where the hint says they are. PIP_NO_INDEX makes any download an error.
+    """
+
+    def setUp(self):
+        super().setUp()
+        deps = self.root / "deps"
+        deps.mkdir()
+        for site_dir in map(Path, site.getsitepackages()):
+            for entry in site_dir.iterdir() if site_dir.is_dir() else ():
+                name = entry.name.lower()
+                if not name.startswith(("nuvel", "__editable__", "pip", "setuptools")) and entry.suffix != ".pth":
+                    with contextlib.suppress(FileExistsError):
+                        (deps / entry.name).symlink_to(entry)
+        (deps / "setuptools").mkdir()
+        (deps / "setuptools" / "__init__.py").write_text("")
+        (deps / "setuptools" / "build_meta.py").write_text(_OFFLINE_BUILD_BACKEND)
+        # So the venv is made by this Python, whose version the dependencies above were built for.
+        self.path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
+        self.env = {
+            **os.environ,
+            "PATH": self.path,
+            "PYTHONPATH": str(deps),
+            "PIP_NO_INDEX": "1",
+            "PIP_NO_BUILD_ISOLATION": "0",  # pip reads this one inverted: 0 turns isolation off.
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        }
+
+    def _bash(self, command: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", "-c", command], env=self.env, capture_output=True, text=True, timeout=120)
+
+    def _doctor_checks(self, python: str) -> dict[str, str]:
+        """The install checks, in-process in that Python; `nuvel doctor` would also probe the network."""
+        script = (
+            "import json; from nuvel import doctor\n"
+            "checks = (doctor.check_python_version(), doctor.check_distribution(), doctor.check_declared_dependencies())\n"
+            "print(json.dumps({c.name: c.status for c in checks}))"
+        )
+        proc = subprocess.run(
+            [python, "-c", script], env=self.env, capture_output=True, text=True, timeout=120, cwd=self.root,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        return json.loads(proc.stdout)
+
+
+class TestSourceReinstallHint(_OfflineInstallCase):
+    def test_hint_is_the_make_install_recipe(self):
+        root = doctor._source_root()
+        recipe = re.search(r"^install:\n\t(.+)$", (root / "Makefile").read_text(), re.M).group(1)
+        expected = [str(root) if arg == "." else f"{root}/{arg}" if "/" in arg else arg for arg in shlex.split(recipe)[1:]]
+        self.assertEqual(shlex.split(_command(doctor._reinstall_fix()))[-len(expected):], expected)
+
     def test_hint_succeeds_where_a_plain_editable_install_would_not(self):
         venv = self.root / "fresh venv"
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
         python = str(venv / "bin" / "python")
-        with mock.patch.object(doctor.sys, "executable", python):
+        plain = self._bash(shlex.join([python, "-m", "pip", "install", "-e", str(doctor._source_root())]))
+        self.assertNotEqual(plain.returncode, 0)
+        self.assertIn("nuvel-mcp", plain.stderr)
+        with (
+            mock.patch.object(doctor.sys, "executable", python),
+            mock.patch.object(doctor.importlib.util, "find_spec", return_value=object()),
+        ):
             fix = doctor._reinstall_fix()
-        proc = subprocess.run(["bash", "-c", _command(fix)], capture_output=True, text=True, timeout=1800)
+        proc = self._bash(_command(fix))
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        report = subprocess.run(
-            [python, "-m", "nuvel.cli", "doctor", "--json"], capture_output=True, text=True, timeout=300,
-        )
-        checks = {c["name"]: c["status"] for c in json.loads(report.stdout)["checks"]}
+        checks = self._doctor_checks(python)
         self.assertEqual(checks["nuvel-cli package"], doctor.OK)
         self.assertEqual(checks["declared dependencies"], doctor.OK)
 
 
-@unittest.skipUnless(
-    os.environ.get("NUVEL_TEST_INSTALL_HINT"),
-    "builds a venv and downloads every dependency; set NUVEL_TEST_INSTALL_HINT=1",
-)
-class TestPythonUpgradeHintInCopiedCheckout(_TmpDirCase):
+class TestPythonUpgradeHint(_OfflineInstallCase):
     def test_hint_builds_a_working_venv(self):
         repo = Path(doctor.__file__).resolve().parent.parent
         copy = self.root / "check out"
-        shutil.copytree(repo, copy, ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "generated-agents"))
-        with mock.patch.object(doctor, "_source_root", return_value=copy):
-            fix = doctor._python_upgrade_fix()
-        proc = subprocess.run(["bash", "-c", _command(fix)], capture_output=True, text=True, timeout=1800)
-        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        report = subprocess.run(
-            [str(copy / ".venv/bin/python"), "-m", "nuvel.cli", "doctor", "--json"],
-            capture_output=True, text=True, timeout=300, cwd=self.root,
+        shutil.copytree(
+            repo, copy,
+            ignore=shutil.ignore_patterns(".git", ".venv", ".sandcastle", "__pycache__", "generated-agents", "node_modules"),
         )
-        checks = {c["name"]: c["status"] for c in json.loads(report.stdout)["checks"]}
+        with (
+            mock.patch.object(doctor, "_source_root", return_value=copy),
+            mock.patch.dict(os.environ, {"PATH": self.path}),
+        ):
+            fix = doctor._python_upgrade_fix()
+        proc = self._bash(_command(fix))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        checks = self._doctor_checks(str(copy / ".venv/bin/python"))
         self.assertEqual(checks["Python version"], doctor.OK)
         self.assertEqual(checks["nuvel-cli package"], doctor.OK)
+        self.assertEqual(checks["declared dependencies"], doctor.OK)
 
 
 class _HeadHandler(http.server.BaseHTTPRequestHandler):

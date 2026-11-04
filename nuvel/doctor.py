@@ -504,9 +504,6 @@ def _key_problem(key: str, env: dict[str, str], prefix: str = "") -> Optional[st
     value = env[key]
     if not value.isascii() or any(char.isspace() for char in value):
         return "malformed: contains spaces or non-ASCII characters"
-    stem = key.removesuffix("_API_KEY")
-    if any(env.get(f"{stem}{suffix}", "").strip() for suffix in ("_API_BASE", "_BASE_URL")):
-        return None  # A proxy or gateway sets its own key format, e.g. LiteLLM's sk-1234.
     if prefix and not value.startswith(prefix):
         return f"malformed: does not start with {prefix}"
     if len(value) < _MIN_KEY_LENGTH:
@@ -926,26 +923,11 @@ _MODEL_DEFAULTS = {
 }
 
 
-def _openrouter_catalog() -> Optional[dict]:
-    from nuvel.pricing import fetch_openrouter
-
-    try:
-        return fetch_openrouter()
-    except Exception:  # noqa: BLE001 - a hint is not worth failing the check over
-        return None
-
-
-def _pricing_fix(model: str, path: Path, catalog: Optional[dict]) -> str:
-    from nuvel.pricing import _lookup_catalog
-
+def _pricing_fix(model: str, path: Path) -> str:
     model_id = model.removeprefix("openrouter/")
     add = f"nuvel pricing add --target {shlex.quote(str(path))} {shlex.quote(model_id)}"
     by_hand = f'{json.dumps(model)}: {{"input": <USD per token>, "output": <USD per token>}}'
-    if catalog is None:
-        return f"Once OpenRouter is reachable, run: {add}. If it isn't listed there, add to {path} by hand: {by_hand}"
-    if _lookup_catalog(catalog, model_id):
-        return f"Add it: {add}"
-    return f"OpenRouter doesn't list it, so add to {path} by hand (prices of 0 if it's free): {by_hand}"
+    return f"If OpenRouter lists it, run: {add}. Otherwise add to {path} by hand (prices of 0 if it's free): {by_hand}"
 
 
 def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
@@ -958,9 +940,6 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
 
     Without coverage, llm_response.cost_usd and run_end.total_cost_usd
     stay null and the traces command center can't show cost.
-
-    `nuvel pricing add` only knows OpenRouter's catalog, so an uncovered model
-    is looked up there to tell whether that command can work for it.
     """
     plugins = _find_agent_plugins_dir(cwd)
     if plugins is None:
@@ -991,8 +970,6 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
 
     pricing = {k: v for k, v in raw.items() if not k.startswith("_")}
     checks: list[Check] = []
-    active = [env.get(var) or default for var, default in _MODEL_DEFAULTS.items()]
-    catalog = None if all(_find_pricing_entry(m, pricing) for m in active) else _openrouter_catalog()
     for var, default in _MODEL_DEFAULTS.items():
         model = env.get(var) or default
         source = ".env" if env.get(var) else "default"
@@ -1005,7 +982,7 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
             checks.append(Check(
                 name, WARN,
                 f"no entry for {model!r} ({source}) — costs will be null",
-                _pricing_fix(model, pricing_path, catalog),
+                _pricing_fix(model, pricing_path),
             ))
     return checks
 
