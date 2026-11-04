@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 from .cache import SampleCache
+from .exceptions import ProviderError
 from .judges import Executor, judge_output, run_consistency, run_deterministic_checks
 from .judges.llm import JudgeFn, Rubric
 from .schema import (
@@ -85,11 +86,31 @@ class LLMExecutor:
     def _run_litellm(model: str, instructions: str, user_input: str) -> str:
         import litellm  # noqa: PLC0415 — lazy, keeps import off the test path
 
+        # A failed call otherwise prints litellm's help banner over our error.
+        litellm.suppress_debug_info = True
         messages = []
         if instructions:
             messages.append({"role": "system", "content": instructions})
         messages.append({"role": "user", "content": user_input})
-        response = litellm.completion(model=model, messages=messages, temperature=0.0)
+        try:
+            response = litellm.completion(model=model, messages=messages, temperature=0.0)
+        except litellm.AuthenticationError as exc:
+            try:
+                missing = litellm.validate_environment(model=model).get("missing_keys") or []
+            except Exception:  # noqa: BLE001 — only refines the message
+                missing = []
+            if missing:
+                raise ProviderError(
+                    f"no API key for model {model!r}: set {', '.join(missing)}"
+                ) from exc
+            raise ProviderError(
+                f"the provider rejected the API key for model {model!r}"
+            ) from exc
+        except litellm.APIConnectionError as exc:
+            raise ProviderError(
+                f"cannot reach the provider for model {model!r}; "
+                "check your network connection and the provider's status"
+            ) from exc
         return (response.choices[0].message.content or "").strip()
 
 

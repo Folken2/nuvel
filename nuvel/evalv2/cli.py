@@ -145,9 +145,20 @@ def run_eval(
         cache=cache,
         save_baseline=save_baseline,
     )
-    result = EvalRunner(suite, config).run()
-
-    _persist_result(result, skill, results_dir or get_results_dir(), save_baseline)
+    results_dir = results_dir or get_results_dir()
+    try:
+        result = EvalRunner(suite, config).run()
+        _persist_result(result, skill, results_dir, save_baseline)
+    except EvalError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(
+            f"Error: cannot write eval results under {results_dir}: "
+            f"{exc.strerror or exc}",
+            file=sys.stderr,
+        )
+        return 1
     sync_eval_result(result)
 
     if json_out:

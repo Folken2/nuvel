@@ -227,6 +227,9 @@ class BotClient:
         """
         from .skills import SkillManager
 
+        mgr = SkillManager()
+        # Fail on a bad ref before the profile exists, not after.
+        mgr.check_refs(skill_refs)
         bot = self.create_bot(
             name,
             title=title,
@@ -234,7 +237,6 @@ class BotClient:
             model=model,
             clone_from=clone_from,
         )
-        mgr = SkillManager()
         installed = mgr.install_skills(name, skill_refs, hermes_home=self.hermes_home)
         bot.skills = [s.name for s in installed]
         return bot, installed

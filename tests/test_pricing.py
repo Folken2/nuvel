@@ -131,8 +131,9 @@ def test_save_writes_comments_first_then_sorted_entries(tmp_path):
 def test_load_malformed_json_raises(tmp_path):
     p = tmp_path / "pricing.json"
     p.write_text("{not json", encoding="utf-8")
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ValueError, match="not valid JSON") as info:
         pricing.load(p)
+    assert isinstance(info.value.__cause__, json.JSONDecodeError)
 
 
 # ── Catalog lookup and merge ─────────────────────────────────────────
@@ -392,11 +393,13 @@ def test_cli_sync_no_changes_leaves_file_alone(tmp_path, monkeypatch, capsys):
     assert path.read_text(encoding="utf-8") == before
 
 
-def test_cli_sync_missing_explicit_file_raises(tmp_path):
+def test_cli_sync_missing_explicit_file_is_reported(tmp_path, capsys):
     # An explicit path is checked in resolve_pricing_path, so the command's own
     # "pricing.json not found" branch is not reached for --target <path>.
-    with pytest.raises(FileNotFoundError, match="pricing file not found"):
-        main(["pricing", "sync", "-t", str(tmp_path / "gone.json")])
+    rc, _, err = _run(["pricing", "sync", "-t", str(tmp_path / "gone.json")], capsys)
+    assert rc == 1
+    assert "pricing file not found" in err
+    assert "Traceback" not in err
 
 
 def test_cli_add_new_model_writes_entry(tmp_path, monkeypatch, capsys):
