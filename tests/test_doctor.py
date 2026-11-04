@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import contextlib
+import http.server
 import io
 import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import unittest
@@ -35,7 +38,7 @@ def setUpModule():
     for patcher in _patchers:
         patcher.start()
     for key in list(os.environ):
-        if key.endswith("_API_KEY") or key in ("FAST_MODEL", "REASONING_MODEL", "TRACE_DIR", "XDG_DATA_HOME"):
+        if key.endswith(("_API_KEY", "_API_BASE", "_BASE_URL")) or key in ("FAST_MODEL", "REASONING_MODEL", "TRACE_DIR", "XDG_DATA_HOME"):
             del os.environ[key]
 
 
@@ -152,7 +155,7 @@ class TestAgentChecks(unittest.TestCase):
         self.assertEqual(key_check.status, doctor.FAIL)
 
     def test_env_file_with_required_key_passes(self):
-        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-test\n")
+        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-key-value\n")
         info = doctor.detect_agent(self.root)
         checks = doctor.run_agent_checks(self.root, info)
         key_check = next(
@@ -172,7 +175,7 @@ class TestAgentChecks(unittest.TestCase):
         self.assertEqual(key_check.status, doctor.FAIL)
 
     def test_dockerfile_triggers_docker_check(self):
-        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-test\n")
+        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-key-value\n")
         (self.root / "Dockerfile").write_text("FROM python:3.13\n")
         info = doctor.detect_agent(self.root)
         checks = doctor.run_agent_checks(self.root, info)
@@ -180,7 +183,7 @@ class TestAgentChecks(unittest.TestCase):
         self.assertIn("Docker available", names)
 
     def test_gateways_dir_triggers_gateway_checks(self):
-        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-test\n")
+        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-key-value\n")
         gw = self.root / "gateways"
         gw.mkdir()
         (gw / "slack.py").write_text("# slack")
@@ -253,7 +256,7 @@ class _TmpDirCase(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name).resolve()
 
-    def _adk_agent(self, env: str | None = "OPENROUTER_API_KEY=sk-test\n") -> Path:
+    def _adk_agent(self, env: str | None = "OPENROUTER_API_KEY=sk-or-test-key-value\n") -> Path:
         (self.root / "requirements.txt").write_text("google-adk==1.26.0\n")
         (self.root / "agent.py").write_text("# agent")
         if env is not None:
@@ -294,13 +297,13 @@ class TestCleanBox(_TmpDirCase):
             self.assertNotIn("Traceback", check.detail)
 
     def test_exported_key_is_enough(self):
-        with self._isolated_meta(), mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-1"}):
+        with self._isolated_meta(), mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-key-value"}):
             code, _ = self._run(cwd=self.root)
         self.assertEqual(code, 0)
 
     def test_cwd_env_is_not_read_by_nuvel_run(self):
         # load_dotenv() searches from the installed package, not the cwd.
-        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-or-1\n")
+        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-key-value\n")
         with self._isolated_meta():
             code, out = self._run(cwd=self.root)
         self.assertEqual(code, 1)
@@ -361,14 +364,14 @@ class TestConfigFile(_TmpDirCase):
     def test_environment_satisfies_a_key_and_wins_over_env_file(self):
         agent = self._adk_agent("OPENROUTER_API_KEY=your_key_here\n")
         info = doctor.detect_agent(agent)
-        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-1"}):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-key-value"}):
             checks = doctor.run_agent_checks(agent, info)
         self.assertEqual(self._check(checks, "OPENROUTER_API_KEY").status, doctor.OK)
 
     def test_missing_env_file_is_fine_when_environment_has_the_key(self):
         agent = self._adk_agent(env=None)
         info = doctor.detect_agent(agent)
-        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-1"}):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-key-value"}):
             checks = doctor.run_agent_checks(agent, info)
         self.assertEqual(self._check(checks, ".env file").status, doctor.OK)
 
@@ -602,7 +605,7 @@ class TestBrokenInstall(_TmpDirCase):
                 f"sys.modules[{module!r}] = None\n"
                 "from nuvel import doctor\n"
                 "from nuvel.cli import main\n"
-                "doctor.check_provider_reachable = lambda name, provider: "
+                "doctor.check_provider_reachable = lambda name, provider, **_: "
                 "doctor.Check(name, doctor.OK)\n"
                 "sys.exit(main(['doctor', '--json', '--path', sys.argv[1]]))\n"
             )
@@ -830,7 +833,10 @@ class TestCommandsAreShellQuoted(_TmpDirCase):
     def test_reinstall_from_a_spaced_checkout(self):
         with mock.patch.object(doctor, "_source_root", return_value=self.spaced):
             fix = doctor._reinstall_fix()
-        self.assertEqual(self._split(fix, "/")[-2:], ["-e", str(self.spaced)])
+        self.assertEqual(
+            self._split(fix, "/")[-4:],
+            ["-e", f"{self.spaced}/packages/nuvel-mcp", "-e", str(self.spaced)],
+        )
 
 
 class TestDeletedCwd(_TmpDirCase):
@@ -840,7 +846,7 @@ class TestDeletedCwd(_TmpDirCase):
             "os.mkdir(sys.argv[1]); os.chdir(sys.argv[1]); os.rmdir(sys.argv[1])\n"
             "from nuvel import doctor\n"
             "from nuvel.cli import main\n"
-            "doctor.check_provider_reachable = lambda name, provider: "
+            "doctor.check_provider_reachable = lambda name, provider, **_: "
             "doctor.Check(name, doctor.OK)\n"
             "sys.exit(main(['doctor', *sys.argv[2:]]))\n"
         )
@@ -954,7 +960,7 @@ class TestUnknownProvider(_TmpDirCase):
 
     def test_set_key_exits_zero_and_warns_it_was_not_probed(self):
         agent = self._adk_agent(
-            "FAST_MODEL=acme/m\nREASONING_MODEL=acme/m\nACME_API_KEY=sk\n"
+            "FAST_MODEL=acme/m\nREASONING_MODEL=acme/m\nACME_API_KEY=acme-test-key-value\n"
         )
         code, out = self._run(cwd=agent)
         self.assertEqual(code, 0, out)
@@ -1121,6 +1127,211 @@ class TestHubLocation(_TmpDirCase):
         with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root)}):
             checks = doctor.run_cache_checks()
         self.assertEqual(self._check(checks, "skills hub clone").status, doctor.WARN)
+
+
+class TestReinstallFix(unittest.TestCase):
+    def test_checkout_installs_the_unpublished_workspace_member_first(self):
+        fix = doctor._reinstall_fix()
+        root = doctor._source_root()
+        self.assertIn("source checkout", fix)
+        self.assertEqual(
+            shlex.split(fix.split(": ", 1)[1]),
+            [sys.executable, "-m", "pip", "install", "-e", f"{root}/packages/nuvel-mcp", "-e", str(root)],
+        )
+
+    def test_published_install_says_so(self):
+        with mock.patch.object(doctor, "_source_root", return_value=None):
+            fix = doctor._reinstall_fix()
+        self.assertIn("published package", fix)
+        self.assertTrue(fix.endswith("install --force-reinstall nuvel-cli"), fix)
+        self.assertNotIn("-e", shlex.split(fix))
+
+    def test_venv_without_pip_goes_through_uv(self):
+        with mock.patch.object(doctor.importlib.util, "find_spec", return_value=None):
+            command = doctor._pip_install("nuvel-cli")
+        self.assertEqual(shlex.split(command), ["uv", "pip", "install", "--python", sys.executable, "nuvel-cli"])
+
+
+class TestApiKeyValue(unittest.TestCase):
+    def _check(self, value: str, name: str = "openrouter", **env: str) -> doctor.Check:
+        checks = doctor._provider_key_checks(
+            [name], {doctor._provider_key(name): value, **env}, lambda key: f"Add {key}=<your key> to .env",
+        )
+        return checks[0]
+
+    def test_values_that_are_not_keys_fail_without_being_echoed(self):
+        for value in (
+            "", "   ", "<your key>", "*** key>", "<value>", "***", "...", "your key", "your-api-key",
+            "your_key_here", "sk-or-", "sk-test", "abc", "sk-ant-api03-a-different-providers-key",
+            "sk-or-v1-has a-space-in-it-000", "sk-or-v1-nön-äscii-value-000",
+        ):
+            with self.subTest(value=value):
+                check = self._check(value)
+                self.assertEqual(check.status, doctor.FAIL)
+                if value.strip():
+                    self.assertNotIn(value, check.detail)
+                self.assertIn("sk-or-", check.fix)
+                self.assertIn("https://openrouter.ai/keys", check.fix)
+
+    def test_each_provider_names_its_own_key_shape(self):
+        for name, prefix in (("anthropic", "sk-ant-"), ("openai", "sk-"), ("groq", "gsk_")):
+            with self.subTest(provider=name):
+                self.assertEqual(self._check(f"{prefix}0123456789abcdef", name).status, doctor.OK)
+                check = self._check("not-this-providers-format", name)
+                self.assertEqual(check.status, doctor.FAIL)
+                self.assertIn(f"starts with {prefix}", check.detail + check.fix)
+                self.assertIn(doctor._PROVIDERS[name].keys_page, check.fix)
+
+    def test_real_shaped_keys_pass(self):
+        self.assertEqual(self._check("sk-or-v1-" + "0a" * 32).status, doctor.OK)
+        self.assertEqual(self._check("AIzaSy" + "A1b2" * 8, "gemini").status, doctor.OK)
+
+    def test_unknown_provider_gets_the_generic_shape_rules(self):
+        self.assertEqual(self._check("acme-0123456789abcdef", "acme").status, doctor.OK)
+        check = self._check("short", "acme")
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertIn("long random string from acme's dashboard", check.fix)
+
+    def test_custom_endpoint_sets_its_own_key_format(self):
+        self.assertEqual(self._check("sk-1234", "openai", OPENAI_BASE_URL="http://proxy:4000").status, doctor.OK)
+        self.assertEqual(self._check("sk-1234", "openai", OPENAI_API_BASE="http://proxy:4000").status, doctor.OK)
+        # A proxy doesn't make our own fill-in-the-blank text a key.
+        self.assertEqual(self._check("<your key>", "openai", OPENAI_BASE_URL="http://proxy:4000").status, doctor.FAIL)
+
+    def test_webhook_secrets_keep_the_placeholder_rule_only(self):
+        self.assertEqual(doctor._check_env_key("SECRET", {"SECRET": "short"}).status, doctor.OK)
+        self.assertEqual(doctor._check_env_key("SECRET", {"SECRET": "<value>"}).status, doctor.FAIL)
+
+
+class TestDoctorsOwnHintIsNotAKey(_TmpDirCase):
+    def test_placeholder_in_env_file_fails_in_text_and_json_alike(self):
+        (self.root / "requirements.txt").write_text("google-adk\n")
+        (self.root / "agent.py").write_text("")
+        (self.root / ".env").write_text("OPENROUTER_API_KEY=<your key>\n")
+        code, text = self._run(cwd=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("[FAIL]  OPENROUTER_API_KEY", text)
+        json_code, out = self._run(cwd=self.root, as_json=True)
+        report = json.loads(out)
+        self.assertEqual(json_code, 1)
+        check = next(c for c in report["checks"] if c["name"] == "OPENROUTER_API_KEY")
+        self.assertEqual(check["status"], doctor.FAIL)
+        self.assertIn(check["detail"], text)
+        self.assertIn(check["fix"], text)
+
+
+class TestHermesEnvLocation(_TmpDirCase):
+    def _profile(self) -> Path:
+        profile = self.root / "bot"
+        profile.mkdir()
+        (profile / "config.yaml").write_text("model: {provider: openrouter}\n")
+        (profile / "SOUL.md").write_text("soul")
+        return profile
+
+    def _env_checks(self, profile: Path) -> tuple[doctor.Check, doctor.Check]:
+        checks = doctor.run_agent_checks(self.root, doctor.detect_agent(self.root))
+        return self._check(checks, ".env file"), self._check(checks, "OPENROUTER_API_KEY")
+
+    def test_env_in_a_parent_directory_does_not_count(self):
+        profile = self._profile()
+        (self.root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-key-value\n")
+        env_file, key = self._env_checks(profile)
+        self.assertEqual((env_file.status, key.status), (doctor.FAIL, doctor.FAIL))
+        self.assertIn(f"{profile}/.env", env_file.fix)
+        self.assertIn(f"{profile}/.env", key.fix)
+
+    def test_env_in_the_profile_counts(self):
+        profile = self._profile()
+        (profile / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-key-value\n")
+        env_file, key = self._env_checks(profile)
+        self.assertEqual((env_file.status, key.status), (doctor.OK, doctor.OK))
+        self.assertIn(f"{profile}/.env", env_file.detail)
+
+
+class _HeadHandler(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+class TestOllamaBase(_TmpDirCase):
+    def setUp(self):
+        super().setUp()
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HeadHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        self.live = f"http://127.0.0.1:{server.server_address[1]}"
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            self.dead = f"http://127.0.0.1:{sock.getsockname()[1]}"
+
+    def _probe(self, base: str, name: str = "ollama") -> doctor.Check:
+        return _REAL_REACHABLE(name, doctor._PROVIDERS[name], 2.0, env={"OLLAMA_API_BASE": base})
+
+    def test_configured_base_is_probed(self):
+        for name in ("ollama", "ollama_chat"):
+            with self.subTest(provider=name):
+                check = self._probe(self.live, name)
+                self.assertEqual(check.status, doctor.OK, check.detail)
+                self.assertIn(self.live, check.detail)
+
+    def test_dead_configured_base_is_not_reported_as_a_local_problem(self):
+        check = self._probe(self.dead)
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertIn(f"not reachable at {self.dead}/", check.detail)
+        self.assertNotIn("locally", check.detail)
+        self.assertNotIn("ollama serve", check.fix)
+        self.assertIn(f"curl -I {self.dead}/", check.fix)
+
+    def test_unset_base_is_reported_as_not_running_locally(self):
+        provider = doctor.Provider(None, f"{self.dead}/", base_env="OLLAMA_API_BASE")
+        for env in ({}, {"OLLAMA_API_BASE": "  "}, None):
+            with self.subTest(env=env), mock.patch.object(doctor.shutil, "which", return_value="/bin/ollama"):
+                check = _REAL_REACHABLE("ollama", provider, 2.0, env=env)
+                self.assertEqual(check.status, doctor.FAIL)
+                self.assertIn("not running locally", check.detail)
+                self.assertTrue(check.fix.startswith("Start it: ollama serve"), check.fix)
+
+    def test_start_hint_installs_ollama_first_when_it_is_missing(self):
+        with mock.patch.object(doctor.shutil, "which", return_value=None):
+            self.assertIn("Install Ollama", doctor._local_server_fix("OLLAMA_API_BASE"))
+
+    def test_base_that_is_not_a_url_says_so(self):
+        for base in ("your_url_here", "ftp://host", "http://[bad", "http://"):
+            with self.subTest(base=base):
+                check = self._probe(base)
+                self.assertEqual(check.status, doctor.FAIL)
+                self.assertIn("OLLAMA_API_BASE is not an http(s) URL", check.detail)
+
+    def test_credentials_in_the_base_are_dropped(self):
+        host = self.live.removeprefix("http://")
+        check = self._probe(f"http://user:hunter2@{host}/?token=hunter2")
+        self.assertEqual(check.status, doctor.OK, check.detail)
+        self.assertNotIn("hunter2", check.detail)
+
+    def test_base_from_the_env_file_reaches_the_probe(self):
+        (self.root / "requirements.txt").write_text("google-adk\n")
+        (self.root / "agent.py").write_text("")
+        (self.root / ".env").write_text(
+            f"FAST_MODEL=ollama/m\nREASONING_MODEL=ollama/m\nOLLAMA_API_BASE={self.live}\n"
+        )
+        with mock.patch.object(doctor, "check_provider_reachable", _REAL_REACHABLE):
+            code, out = self._run(cwd=self.root, as_json=True)
+        check = next(c for c in json.loads(out)["checks"] if c["name"] == "ollama reachable")
+        self.assertEqual((code, check["status"]), (0, doctor.OK), out)
+        self.assertIn(self.live, check["detail"])
+
+    def test_cloud_providers_ignore_it(self):
+        provider = doctor.Provider("K", f"{self.dead}/")
+        check = _REAL_REACHABLE("cloud", provider, 2.0, env={"OLLAMA_API_BASE": self.live})
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertNotIn(self.live, check.detail)
 
 
 _REAL_REACHABLE = doctor.check_provider_reachable

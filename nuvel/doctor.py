@@ -21,6 +21,7 @@ import contextlib
 import http.client
 import importlib
 import importlib.metadata
+import importlib.util
 import io
 import json
 import os
@@ -33,6 +34,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +44,8 @@ OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-_PLACEHOLDER_HINTS = ("your_", "_here", "changeme", "change_me", "xxx", "todo")
+_PLACEHOLDER_HINTS = ("your_", "your-", "your ", "_here", "changeme", "change_me", "xxx", "todo")
+_MIN_KEY_LENGTH = 16  # Well below any provider's real keys, so only an obvious non-key trips it.
 _NETWORK_TIMEOUT = 5.0
 _STALE_CACHE_DAYS = 30
 _ASCII_GLYPHS = str.maketrans({"→": "->", "—": "-"})
@@ -140,7 +143,9 @@ def _parse_env_lines(text: str) -> dict[str, str]:
 
 
 def _is_placeholder(value: str) -> bool:
-    if not value:
+    value = value.strip()
+    # The <...> form is what our own next steps tell people to fill in; *** and ... are redactions.
+    if not value or value.startswith("<") or value.endswith(">") or not set(value) - set("*.-_"):
         return True
     low = value.lower()
     return any(hint in low for hint in _PLACEHOLDER_HINTS)
@@ -155,13 +160,23 @@ def _source_root() -> Optional[Path]:
     return root if os.path.isfile(root / "pyproject.toml") else None
 
 
+def _pip_install(*args: str) -> str:
+    """A pip install for the Python doctor runs under; venvs made by uv have no pip."""
+    if importlib.util.find_spec("pip"):
+        return shlex.join([sys.executable, "-m", "pip", "install", *args])
+    return shlex.join(["uv", "pip", "install", "--python", sys.executable, *args])
+
+
 def _reinstall_fix() -> str:
     root = _source_root()
     if root:
-        return f"Reinstall from source: {shlex.join([sys.executable, '-m', 'pip', 'install', '-e', str(root)])}"
+        # nuvel-mcp is on no index, so a checkout has to install it from its own tree first.
+        # This is `make install`, except that it can't pick up another environment's pip.
+        command = _pip_install("-e", f"{root}/packages/nuvel-mcp", "-e", str(root))
+        return f"Reinstall this source checkout: {command}"
     if "pipx" in Path(sys.prefix).parts:
-        return "Reinstall: pipx reinstall nuvel-cli"
-    return f"Reinstall: {shlex.quote(sys.executable)} -m pip install --force-reinstall nuvel-cli"
+        return "Reinstall the published package: pipx reinstall nuvel-cli"
+    return f"Reinstall the published package: {_pip_install('--force-reinstall', 'nuvel-cli')}"
 
 
 def check_python_version() -> Check:
@@ -357,34 +372,37 @@ class Provider:
     key_env: Optional[str]  # None for a local provider that takes no key.
     url: str  # Probed without credentials, so any HTTP response proves reachability.
     keys_page: str = ""
+    key_prefix: str = ""  # Left out where a provider's key format isn't a stable promise.
+    base_env: Optional[str] = None  # Env var that moves the endpoint away from ``url``.
 
 
 _PROVIDERS: dict[str, Provider] = {
     "openrouter": Provider(
         "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/models",
-        "https://openrouter.ai/keys",
+        "https://openrouter.ai/keys", "sk-or-",
     ),
     "anthropic": Provider(
         "ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/models",
-        "https://console.anthropic.com/settings/keys",
+        "https://console.anthropic.com/settings/keys", "sk-ant-",
     ),
     "openai": Provider(
         "OPENAI_API_KEY", "https://api.openai.com/v1/models",
-        "https://platform.openai.com/api-keys",
+        "https://platform.openai.com/api-keys", "sk-",
     ),
     "groq": Provider(
         "GROQ_API_KEY", "https://api.groq.com/openai/v1/models",
-        "https://console.groq.com/keys",
+        "https://console.groq.com/keys", "gsk_",
     ),
     "gemini": Provider(
         "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/",
         "https://aistudio.google.com/apikey",
     ),
-    "ollama": Provider(None, "http://localhost:11434/"),
+    "ollama": Provider(None, "http://localhost:11434/", base_env="OLLAMA_API_BASE"),
+    "ollama_chat": Provider(None, "http://localhost:11434/", base_env="OLLAMA_API_BASE"),
 }
 
 # Known to LiteLLM, but no single API key to look for and no one URL to probe.
-_NON_KEY_PROVIDERS = ("bedrock", "vertex_ai", "sagemaker", "ollama_chat")
+_NON_KEY_PROVIDERS = ("bedrock", "vertex_ai", "sagemaker")
 
 # LiteLLM infers the provider of a model id with no provider/ prefix.
 _BARE_MODEL_PREFIXES = {
@@ -432,6 +450,28 @@ def _check_env_key(key: str, env: dict[str, str], fix: str = "", missing: str = 
     if _is_placeholder(env[key]):
         return Check(key, missing, "empty or still a placeholder", fix)
     return Check(key, OK, "set")
+
+
+def _key_problem(key: str, env: dict[str, str], prefix: str = "") -> Optional[str]:
+    """Why this value can't be a real API key, or None. Never quotes the value."""
+    stem = key.removesuffix("_API_KEY")
+    if any(env.get(f"{stem}{suffix}", "").strip() for suffix in ("_API_BASE", "_BASE_URL")):
+        return None  # A proxy or gateway sets its own key format.
+    value = env[key]
+    if not value.isascii() or any(char.isspace() for char in value):
+        return "malformed: contains spaces or non-ASCII characters"
+    if prefix and not value.startswith(prefix):
+        return f"malformed: does not start with {prefix}"
+    if len(value) < _MIN_KEY_LENGTH:
+        return "malformed: too short to be a real key"
+    return None
+
+
+def _check_api_key(key: str, env: dict[str, str], fix: str, prefix: str = "") -> Check:
+    check = _check_env_key(key, env, fix)
+    if check.status == OK and (problem := _key_problem(key, env, prefix)):
+        return Check(key, FAIL, problem, fix)
+    return check
 
 
 def _find_env_file(start: Path) -> Optional[Path]:
@@ -562,45 +602,88 @@ def _provider_key_checks(
         if provider is None:
             known = ", ".join(_PROVIDERS)
             check = _safe(
-                _check_env_key, key, key, env,
-                f"{key_fix(key)}, or route the model through a provider doctor knows ({known})",
+                _check_api_key, key, key, env,
+                f"{key_fix(key)}; a real key is a long random string from {name}'s dashboard. "
+                f"Or route the model through a provider doctor knows ({known})",
             )
             if check.status == FAIL:
                 check.detail += f" (the key expected for unknown provider {name})"
             checks.append(check)
             continue
-        where = f" (get one at {provider.keys_page})" if provider.keys_page else ""
-        checks.append(_safe(_check_env_key, key, key, env, f"{key_fix(key)}{where}"))
+        shape = f"starts with {provider.key_prefix}" if provider.key_prefix else "is a long random string"
+        fix = f"{key_fix(key)}; a real key {shape} (get one at {provider.keys_page})"
+        checks.append(_safe(_check_api_key, key, key, env, fix, provider.key_prefix))
     return checks
 
 
-def check_provider_reachable(name: str, provider: Provider, timeout: float = _NETWORK_TIMEOUT) -> Check:
-    check_name = f"{name} reachable"
-    request = urllib.request.Request(provider.url, method="HEAD")
-    fix = (
-        "Start it: ollama serve" if name == "ollama" else
-        f"Check your connection or proxy (HTTPS_PROXY), then retry: curl -I {provider.url}"
+def _probe_url(base: str) -> Optional[str]:
+    """Where to probe a configured base URL, or None if it isn't http(s).
+
+    Credentials and query strings are dropped: the probe sends none, and the
+    URL ends up in the report.
+    """
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return None
+    host = parts.netloc.rpartition("@")[2]
+    if parts.scheme not in ("http", "https") or not host:
+        return None
+    return f"{parts.scheme}://{host}{parts.path.rstrip('/')}/"
+
+
+def _local_server_fix(base_env: str) -> str:
+    start = "Start it: ollama serve" if shutil.which("ollama") else (
+        "Install Ollama (https://ollama.com/download), then start it: ollama serve"
     )
+    return f"{start}. If it runs on another machine, set {base_env} to its URL"
+
+
+def check_provider_reachable(
+    name: str, provider: Provider, timeout: float = _NETWORK_TIMEOUT, *, env: Optional[dict[str, str]] = None,
+) -> Check:
+    check_name = f"{name} reachable"
+    url = provider.url
+    base = (env or {}).get(provider.base_env, "").strip() if provider.base_env else ""
+    if base:
+        url = _probe_url(base)
+        if url is None:
+            return Check(
+                check_name, FAIL, f"{provider.base_env} is not an http(s) URL",
+                f"Set {provider.base_env} to the server's URL, like http://<host>:11434",
+            )
+        where = f"not reachable at {url} (from {provider.base_env})"
+        fix = (
+            f"Check that the server is up and accepts remote connections, and that "
+            f"{provider.base_env} is right, then retry: curl -I {shlex.quote(url)}"
+        )
+    elif provider.base_env:
+        where = f"not running locally at {url}"
+        fix = _local_server_fix(provider.base_env)
+    else:
+        where = url
+        fix = f"Check your connection or proxy (HTTPS_PROXY), then retry: curl -I {url}"
+    request = urllib.request.Request(url, method="HEAD")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return Check(check_name, OK, f"{provider.url} (HTTP {response.status})")
+            return Check(check_name, OK, f"{url} (HTTP {response.status})")
     except urllib.error.HTTPError as exc:
         # No credentials were sent, so 401/403/404/405 still prove the route works.
         if exc.code >= 500:
             return Check(
-                check_name, WARN, f"{provider.url} answered HTTP {exc.code}",
-                f"Likely a provider outage; retry shortly: curl -I {provider.url}",
+                check_name, WARN, f"{url} answered HTTP {exc.code}",
+                f"Likely a provider outage; retry shortly: curl -I {shlex.quote(url)}",
             )
-        return Check(check_name, OK, f"{provider.url} (HTTP {exc.code})")
+        return Check(check_name, OK, f"{url} (HTTP {exc.code})")
     except urllib.error.URLError as exc:
-        return Check(check_name, FAIL, f"{provider.url}: {exc.reason}", fix)
+        return Check(check_name, FAIL, f"{where}: {exc.reason}", fix)
     except (OSError, http.client.HTTPException) as exc:
-        return Check(check_name, FAIL, f"{provider.url}: {exc}", fix)
+        return Check(check_name, FAIL, f"{where}: {exc}", fix)
 
 
-def run_network_checks(providers: Iterable[str]) -> list[Check]:
+def run_network_checks(providers: Iterable[str], env: Optional[dict[str, str]] = None) -> list[Check]:
     checks = [
-        _safe(check_provider_reachable, f"{name} reachable", name, _PROVIDERS[name])
+        _safe(check_provider_reachable, f"{name} reachable", name, _PROVIDERS[name], env=env)
         if name in _PROVIDERS else
         Check(
             f"{name} reachable", WARN, "doctor does not know its endpoint, nothing probed",
@@ -897,7 +980,11 @@ class _AgentConfig:
 
 def _load_agent_config(cwd: Path, info: AgentInfo) -> _AgentConfig:
     root = info.root or cwd
-    env_file = _find_env_file(root)
+    if info.framework == "hermes":
+        # A profile is its own HERMES_HOME, and Hermes loads $HERMES_HOME/.env only: no upward search.
+        env_file = root / ".env" if os.path.isfile(root / ".env") else None
+    else:
+        env_file = _find_env_file(root)
     env = _effective_env(env_file)
     hermes_check, hermes_provider, platforms = None, None, []
     if info.framework == "hermes":
@@ -1022,7 +1109,7 @@ def check_acp_handshake(cwd: Path, pkg: str, timeout: float = 20.0) -> Check:
     """
     name = "ACP stdio handshake"
     cmd = [sys.executable, "-m", f"{pkg}.acp"]
-    deps_fix = f"Install the agent's deps: {shlex.join([sys.executable, '-m', 'pip', 'install', '-r', f'{cwd}/requirements.txt'])}"
+    deps_fix = f"Install the agent's deps: {_pip_install('-r', f'{cwd}/requirements.txt')}"
     debug_fix = f"Run it directly to see the error: cd {shlex.quote(str(cwd))} && {shlex.join(cmd)}"
     env = {**os.environ, "DEV_MODE": "true", "LOG_LEVEL": "ERROR"}
     try:
@@ -1157,7 +1244,7 @@ def _collect_target_sections(cwd: Path, acp_pkg: Optional[str]) -> list[tuple[st
         ))
 
     sections.append(("State", _safe_many(run_state_checks, "state dirs", cwd, info, env)))
-    sections.append(("Network", _safe_many(run_network_checks, "provider network", providers)))
+    sections.append(("Network", _safe_many(run_network_checks, "provider network", providers, env)))
     sections.append(("Caches", _safe_many(run_cache_checks, "caches")))
     if acp_pkg:
         sections.append(("ACP adapter", run_acp_checks(cwd, acp_pkg)))
