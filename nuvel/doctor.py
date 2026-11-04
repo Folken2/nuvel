@@ -6,6 +6,9 @@ Inspired by `hermes doctor`. Prints a categorised checklist with
 as structured output. Every check is wrapped so a single missing dependency
 cannot abort the whole report.
 
+Filesystem probes use os.path rather than Path.is_file()/is_dir(), which raise
+PermissionError below an unreadable directory on the Python versions we support.
+
 A key can come from the process environment or a .env file, and the
 environment wins: that is how load_dotenv() behaves at runtime. Secret values
 are never printed, only the names of the variables that hold them.
@@ -20,24 +23,24 @@ import importlib.metadata
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-_PLACEHOLDER_HINTS = ("your_", "_here", "changeme", "xxx", "todo")
+_PLACEHOLDER_HINTS = ("your_", "_here", "changeme", "change_me", "xxx", "todo")
 _NETWORK_TIMEOUT = 5.0
 _STALE_CACHE_DAYS = 30
 _REPORT_FIX = (
@@ -74,24 +77,31 @@ class AgentInfo:
 # ── helpers ─────────────────────────────────────────────────────────
 
 
+def _crashed(name: str, exc: Exception) -> Check:
+    fix = _REPORT_FIX
+    if isinstance(exc, OSError) and exc.filename:
+        fix = f"Check that the path exists and you can read it: ls -ld {exc.filename}"
+    return Check(name, FAIL, f"check raised {type(exc).__name__}: {exc}", fix)
+
+
 def _safe(fn, name: str, *args, **kwargs) -> Check:
     try:
         return fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 - never crash doctor
-        return Check(name, FAIL, f"check raised {type(exc).__name__}: {exc}", _REPORT_FIX)
+        return _crashed(name, exc)
 
 
 def _safe_many(fn, name: str, *args, **kwargs) -> list[Check]:
     try:
         return fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 - never crash doctor
-        return [Check(name, FAIL, f"check raised {type(exc).__name__}: {exc}", _REPORT_FIX)]
+        return [_crashed(name, exc)]
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
     """Best-effort .env parser, using python-dotenv's own grammar when installed."""
     env: dict[str, str] = {}
-    if not path.is_file():
+    if not os.path.isfile(path):
         return env
     try:
         text = path.read_text(encoding="utf-8")
@@ -138,7 +148,7 @@ def _is_placeholder(value: str) -> bool:
 def _source_root() -> Optional[Path]:
     """The repo root when nuvel runs from a source checkout, else None."""
     root = Path(__file__).resolve().parent.parent
-    return root if (root / "pyproject.toml").is_file() else None
+    return root if os.path.isfile(root / "pyproject.toml") else None
 
 
 def _reinstall_fix() -> str:
@@ -185,8 +195,20 @@ def check_distribution() -> Check:
     except importlib.metadata.PackageNotFoundError:
         return Check(name, FAIL, "no installed package metadata", _reinstall_fix())
     root = _source_root()
+    try:
+        # Local: it's stdlib only from 3.11, and doctor has to report an older Python.
+        import tomllib
+    except ImportError:
+        return Check(name, OK, version)
     if root:
-        declared = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        pyproject = root / "pyproject.toml"
+        try:
+            declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # TOMLDecodeError and UnicodeDecodeError are ValueErrors.
+            return Check(
+                name, FAIL, f"cannot read {pyproject}",
+                f"Fix or restore it: git -C {root} checkout -- pyproject.toml",
+            )
         wanted = declared.get("project", {}).get("version")
         if wanted and wanted != version:
             return Check(
@@ -272,10 +294,10 @@ def run_install_checks() -> list[Check]:
 
 def _find_hermes_profile(cwd: Path) -> Optional[Path]:
     """Hermes projects have no requirements.txt: a profile is config.yaml + SOUL.md."""
-    if not cwd.is_dir():
+    if not os.path.isdir(cwd):
         return None
-    for candidate in (cwd, *sorted(p for p in cwd.iterdir() if p.is_dir())):
-        if (candidate / "config.yaml").is_file() and (candidate / "SOUL.md").is_file():
+    for candidate in (cwd, *sorted(p for p in cwd.iterdir() if os.path.isdir(p))):
+        if os.path.isfile(candidate / "config.yaml") and os.path.isfile(candidate / "SOUL.md"):
             return candidate
     return None
 
@@ -284,24 +306,24 @@ def detect_agent(cwd: Path) -> AgentInfo:
     info = AgentInfo()
     # A nuvel checkout looks like an ADK agent, but what runs from it is the
     # meta-agent, which has its own checks.
-    if (cwd / "nuvel" / "doctor.py").is_file():
+    if os.path.isfile(cwd / "nuvel" / "doctor.py"):
         return info
     profile = _find_hermes_profile(cwd)
     if profile:
         return AgentInfo(is_agent=True, framework="hermes", root=profile)
     req = cwd / "requirements.txt"
     has_entry = (
-        (cwd / "agent.py").is_file()
-        or (cwd / "server.py").is_file()
-        or (cwd / "run_adk.py").is_file()
+        os.path.isfile(cwd / "agent.py")
+        or os.path.isfile(cwd / "server.py")
+        or os.path.isfile(cwd / "run_adk.py")
     )
-    if not has_entry and cwd.is_dir():
+    if not has_entry and os.path.isdir(cwd):
         # ADK agents put agent.py inside a package subdir.
         for sub in cwd.iterdir():
-            if sub.is_dir() and (sub / "agent.py").is_file():
+            if os.path.isdir(sub) and os.path.isfile(sub / "agent.py"):
                 has_entry = True
                 break
-    if not req.is_file() or not has_entry:
+    if not os.path.isfile(req) or not has_entry:
         return info
     try:
         text = req.read_text(encoding="utf-8").lower()
@@ -351,35 +373,61 @@ _PROVIDERS: dict[str, Provider] = {
     "ollama": Provider(None, "http://localhost:11434/"),
 }
 
+# Known to LiteLLM, but no single API key to look for and no one URL to probe.
+_NON_KEY_PROVIDERS = ("bedrock", "vertex_ai", "sagemaker", "ollama_chat")
+
+# LiteLLM infers the provider of a model id with no provider/ prefix.
+_BARE_MODEL_PREFIXES = {
+    "gpt-": "openai", "chatgpt-": "openai", "o1": "openai", "o3": "openai", "o4": "openai",
+    "claude-": "anthropic",
+    "gemini-": "gemini",
+}
+
 # Frameworks pinned to one provider; ADK and Hermes read theirs from config.
 _FIXED_PROVIDERS: dict[str, str] = {
     "claude-agent-sdk": "anthropic",
     "anthropic-managed-agents": "anthropic",
 }
 
+# The gateway refuses every request without these.
 _GATEWAY_KEYS: dict[str, tuple[str, ...]] = {
-    "slack": ("SLACK_BOT_TOKEN", "COMPOSIO_WEBHOOK_SECRET"),
+    "slack": ("COMPOSIO_WEBHOOK_SECRET",),
+    "telegram": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"),
+}
+
+_TEAMS_SDK_FIX = "Only needed for Azure Bot Service; without it the bridge runs in anonymous mode. Add {key}=<value> to .env"
+
+# The gateway runs without these, in a reduced mode the next step describes.
+_OPTIONAL_GATEWAY_KEYS: dict[str, dict[str, str]] = {
+    "slack": {
+        "SLACK_BOT_TOKEN": "Only needed to download uploaded files; without it the agent gets just their URLs. Add {key}=<value> to .env",
+    },
+    "teams_bridge": {
+        "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID": _TEAMS_SDK_FIX,
+        "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET": _TEAMS_SDK_FIX,
+        "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID": _TEAMS_SDK_FIX,
+    },
+}
+
+# Hermes refuses to start an enabled platform without these.
+_HERMES_PLATFORM_KEYS: dict[str, tuple[str, ...]] = {
     "telegram": ("TELEGRAM_BOT_TOKEN",),
-    "teams_bridge": (
-        "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID",
-        "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET",
-    ),
 }
 
 
-def _check_env_key(key: str, env: dict[str, str], fix: str = "") -> Check:
+def _check_env_key(key: str, env: dict[str, str], fix: str = "", missing: str = FAIL) -> Check:
     fix = fix or f"Add {key}=<value> to .env"
     if key not in env:
-        return Check(key, FAIL, "not set in .env or the environment", fix)
+        return Check(key, missing, "not set in .env or the environment", fix)
     if _is_placeholder(env[key]):
-        return Check(key, FAIL, "empty or still a placeholder", fix)
+        return Check(key, missing, "empty or still a placeholder", fix)
     return Check(key, OK, "set")
 
 
 def _find_env_file(start: Path) -> Optional[Path]:
     """Find the .env load_dotenv() would load for code living in ``start``."""
     for directory in (start, *start.parents):
-        if (directory / ".env").is_file():
+        if os.path.isfile(directory / ".env"):
             return directory / ".env"
     return None
 
@@ -416,7 +464,21 @@ def _key_is_set(key: str, env: dict[str, str]) -> bool:
 
 
 def _model_provider(model: str) -> str:
-    return model.split("/", 1)[0] if "/" in model else model
+    if "/" in model:
+        return model.split("/", 1)[0]
+    for prefix, provider in _BARE_MODEL_PREFIXES.items():
+        if model.startswith(prefix):
+            return provider
+    return model
+
+
+def _provider_key(name: str) -> Optional[str]:
+    """The env var holding this provider's key; unknown ones follow LiteLLM's naming."""
+    if name in _PROVIDERS:
+        return _PROVIDERS[name].key_env
+    if name in _NON_KEY_PROVIDERS:
+        return None
+    return re.sub(r"[^A-Z0-9]+", "_", name.upper()) + "_API_KEY"
 
 
 def configured_providers(
@@ -433,44 +495,72 @@ def configured_providers(
     return [fixed] if fixed else []
 
 
-def check_hermes_config(profile: Path) -> tuple[Check, Optional[str]]:
-    """Validate a Hermes config.yaml; return the check and its model.provider."""
+def check_hermes_config(profile: Path) -> tuple[Check, Optional[str], list[str]]:
+    """Validate a Hermes config.yaml; return the check, model.provider, enabled platforms."""
     name = "config.yaml"
     path = profile / "config.yaml"
     try:
         import yaml
     except ImportError:
-        return Check(name, WARN, "cannot validate without pyyaml", _reinstall_fix()), None
+        return Check(name, WARN, "cannot validate without pyyaml", _reinstall_fix()), None, []
     try:
-        config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return Check(name, FAIL, f"unreadable: {exc.strerror}", f"Fix its permissions: chmod u+r {path}"), None, []
+    except UnicodeDecodeError:
+        return Check(name, FAIL, "not valid UTF-8", f"Re-save {path} as UTF-8"), None, []
+    try:
+        config = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
         where = getattr(exc, "problem_mark", None)
         at = f" at line {where.line + 1}" if where else ""
-        return Check(name, FAIL, f"cannot parse{at}", f"Fix the YAML in {path}"), None
-    model = config.get("model") if isinstance(config, dict) else None
+        return Check(name, FAIL, f"cannot parse{at}", f"Fix the YAML in {path}"), None, []
+    except Exception as exc:  # noqa: BLE001 - a bad scalar (2001-13-45) raises ValueError and the like
+        return Check(name, FAIL, f"cannot parse: {exc}", f"Fix the YAML in {path}"), None, []
+    if not isinstance(config, dict):
+        config = {}
+    model = config.get("model")
     provider = model.get("provider") if isinstance(model, dict) else None
+    platforms = config.get("platforms")
+    enabled = [
+        platform for platform, settings in platforms.items()
+        if isinstance(settings, dict) and settings.get("enabled")
+    ] if isinstance(platforms, dict) else []
     if not provider:
         return Check(
             name, FAIL, "model.provider is not set",
             f"Set it: add `provider: openrouter` under `model:` in {path}",
-        ), None
-    return Check(name, OK, str(path)), str(provider)
+        ), None, enabled
+    return Check(name, OK, str(path)), str(provider), enabled
 
 
-def _provider_key_checks(providers: Iterable[str], env: dict[str, str], target: str) -> list[Check]:
+def _provider_key_checks(
+    providers: Iterable[str], env: dict[str, str], key_fix: Callable[[str], str],
+) -> list[Check]:
     """One check per API key the configured providers need."""
     checks: list[Check] = []
     for name in providers:
         provider = _PROVIDERS.get(name)
+        key = _provider_key(name)
+        if key is None:
+            if provider is None:
+                checks.append(Check(
+                    f"provider {name}", WARN, "no single API key for doctor to check",
+                    "Check that provider's docs and confirm its credentials are set",
+                ))
+            continue
         if provider is None:
-            checks.append(Check(
-                f"provider {name}", WARN, "doctor does not know which key it needs",
-                "Check that provider's docs and confirm its key is set",
-            ))
-        elif provider.key_env:
-            where = f" (get one at {provider.keys_page})" if provider.keys_page else ""
-            fix = f"{target.format(key=provider.key_env)}{where}"
-            checks.append(_safe(_check_env_key, provider.key_env, provider.key_env, env, fix))
+            known = ", ".join(_PROVIDERS)
+            check = _safe(
+                _check_env_key, key, key, env,
+                f"{key_fix(key)}, or route the model through a provider doctor knows ({known})",
+            )
+            if check.status == FAIL:
+                check.detail += f" (the key expected for unknown provider {name})"
+            checks.append(check)
+            continue
+        where = f" (get one at {provider.keys_page})" if provider.keys_page else ""
+        checks.append(_safe(_check_env_key, key, key, env, f"{key_fix(key)}{where}"))
     return checks
 
 
@@ -501,7 +591,12 @@ def check_provider_reachable(name: str, provider: Provider, timeout: float = _NE
 def run_network_checks(providers: Iterable[str]) -> list[Check]:
     checks = [
         _safe(check_provider_reachable, f"{name} reachable", name, _PROVIDERS[name])
-        for name in providers if name in _PROVIDERS
+        if name in _PROVIDERS else
+        Check(
+            f"{name} reachable", WARN, "doctor does not know its endpoint, nothing probed",
+            f"Confirm it responds: curl -I <{name} base URL>",
+        )
+        for name in providers
     ]
     return checks or [Check(
         "provider reachable", WARN, "no known provider configured, nothing probed",
@@ -515,9 +610,9 @@ def run_network_checks(providers: Iterable[str]) -> list[Check]:
 def check_writable(label: str, path: Path, fix: str = "") -> Check:
     """Probe the path, or the ancestor it would be created in; doctor creates no dirs."""
     target = path
-    while not target.exists() and target != target.parent:
+    while not os.path.exists(target) and target != target.parent:
         target = target.parent
-    if not target.is_dir():
+    if not os.path.isdir(target):
         return Check(label, FAIL, f"{target} is not a directory", f"Remove or move {target}")
     try:
         with tempfile.TemporaryFile(dir=target):
@@ -530,6 +625,10 @@ def check_writable(label: str, path: Path, fix: str = "") -> Check:
     return Check(label, OK, str(path))
 
 
+def _writable_check(label: str, path: Path, fix: str = "") -> Check:
+    return _safe(check_writable, label, label, path, fix)
+
+
 def _data_home() -> Path:
     xdg = os.environ.get("XDG_DATA_HOME", "").strip()
     return Path(xdg) if xdg else Path.home() / ".local" / "share"
@@ -537,14 +636,14 @@ def _data_home() -> Path:
 
 def run_state_checks(cwd: Path, info: AgentInfo, env: dict[str, str]) -> list[Check]:
     trace_dir = cwd / env.get("TRACE_DIR", "traces")
-    checks = [_safe(
-        check_writable, "traces dir", "traces dir", trace_dir,
+    checks = [_writable_check(
+        "traces dir", trace_dir,
         f"Run from a writable directory, or set TRACE_DIR to one (now {trace_dir})",
     )]
     if not info.is_agent:
         output = cwd / env.get("AGENTS_OUTPUT_DIR", "generated-agents")
-        checks.append(_safe(
-            check_writable, "agents output dir", "agents output dir", output,
+        checks.append(_writable_check(
+            "agents output dir", output,
             f"Run from a writable directory, or set AGENTS_OUTPUT_DIR to one (now {output})",
         ))
     home = Path.home()
@@ -553,19 +652,27 @@ def run_state_checks(cwd: Path, info: AgentInfo, env: dict[str, str]) -> list[Ch
         ("~/.cache/nuvel", home / ".cache" / "nuvel"),
         ("nuvel data dir", _data_home() / "nuvel"),
     ):
-        checks.append(_safe(check_writable, label, label, path))
+        checks.append(_writable_check(label, path))
     return checks
 
 
 def check_scored_cache(label: str, path: Path) -> Check:
-    if not path.is_dir():
+    if not os.path.isdir(path):
         return Check(label, OK, "empty")
     cutoff = time.time() - _STALE_CACHE_DAYS * 86400
     entries = list(path.rglob("*.json"))
-    stale = sum(1 for entry in entries if entry.stat().st_mtime < cutoff)
+
+    def is_stale(entry: Path) -> bool:
+        try:
+            return entry.stat().st_mtime < cutoff
+        except OSError:  # A dangling symlink, or a file we can't stat, is no use as a cache.
+            return True
+
+    stale = sum(1 for entry in entries if is_stale(entry))
     if stale:
         return Check(
-            label, WARN, f"{stale} of {len(entries)} entries older than {_STALE_CACHE_DAYS} days",
+            label, WARN,
+            f"{stale} of {len(entries)} entries unreadable or older than {_STALE_CACHE_DAYS} days",
             f"Clear it (examples are re-scored on the next run): rm -rf {path}",
         )
     return Check(label, OK, f"{len(entries)} entries")
@@ -574,10 +681,16 @@ def check_scored_cache(label: str, path: Path) -> Check:
 def check_skills_hub_clone(path: Path) -> Check:
     label = "skills hub clone"
     git_dir = path / ".git"
-    if not git_dir.is_dir():
+    if not os.path.isdir(git_dir):
         return Check(label, OK, "not cloned")
-    marker = git_dir / "FETCH_HEAD" if (git_dir / "FETCH_HEAD").is_file() else git_dir / "HEAD"
-    age_days = int((time.time() - marker.stat().st_mtime) / 86400)
+    marker = git_dir / "FETCH_HEAD" if os.path.isfile(git_dir / "FETCH_HEAD") else git_dir / "HEAD"
+    try:
+        age_days = int((time.time() - marker.stat().st_mtime) / 86400)
+    except OSError:
+        return Check(
+            label, WARN, "clone looks broken: no readable HEAD",
+            f"Remove it (it is re-cloned on the next `nuvel bots` run): rm -rf {path}",
+        )
     if age_days > _STALE_CACHE_DAYS:
         return Check(
             label, WARN, f"last fetched {age_days} days ago",
@@ -588,12 +701,15 @@ def check_skills_hub_clone(path: Path) -> Check:
 
 def run_cache_checks() -> list[Check]:
     data = _data_home() / "nuvel"
+    # nuvel.bots.skills.DEFAULT_HUB_HOME, which unlike evalv2 ignores XDG_DATA_HOME.
+    # Spelled out because importing it needs pyyaml.
+    hub = Path.home() / ".local" / "share" / "nuvel" / "skills"
     return [
         _safe(check_scored_cache, "evalv2 sample cache", "evalv2 sample cache",
               Path.home() / ".cache" / "nuvel" / "evalv2"),
         _safe(check_scored_cache, "evalv2 results cache", "evalv2 results cache",
               data / "evalv2" / "cache"),
-        _safe(check_skills_hub_clone, "skills hub clone", data / "skills"),
+        _safe(check_skills_hub_clone, "skills hub clone", hub),
     ]
 
 
@@ -636,8 +752,8 @@ def _find_pricing_entry(model: str, pricing: dict) -> Optional[str]:
 
 def _find_agent_plugins_dir(cwd: Path) -> Optional[Path]:
     """Locate the agent's plugins/ directory (sits inside the package dir)."""
-    for sub in cwd.iterdir() if cwd.is_dir() else []:
-        if sub.is_dir() and (sub / "plugins").is_dir():
+    for sub in cwd.iterdir() if os.path.isdir(cwd) else []:
+        if os.path.isdir(sub) and os.path.isdir(sub / "plugins"):
             return sub / "plugins"
     return None
 
@@ -669,7 +785,7 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
         )]
 
     pricing_path = plugins / "pricing.json"
-    if not pricing_path.is_file():
+    if not os.path.isfile(pricing_path):
         return [Check(
             "pricing.json coverage", WARN, f"missing {pricing_path}",
             "Costs stay null without it; copy it from a fresh `nuvel agent create`",
@@ -677,9 +793,14 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
 
     try:
         raw = json.loads(pricing_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # JSONDecodeError and UnicodeDecodeError are ValueErrors.
         return [Check(
             "pricing.json coverage", FAIL, f"parse error: {exc}",
+            f"Fix the JSON in {pricing_path}, or copy it from a fresh `nuvel agent create`",
+        )]
+    if not isinstance(raw, dict):
+        return [Check(
+            "pricing.json coverage", FAIL, "expected a JSON object of model entries",
             f"Fix the JSON in {pricing_path}, or copy it from a fresh `nuvel agent create`",
         )]
 
@@ -723,8 +844,7 @@ def _config_file_check(
 
 
 def _required_keys(providers: Iterable[str]) -> list[str]:
-    known = (_PROVIDERS[name] for name in providers if name in _PROVIDERS)
-    return [p.key_env for p in known if p.key_env]
+    return [key for name in providers if (key := _provider_key(name))]
 
 
 def run_meta_checks(cwd: Path, env_file: Optional[Path], env: dict[str, str]) -> list[Check]:
@@ -738,7 +858,7 @@ def run_meta_checks(cwd: Path, env_file: Optional[Path], env: dict[str, str]) ->
     pkg = Path(__file__).resolve().parent
     root = _source_root()
     example_key = keys[0] if keys else "OPENROUTER_API_KEY"
-    if root and (root / ".env.example").is_file():
+    if root and os.path.isfile(root / ".env.example"):
         missing_fix = f"Create it: cp {root}/.env.example {root}/.env"
     else:
         prefix = Path(sys.prefix).resolve()
@@ -748,7 +868,7 @@ def run_meta_checks(cwd: Path, env_file: Optional[Path], env: dict[str, str]) ->
             else f"Skip the file and export the key instead: export {example_key}=<your key>"
         )
     checks = [_config_file_check(env_file, keys, env, missing_fix)]
-    keys_checks = _provider_key_checks(providers, env, "Set it: export {key}=<your key>")
+    keys_checks = _provider_key_checks(providers, env, lambda key: f"Set it: export {key}=<your key>")
     ignored = parse_env_file(cwd / ".env") if env_file != cwd / ".env" else {}
     for check in keys_checks:
         if check.status == FAIL and check.name in ignored:
@@ -756,31 +876,60 @@ def run_meta_checks(cwd: Path, env_file: Optional[Path], env: dict[str, str]) ->
     return checks + keys_checks
 
 
-def run_agent_checks(cwd: Path, info: AgentInfo) -> list[Check]:
+@dataclass
+class _AgentConfig:
+    env_file: Optional[Path]
+    env: dict[str, str]
+    providers: list[str]
+    hermes_check: Optional[Check] = None
+    hermes_platforms: list[str] = field(default_factory=list)
+
+
+def _load_agent_config(cwd: Path, info: AgentInfo) -> _AgentConfig:
+    root = info.root or cwd
+    env_file = _find_env_file(root)
+    env = _effective_env(env_file)
+    hermes_check, hermes_provider, platforms = None, None, []
+    if info.framework == "hermes":
+        hermes_check, hermes_provider, platforms = check_hermes_config(root)
+    return _AgentConfig(
+        env_file, env, configured_providers(info, env, hermes_provider), hermes_check, platforms,
+    )
+
+
+def run_agent_checks(cwd: Path, info: AgentInfo, config: Optional[_AgentConfig] = None) -> list[Check]:
     checks: list[Check] = []
     root = info.root or cwd
-    env_path = _find_env_file(root)
-    env = _effective_env(env_path)
+    config = config or _load_agent_config(cwd, info)
+    env_path, env, providers = config.env_file, config.env, config.providers
 
-    hermes_provider = None
-    if info.framework == "hermes":
-        config_check, hermes_provider = check_hermes_config(root)
-        checks.append(config_check)
-    providers = configured_providers(info, env, hermes_provider)
+    if config.hermes_check:
+        checks.append(config.hermes_check)
 
     example = root / ".env.example"
     missing_fix = (
-        f"Create it: cp {example} {root}/.env" if example.is_file()
+        f"Create it: cp {example} {root}/.env" if os.path.isfile(example)
         else f"Create {root}/.env with the keys listed below"
     )
     checks.append(_config_file_check(env_path, _required_keys(providers), env, missing_fix))
-    target = f"Add {{key}}=<your key> to {root}/.env"
-    checks.extend(_provider_key_checks(providers, env, target))
+    checks.extend(_provider_key_checks(providers, env, lambda key: f"Add {key}=<your key> to {root}/.env"))
     if not providers and info.framework != "hermes":
         checks.append(Check(
             "API keys", WARN, f"not checked for framework {info.framework or 'unknown'}",
             "Compare your .env against this agent's .env.example",
         ))
+
+    for platform in config.hermes_platforms:
+        keys = _HERMES_PLATFORM_KEYS.get(platform)
+        if keys is None:
+            checks.append(Check(
+                f"platform:{platform}", WARN, "doctor does not know which key it needs",
+                "Check that platform's Hermes docs and confirm its token is set",
+            ))
+        for key in keys or ():
+            check = _safe(_check_env_key, key, key, env, f"Add {key}=<value> to {root}/.env")
+            check.name = f"platform:{platform} {key}"
+            checks.append(check)
 
     if _composio_in_use(cwd):
         checks.append(_safe(
@@ -789,22 +938,27 @@ def run_agent_checks(cwd: Path, info: AgentInfo) -> list[Check]:
         ))
 
     gateways_dir = cwd / "gateways"
-    if not gateways_dir.is_dir():
+    if not os.path.isdir(gateways_dir):
         # Templates put gateways/ inside the package dir.
-        for sub in cwd.iterdir() if cwd.is_dir() else []:
+        for sub in cwd.iterdir() if os.path.isdir(cwd) else []:
             cand = sub / "gateways"
-            if cand.is_dir():
+            if os.path.isdir(cand):
                 gateways_dir = cand
                 break
-    if gateways_dir.is_dir():
-        for stem, keys in _GATEWAY_KEYS.items():
-            if (gateways_dir / f"{stem}.py").is_file():
-                for key in keys:
-                    check = _safe(_check_env_key, key, key, env, f"Add {key}=<value> to {root}/.env")
-                    check.name = f"gateway:{stem} {key}"
-                    checks.append(check)
+    if os.path.isdir(gateways_dir):
+        for stem in dict.fromkeys((*_GATEWAY_KEYS, *_OPTIONAL_GATEWAY_KEYS)):
+            if not os.path.isfile(gateways_dir / f"{stem}.py"):
+                continue
+            for key in _GATEWAY_KEYS.get(stem, ()):
+                check = _safe(_check_env_key, key, key, env, f"Add {key}=<value> to {root}/.env")
+                check.name = f"gateway:{stem} {key}"
+                checks.append(check)
+            for key, fix in _OPTIONAL_GATEWAY_KEYS.get(stem, {}).items():
+                check = _safe(_check_env_key, key, key, env, fix.format(key=key), WARN)
+                check.name = f"gateway:{stem} {key}"
+                checks.append(check)
 
-    if (cwd / "Dockerfile").is_file():
+    if os.path.isfile(cwd / "Dockerfile"):
         checks.append(_safe(_check_docker_running, "Docker available"))
 
     if info.framework == "adk":
@@ -825,10 +979,12 @@ def run_agent_checks(cwd: Path, info: AgentInfo) -> list[Check]:
 
 def detect_acp_package(cwd: Path) -> Optional[str]:
     """Return the package name of a --with-acp agent (has ``<pkg>/acp/__main__.py``)."""
-    if not cwd.is_dir():
+    try:
+        subdirs = sorted(cwd.iterdir())
+    except OSError:
         return None
-    for sub in sorted(cwd.iterdir()):
-        if sub.is_dir() and (sub / "acp" / "__main__.py").is_file():
+    for sub in subdirs:
+        if os.path.isdir(sub) and os.path.isfile(sub / "acp" / "__main__.py"):
             return sub.name
     return None
 
@@ -946,45 +1102,70 @@ def run_acp_checks(cwd: Path, pkg: str) -> list[Check]:
 # ── orchestration ───────────────────────────────────────────────────
 
 
-def collect_sections(cwd: Path) -> list[tuple[str, list[Check]]]:
+def check_target(cwd: Optional[Path]) -> Optional[Check]:
+    """A FAIL when the directory to inspect can't be used, else None."""
+    if cwd is None:
+        return Check(
+            "directory", FAIL, "the current directory no longer exists",
+            "cd to an existing directory and rerun, or pass one: nuvel doctor --path <dir>",
+        )
+    unreadable = Check(
+        "directory", FAIL, f"{cwd} cannot be read",
+        f"Fix its permissions (chmod u+rx {cwd}), or pass another: nuvel doctor --path <dir>",
+    )
+    try:
+        with os.scandir(cwd):
+            pass
+    except PermissionError:
+        return unreadable
+    except OSError:
+        return Check(
+            "directory", FAIL, f"{cwd} does not exist or is not a directory",
+            "Pass an existing directory: nuvel doctor --path <dir>",
+        )
+    return None if os.access(cwd, os.X_OK) else unreadable
+
+
+def _collect_target_sections(cwd: Path, acp_pkg: Optional[str]) -> list[tuple[str, list[Check]]]:
+    sections: list[tuple[str, list[Check]]] = []
+    info = detect_agent(cwd)
+    if info.is_agent:
+        config = _load_agent_config(cwd, info)
+        env, providers = config.env, config.providers
+        sections.append((
+            f"Agent ({info.framework or 'unknown'})",
+            _safe_many(run_agent_checks, "agent config", cwd, info, config),
+        ))
+    else:
+        env_file = _find_env_file(Path(__file__).resolve().parent)
+        env = _effective_env(env_file)
+        providers = configured_providers(info, env)
+        sections.append((
+            "Configuration (nuvel run; no generated agent in this directory)",
+            _safe_many(run_meta_checks, "nuvel run config", cwd, env_file, env),
+        ))
+
+    sections.append(("State", _safe_many(run_state_checks, "state dirs", cwd, info, env)))
+    sections.append(("Network", _safe_many(run_network_checks, "provider network", providers)))
+    sections.append(("Caches", _safe_many(run_cache_checks, "caches")))
+    if acp_pkg:
+        sections.append(("ACP adapter", run_acp_checks(cwd, acp_pkg)))
+    return sections
+
+
+def collect_sections(
+    cwd: Optional[Path], acp_pkg: Optional[str] = None,
+) -> list[tuple[str, list[Check]]]:
     """Run every check. Output is captured so a chatty import can't corrupt --json."""
     with contextlib.redirect_stdout(sys.stderr):
         sections = [("Install", run_install_checks())]
-        if not cwd.is_dir():
-            sections.append(("Target", [Check(
-                "directory", FAIL, f"{cwd} does not exist",
-                "Pass an existing directory: nuvel doctor --path <dir>",
-            )]))
-            return sections
-
-        info = detect_agent(cwd)
-        hermes_provider = None
-        if info.is_agent:
-            root = info.root or cwd
-            env = _effective_env(_find_env_file(root))
-            sections.append((
-                f"Agent ({info.framework or 'unknown'})",
-                _safe_many(run_agent_checks, "agent config", cwd, info),
-            ))
-            if info.framework == "hermes":
-                _, hermes_provider = check_hermes_config(root)
-        else:
-            env_file = _find_env_file(Path(__file__).resolve().parent)
-            env = _effective_env(env_file)
-            sections.append((
-                "Configuration (nuvel run; no generated agent in this directory)",
-                _safe_many(run_meta_checks, "nuvel run config", cwd, env_file, env),
-            ))
-
-        providers = configured_providers(info, env, hermes_provider)
-        sections.append(("State", _safe_many(run_state_checks, "state dirs", cwd, info, env)))
-        sections.append(("Network", _safe_many(run_network_checks, "provider network", providers)))
-        sections.append(("Caches", _safe_many(run_cache_checks, "caches")))
-
-        acp_pkg = detect_acp_package(cwd)
-        if acp_pkg:
-            sections.append(("ACP adapter", run_acp_checks(cwd, acp_pkg)))
-    return sections
+        problem = check_target(cwd)
+        if problem:
+            return [*sections, ("Target", [problem])]
+        try:
+            return [*sections, *_collect_target_sections(cwd, acp_pkg)]
+        except Exception as exc:  # noqa: BLE001 - never crash doctor
+            return [*sections, ("Target", [_crashed("agent detection", exc)])]
 
 
 def _summarize(sections: list[tuple[str, list[Check]]]) -> dict[str, int]:
@@ -996,33 +1177,35 @@ def _summarize(sections: list[tuple[str, list[Check]]]) -> dict[str, int]:
     }
 
 
-def _print_json(cwd: Path, sections: list[tuple[str, list[Check]]], code: int) -> None:
+def _print_json(
+    cwd: Optional[Path], sections: list[tuple[str, list[Check]]], code: int, acp_pkg: Optional[str],
+) -> None:
     report: dict = {
         "ok": code == 0,
         "exit_code": code,
-        "cwd": str(cwd),
+        "cwd": str(cwd) if cwd else None,
         "summary": _summarize(sections),
         "checks": [
             {"section": title, "name": c.name, "status": c.status, "detail": c.detail, "fix": c.fix}
             for title, checks in sections for c in checks
         ],
     }
-    acp_pkg = detect_acp_package(cwd)
     if acp_pkg:
         report["zed_config"] = json.loads(zed_config_snippet(cwd, acp_pkg))
     print(json.dumps(report, indent=2))
 
 
-def _print_text(cwd: Path, sections: list[tuple[str, list[Check]]]) -> None:
+def _print_text(
+    cwd: Optional[Path], sections: list[tuple[str, list[Check]]], acp_pkg: Optional[str],
+) -> None:
     print("nuvel doctor")
-    print(f"cwd: {cwd}")
+    print(f"cwd: {cwd or '(no longer exists)'}")
     print()
     for title, checks in sections:
         print(title)
         for c in checks:
             print(c.format())
         print()
-    acp_pkg = detect_acp_package(cwd)
     if acp_pkg:
         print("  Zed — add to settings.json (agent_servers):")
         for line in zed_config_snippet(cwd, acp_pkg).splitlines():
@@ -1034,11 +1217,15 @@ def _print_text(cwd: Path, sections: list[tuple[str, list[Check]]]) -> None:
 
 
 def run_doctor(cwd: Path | None = None, *, as_json: bool = False) -> int:
-    cwd = (cwd or Path.cwd()).resolve()
-    sections = collect_sections(cwd)
+    try:
+        target = (cwd or Path.cwd()).resolve()
+    except OSError:  # The shell's cwd was deleted out from under it.
+        target = None
+    acp_pkg = detect_acp_package(target) if target else None
+    sections = collect_sections(target, acp_pkg)
     code = 1 if _summarize(sections)["fail"] else 0
     if as_json:
-        _print_json(cwd, sections, code)
+        _print_json(target, sections, code, acp_pkg)
     else:
-        _print_text(cwd, sections)
+        _print_text(target, sections, acp_pkg)
     return code

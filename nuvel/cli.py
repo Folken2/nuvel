@@ -281,7 +281,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     from nuvel.doctor import run_doctor
 
-    cwd = Path(args.path).resolve() if args.path else None
+    cwd = Path(args.path) if args.path else None
     return run_doctor(cwd=cwd, as_json=args.json)
 
 

@@ -85,19 +85,20 @@ Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines, and every
 | Flag | Description |
 |---|---|
 | `--path` | Run against this directory instead of the cwd. |
-| `--json` | Emit the same findings as JSON: `ok`, `exit_code`, `cwd`, `summary`, and `checks[]` with `section`, `name`, `status`, `detail`, `fix`. |
+| `--json` | Emit the same findings as JSON: `ok`, `exit_code`, `cwd`, `summary`, and `checks[]` with `section`, `name`, `status`, `detail`, `fix`, plus `zed_config` for `--with-acp` agents. `cwd` is `null` if the current directory was deleted. |
 
 **Getting to green:**
 
-- **Generated agent** — from the agent directory: `cp .env.example .env`, then set the provider key in `.env`. Exporting the key instead also works.
+- **Generated agent** — from the agent directory: `cp .env.example .env`, then set the provider key in `.env`, plus any value the agent's README asks for (`--with-slack` needs `COMPOSIO_API_KEY` and `COMPOSIO_WEBHOOK_SECRET`, `--with-composio` needs `COMPOSIO_API_KEY`, `--with-telegram` needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET`). Exporting them instead also works.
+- **Hermes profile** — the same, using the `.env.example` inside the profile directory. A platform enabled in `config.yaml` also needs its token.
 - **`nuvel run`** — `export OPENROUTER_API_KEY=<your key>`. A source checkout can use `cp .env.example .env` at the repo root instead. An installed nuvel does **not** read `./.env` for `nuvel run`: it searches upward from the installed package, so doctor names the file that would be read.
 
 **What it checks:**
 
 - **Install** — Python version, `nuvel-cli` package metadata, every declared dependency installed at an allowed version, bundled templates and data files, core imports. `git` on PATH (warning only).
-- **Agent** or **Configuration** — `.env` presence and validity, Hermes `config.yaml` validity, and the API keys the configured provider needs. The provider comes from `FAST_MODEL` / `REASONING_MODEL` (ADK and `nuvel run`) or `model.provider` (Hermes). Gateway and Composio keys if those overlays are wired, Docker if there's a `Dockerfile`, `pricing.json` coverage for ADK. A key set in the environment counts, and wins over `.env`, as it does at runtime.
+- **Agent** or **Configuration** — `.env` presence and validity, Hermes `config.yaml` validity, and the API keys the configured provider needs. The provider comes from `FAST_MODEL` / `REASONING_MODEL` (ADK and `nuvel run`) or `model.provider` (Hermes). Gateway and Composio keys if those overlays are wired, Docker if there's a `Dockerfile`, `pricing.json` coverage for ADK. A key set in the environment counts, and wins over `.env`, as it does at runtime. A provider doctor doesn't know is expected to use `<PROVIDER>_API_KEY` (so `FAST_MODEL=moonshotai/kimi-k2.5` wants `MOONSHOTAI_API_KEY`; route it as `openrouter/moonshotai/kimi-k2.5` to use OpenRouter). A missing gateway value the gateway can run without (`SLACK_BOT_TOKEN`, Teams credentials) is a warning.
 - **State** — the traces dir, `AGENTS_OUTPUT_DIR` (for `nuvel run`), `~/.nuvel`, `~/.cache/nuvel`, and the nuvel data dir are writable. Directories that don't exist yet are probed through their parent and not created.
-- **Network** — each configured provider answers an unauthenticated `HEAD`. No key is sent; any HTTP response under 500 counts as reachable. Failing this check fails doctor, so it exits non-zero offline.
+- **Network** — each configured provider answers an unauthenticated `HEAD`. No key is sent; any HTTP response under 500 counts as reachable. Failing this check fails doctor, so it exits non-zero offline. A provider with no known endpoint is a warning, not probed.
 - **Caches** — evalv2 cache entries and the auto-cloned skills hub older than 30 days (warning only).
 - **ACP adapter** *(for `--with-acp` agents)* — the stdio `initialize` handshake.
 

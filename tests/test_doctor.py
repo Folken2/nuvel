@@ -387,10 +387,10 @@ class TestConfigFile(_TmpDirCase):
         self.assertIn("ANTHROPIC_API_KEY", names)
         self.assertNotIn("OPENROUTER_API_KEY", names)
 
-    def test_unknown_provider_warns_instead_of_passing_silently(self):
+    def test_unknown_provider_needs_its_conventional_key(self):
         agent = self._adk_agent("FAST_MODEL=acme/m\nOPENROUTER_API_KEY=sk\n")
         checks = doctor.run_agent_checks(agent, doctor.detect_agent(agent))
-        self.assertEqual(self._check(checks, "provider acme").status, doctor.WARN)
+        self.assertEqual(self._check(checks, "ACME_API_KEY").status, doctor.FAIL)
 
     def test_unrecognised_framework_does_not_pass_silently(self):
         (self.root / "requirements.txt").write_text("httpx\n")
@@ -425,13 +425,13 @@ class TestHermes(_TmpDirCase):
 
     def test_invalid_yaml_fails_with_location(self):
         profile = self._profile("model: [unclosed\n")
-        check, provider = doctor.check_hermes_config(profile)
+        check, provider, _ = doctor.check_hermes_config(profile)
         self.assertEqual(check.status, doctor.FAIL)
         self.assertIsNone(provider)
         self.assertTrue(check.fix)
 
     def test_config_without_provider_fails(self):
-        check, _ = doctor.check_hermes_config(self._profile("agent: {}\n"))
+        check, _, _ = doctor.check_hermes_config(self._profile("agent: {}\n"))
         self.assertEqual(check.status, doctor.FAIL)
         self.assertIn("provider", check.fix)
 
@@ -612,6 +612,364 @@ class TestBrokenInstall(_TmpDirCase):
             self.assertNotIn("Traceback", proc.stderr, module)
             self.assertEqual(proc.returncode, 1, module)
             json.loads(proc.stdout)
+
+
+class TestLazyBots(unittest.TestCase):
+    def _python(self, code):
+        return subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+        )
+
+    def test_attribute_access_and_from_import_both_work(self):
+        for code in (
+            "import nuvel; print(nuvel.bots.__name__)",
+            "from nuvel import bots; print(bots.__name__)",
+        ):
+            proc = self._python(code)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), "nuvel.bots")
+
+    def test_importing_the_package_does_not_load_bots(self):
+        proc = self._python("import sys, nuvel; print('nuvel.bots' in sys.modules)")
+        self.assertEqual(proc.stdout.strip(), "False", proc.stderr)
+
+
+@unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+class TestNoTraceback(_TmpDirCase):
+    def _lock(self, path: Path) -> None:
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o755)
+
+    def test_unreadable_path_fails_with_next_step_in_text_and_json(self):
+        locked = self.root / "locked"
+        locked.mkdir()
+        self._lock(locked)
+        code, out = self._run(cwd=locked)
+        self.assertEqual(code, 1)
+        self.assertIn(f"chmod u+rx {locked}", out)
+        code, out = self._run(cwd=locked, as_json=True)
+        self.assertEqual(code, 1)
+        target = [c for c in json.loads(out)["checks"] if c["section"] == "Target"]
+        self.assertEqual(target[0]["status"], doctor.FAIL)
+        self.assertTrue(target[0]["fix"])
+
+    def test_path_below_an_unreadable_dir(self):
+        locked = self.root / "locked"
+        (locked / "inner").mkdir(parents=True)
+        self._lock(locked)
+        code, out = self._run(cwd=locked / "inner")
+        self.assertEqual(code, 1)
+        self.assertIn("cannot be read", out)
+
+    def test_unreadable_subdirectory_does_not_stop_the_report(self):
+        sub = self.root / "lost+found"
+        sub.mkdir()
+        self._lock(sub)
+        self._adk_agent()
+        self.assertTrue(doctor.detect_agent(self.root).is_agent)
+        code, out = self._run(cwd=self.root)
+        self.assertIn("Summary", out)
+        self.assertIn(code, (0, 1))
+        self.assertNotIn("check raised", out)
+
+    def test_unreadable_hermes_config_says_how_to_fix_it(self):
+        profile = self.root / "bot"
+        profile.mkdir()
+        (profile / "config.yaml").write_text("model: {provider: openrouter}\n")
+        self._lock(profile / "config.yaml")
+        check, _, _ = doctor.check_hermes_config(profile)
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertIn("chmod u+r", check.fix)
+
+
+class TestDeletedCwd(_TmpDirCase):
+    def _doctor_in_deleted_cwd(self, *args):
+        script = (
+            "import os, sys\n"
+            "os.mkdir(sys.argv[1]); os.chdir(sys.argv[1]); os.rmdir(sys.argv[1])\n"
+            "from nuvel import doctor\n"
+            "from nuvel.cli import main\n"
+            "doctor.check_provider_reachable = lambda name, provider: "
+            "doctor.Check(name, doctor.OK)\n"
+            "sys.exit(main(['doctor', *sys.argv[2:]]))\n"
+        )
+        repo = Path(__file__).resolve().parent.parent
+        env = {**os.environ, "PYTHONPATH": str(repo)}
+        return subprocess.run(
+            [sys.executable, "-c", script, str(self.root / "gone"), *args],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+
+    def test_text(self):
+        proc = self._doctor_in_deleted_cwd()
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("no longer exists", proc.stdout)
+        self.assertIn("cd to an existing directory", proc.stdout)
+
+    def test_json(self):
+        proc = self._doctor_in_deleted_cwd("--json")
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIsNone(json.loads(proc.stdout)["cwd"])
+
+    def test_relative_path_argument(self):
+        proc = self._doctor_in_deleted_cwd("--path", ".")
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(proc.returncode, 1)
+
+
+class TestActionableNextSteps(_TmpDirCase):
+    def test_invalid_yaml_date_is_a_finding_not_a_crash(self):
+        profile = self.root / "bot"
+        profile.mkdir()
+        (profile / "config.yaml").write_text("d: 2001-13-45\nmodel: {provider: openrouter}\n")
+        (profile / "SOUL.md").write_text("soul")
+        code, out = self._run(cwd=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn(f"Fix the YAML in {profile}/config.yaml", out)
+
+    def test_dangling_cache_symlink_says_to_clear_the_cache(self):
+        (self.root / "k.json").symlink_to(self.root / "nowhere")
+        check = doctor.check_scored_cache("c", self.root)
+        self.assertEqual(check.status, doctor.WARN)
+        self.assertIn(f"rm -rf {self.root}", check.fix)
+
+    def test_broken_hub_clone_says_to_remove_it(self):
+        (self.root / ".git").mkdir()
+        check = doctor.check_skills_hub_clone(self.root)
+        self.assertEqual(check.status, doctor.WARN)
+        self.assertIn(f"rm -rf {self.root}", check.fix)
+
+    def test_unparsable_pyproject_says_to_restore_it(self):
+        (self.root / "pyproject.toml").write_text("not [ toml")
+        with mock.patch.object(doctor, "_source_root", return_value=self.root):
+            check = doctor.check_distribution()
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertNotEqual(check.fix, doctor._REPORT_FIX)
+        self.assertIn("pyproject.toml", check.fix)
+
+    def test_pricing_that_is_not_an_object_fails_with_next_step(self):
+        plugins = self.root / "pkg" / "plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "pricing.json").write_text("[]")
+        checks = doctor.check_pricing_coverage(self.root, {})
+        self.assertEqual(checks[0].status, doctor.FAIL)
+        self.assertIn("Fix the JSON", checks[0].fix)
+
+    def test_crashed_check_on_a_path_points_at_the_path(self):
+        def boom():
+            raise PermissionError(13, "Permission denied", "/some/where")
+
+        check = doctor._safe(boom, "x")
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertIn("/some/where", check.fix)
+
+
+class TestOldPython(unittest.TestCase):
+    def test_module_imports_without_tomllib(self):
+        # tomllib is stdlib only from 3.11: its import must not kill the report.
+        script = (
+            "import sys\n"
+            "sys.modules['tomllib'] = None\n"
+            "from nuvel import doctor\n"
+            "print(doctor.check_distribution().status)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=60,
+        )
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn(proc.stdout.strip(), (doctor.OK, doctor.FAIL))
+
+    def test_old_python_fails_with_next_step(self):
+        version = mock.MagicMock()
+        version.__getitem__.return_value = (3, 10)
+        version.micro = 4
+        with mock.patch.object(doctor.sys, "version_info", version):
+            check = doctor.check_python_version()
+        self.assertEqual(check.status, doctor.FAIL)
+        self.assertIn("3.11", check.fix)
+
+
+class TestUnknownProvider(_TmpDirCase):
+    def test_missing_key_exits_nonzero_and_names_it(self):
+        agent = self._adk_agent(
+            "FAST_MODEL=moonshotai/kimi-k2.5\nREASONING_MODEL=moonshotai/kimi-k2.5\n"
+        )
+        code, out = self._run(cwd=agent)
+        self.assertEqual(code, 1)
+        self.assertIn("[FAIL]  MOONSHOTAI_API_KEY", out)
+        self.assertIn("openrouter", out)
+
+    def test_set_key_exits_zero_and_warns_it_was_not_probed(self):
+        agent = self._adk_agent(
+            "FAST_MODEL=acme/m\nREASONING_MODEL=acme/m\nACME_API_KEY=sk\n"
+        )
+        code, out = self._run(cwd=agent)
+        self.assertEqual(code, 0, out)
+        self.assertIn("[WARN]  acme reachable", out)
+
+    def test_probes_known_provider_alongside_an_unknown_one(self):
+        names = {c.name: c.status for c in doctor.run_network_checks(["acme", "openrouter"])}
+        self.assertEqual(names, {"acme reachable": doctor.WARN, "openrouter reachable": doctor.OK})
+
+    def test_provider_without_a_single_key_warns(self):
+        agent = self._adk_agent("FAST_MODEL=bedrock/m\nOPENROUTER_API_KEY=sk\n")
+        checks = doctor.run_agent_checks(agent, doctor.detect_agent(agent))
+        self.assertEqual(self._check(checks, "provider bedrock").status, doctor.WARN)
+
+    def test_bare_model_id_maps_to_its_provider(self):
+        agent = self._adk_agent("FAST_MODEL=gpt-4o\nOPENROUTER_API_KEY=sk\n")
+        checks = doctor.run_agent_checks(agent, doctor.detect_agent(agent))
+        self.assertEqual(self._check(checks, "OPENAI_API_KEY").status, doctor.FAIL)
+
+
+class TestGatewaySetup(_TmpDirCase):
+    """Documented setup: cp .env.example .env, then the values the README asks for."""
+
+    _REAL_VALUES = {
+        "your_openrouter_api_key_here": "sk-or-real-value",
+        "your_composio_api_key_here": "ak-real-value",
+        "your_telegram_bot_token_here": "123:real-value",
+        "change_me_to_a_long_random_string": "real-random-secret",
+    }
+
+    def _scaffold(self, **flags) -> Path:
+        from nuvel.backends.adk.scaffold import scaffold_agent
+
+        result = scaffold_agent("my-agent", output_dir=str(self.root), **flags)
+        return Path(result["path"])
+
+    def _configure(self, agent: Path, keep: tuple[str, ...] = ()) -> None:
+        env = (agent / ".env.example").read_text()
+        for placeholder, value in self._REAL_VALUES.items():
+            if placeholder not in keep:
+                env = env.replace(placeholder, value)
+        (agent / ".env").write_text(env)
+
+    def _doctor(self, agent: Path):
+        with mock.patch.object(doctor, "_check_docker_running", return_value=doctor.Check("Docker", doctor.OK)):
+            return self._run(cwd=agent)
+
+    def test_each_channel_is_green_after_documented_setup(self):
+        for flags in ({"with_slack": True}, {"with_telegram": True}, {"with_teams": True}):
+            with self.subTest(flags), tempfile.TemporaryDirectory() as tmp:
+                self.root = Path(tmp).resolve()
+                agent = self._scaffold(**flags)
+                self._configure(agent)
+                code, out = self._doctor(agent)
+                self.assertEqual(code, 0, out)
+
+    def test_slack_bot_token_only_warns(self):
+        agent = self._scaffold(with_slack=True)
+        self._configure(agent)
+        _, out = self._doctor(agent)
+        self.assertIn("[WARN]  gateway:slack SLACK_BOT_TOKEN", out)
+
+    def test_change_me_placeholder_fails(self):
+        agent = self._scaffold(with_slack=True)
+        self._configure(agent, keep=("change_me_to_a_long_random_string",))
+        code, out = self._doctor(agent)
+        self.assertEqual(code, 1)
+        self.assertIn("[FAIL]  gateway:slack COMPOSIO_WEBHOOK_SECRET", out)
+
+    def test_telegram_webhook_secret_is_required(self):
+        agent = self._scaffold(with_telegram=True)
+        self._configure(agent, keep=("change_me_to_a_long_random_string",))
+        code, out = self._doctor(agent)
+        self.assertEqual(code, 1)
+        self.assertIn("[FAIL]  gateway:telegram TELEGRAM_WEBHOOK_SECRET", out)
+
+
+class TestHermesSetup(_TmpDirCase):
+    def _create(self, name: str, *flags: str) -> Path:
+        from nuvel.cli import main
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = main(["agent", "create", name, "--framework", "hermes", "--output-dir", str(self.root), *flags])
+        self.assertEqual(code, 0)
+        return self.root / name
+
+    def _configure(self, project: Path, name: str, token: str = "") -> None:
+        profile = project / name
+        env = (profile / ".env.example").read_text()
+        env = env.replace("your_openrouter_api_key_here", "sk-or-real-value")
+        if token:
+            env += f"\nTELEGRAM_BOT_TOKEN={token}\n"
+        (profile / ".env").write_text(env)
+
+    def test_cli_creates_a_profile_that_is_green_after_documented_setup(self):
+        project = self._create("bot")
+        code, _ = self._run(cwd=project)
+        self.assertEqual(code, 1)
+        self._configure(project, "bot")
+        code, out = self._run(cwd=project)
+        self.assertEqual(code, 0, out)
+
+    def test_litellm_flag_is_rejected_not_a_typeerror(self):
+        from nuvel.backends.hermes.scaffold import scaffold_agent
+
+        result = scaffold_agent("bot", output_dir=str(self.root), with_litellm=True)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("--with-litellm", result["message"])
+
+    def test_enabled_platform_needs_its_token(self):
+        project = self._create("bot", "--with-telegram")
+        self._configure(project, "bot")
+        code, out = self._run(cwd=project)
+        self.assertEqual(code, 1)
+        self.assertIn("[FAIL]  platform:telegram TELEGRAM_BOT_TOKEN", out)
+        self._configure(project, "bot", token="123:real-value")
+        code, out = self._run(cwd=project)
+        self.assertEqual(code, 0, out)
+
+    def test_unknown_enabled_platform_warns(self):
+        profile = self.root / "bot"
+        profile.mkdir()
+        (profile / "config.yaml").write_text(
+            "model: {provider: openrouter}\nplatforms: {matrix: {enabled: true}}\n"
+        )
+        (profile / "SOUL.md").write_text("soul")
+        checks = doctor.run_agent_checks(self.root, doctor.detect_agent(self.root))
+        self.assertEqual(self._check(checks, "platform:matrix").status, doctor.WARN)
+
+    def test_config_is_parsed_once(self):
+        project = self._create("bot")
+        self._configure(project, "bot")
+        with mock.patch.object(doctor, "check_hermes_config", wraps=doctor.check_hermes_config) as parse:
+            self._run(cwd=project)
+        self.assertEqual(parse.call_count, 1)
+
+
+class TestAcpSetup(_TmpDirCase):
+    def _agent(self) -> Path:
+        from nuvel.backends.adk.scaffold import scaffold_agent
+
+        return Path(scaffold_agent("my-agent", output_dir=str(self.root), with_acp=True)["path"])
+
+    def test_scaffolded_adapter_answers_initialize(self):
+        check = doctor.check_acp_handshake(self._agent(), "my_agent", timeout=120.0)
+        self.assertEqual(check.status, doctor.OK, check.detail)
+
+    def test_json_carries_the_zed_config(self):
+        agent = self._agent()
+        ok = [doctor.Check("ACP stdio handshake", doctor.OK)]
+        with mock.patch.object(doctor, "run_acp_checks", return_value=ok):
+            _, out = self._run(cwd=agent, as_json=True)
+        self.assertIn("my-agent", json.loads(out)["zed_config"]["agent_servers"])
+
+
+class TestHubLocation(_TmpDirCase):
+    def test_hub_clone_ignores_xdg_like_nuvel_bots_does(self):
+        head = Path.home() / ".local" / "share" / "nuvel" / "skills" / ".git" / "HEAD"
+        head.parent.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, Path.home() / ".local")
+        head.write_text("ref")
+        age = time.time() - 60 * 86400
+        os.utime(head, (age, age))
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root)}):
+            checks = doctor.run_cache_checks()
+        self.assertEqual(self._check(checks, "skills hub clone").status, doctor.WARN)
 
 
 _REAL_REACHABLE = doctor.check_provider_reachable
