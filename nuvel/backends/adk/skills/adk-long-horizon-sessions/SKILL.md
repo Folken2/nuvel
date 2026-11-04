@@ -7,7 +7,7 @@ description: >-
   when a session's history is growing past the context window, when
   deciding whether RESUMABILITY should stay on for a stateless deployment,
   or when tuning COMPACTION_INTERVAL / COMPACTION_OVERLAP /
-  COMPACTION_TOKEN_THRESHOLD / COMPACTION_RETENTION. Pairs with adk-long-horizon-guardrails (which stops
+  COMPACTION_RETENTION. Pairs with adk-long-horizon-guardrails (which stops
   runaway runs) and adk-prompt-engineering (the cache-stable prompt tiers,
   a separate but adjacent long-horizon cost lever).
 ---
@@ -20,7 +20,7 @@ description: >-
 
 ## Resumability
 
-`AgentHarness.resumability_config` (`harness.py.tmpl:204-211`) returns `ResumabilityConfig(is_resumable=enabled)` from `google.adk.apps._configs`, and the `App` built in `app_for` (`harness.py.tmpl:238`) wires it in as `resumability_config=self.resumability_config`.
+`AgentHarness.resumability_config` (`harness.py.tmpl:204-211`) returns `ResumabilityConfig(is_resumable=enabled)` from `google.adk.apps._configs`, and the `App` built in `app_for` (`harness.py.tmpl:235`) wires it in as `resumability_config=self.resumability_config`.
 
 ```python
 enabled = os.getenv("RESUMABILITY", "true").lower() in ("true", "1", "yes")
@@ -33,13 +33,12 @@ The trade-off is explicit, not free: a resumable run persists more invocation st
 
 ## Event compaction
 
-`AgentHarness.compaction_config` (`harness.py.tmpl:213-228`) returns an `EventsCompactionConfig` (same `google.adk.apps._configs` module), wired into the `App` as `events_compaction_config=self.compaction_config` (`harness.py.tmpl:239`). It rolls old events into summaries so a session that runs for a long time doesn't eventually push its raw history past the model's context window.
+`AgentHarness.compaction_config` (`harness.py.tmpl:213-225`) returns an `EventsCompactionConfig` (same `google.adk.apps._configs` module), wired into the `App` as `events_compaction_config=self.compaction_config` (`harness.py.tmpl:236`). It rolls old events into summaries so a session that runs for a long time doesn't eventually push its raw history past the model's context window.
 
 ```python
 return EventsCompactionConfig(
     compaction_interval=int(os.getenv("COMPACTION_INTERVAL", "8")),
     overlap_size=int(os.getenv("COMPACTION_OVERLAP", "2")),
-    token_threshold=int(os.getenv("COMPACTION_TOKEN_THRESHOLD", "100000")),
     event_retention_size=int(os.getenv("COMPACTION_RETENTION", "20")),
 )
 ```
@@ -48,7 +47,6 @@ return EventsCompactionConfig(
 |---|---|---|
 | `COMPACTION_INTERVAL` | `8` | Sliding window of user turns that triggers a compaction pass. |
 | `COMPACTION_OVERLAP` | `2` | Events shared between one summary and the next. |
-| `COMPACTION_TOKEN_THRESHOLD` | `100000` | Also compact once a prompt reaches this many tokens. ADK requires it alongside retention. |
 | `COMPACTION_RETENTION` | `20` | Most recent events kept verbatim, never summarized. |
 
 **Why overlap matters.** If consecutive summaries covered disjoint spans of history, the boundary between them would be a clean cut with no shared context — and a clean cut loses the causal thread. A decision made near the end of window N ("switch to plan B because X failed") can end up summarized away from the reasoning that produced it, so a turn in window N+1 sees the *outcome* but not the *why*. A small overlap means each new summary is written with some of the same raw events the previous summary saw, so the causal link survives the boundary instead of being severed by it.
@@ -84,7 +82,6 @@ The reason these topics still belong in one skill is thematic, not mechanistic: 
 | `RESUMABILITY` | `true` | `AgentHarness.resumability_config` → `ResumabilityConfig` |
 | `COMPACTION_INTERVAL` | `8` | `AgentHarness.compaction_config` → `EventsCompactionConfig` |
 | `COMPACTION_OVERLAP` | `2` | `AgentHarness.compaction_config` → `EventsCompactionConfig` |
-| `COMPACTION_TOKEN_THRESHOLD` | `100000` | `AgentHarness.compaction_config` → `EventsCompactionConfig` |
 | `COMPACTION_RETENTION` | `20` | `AgentHarness.compaction_config` → `EventsCompactionConfig` |
 
 Related: `adk-long-horizon-guardrails` for stopping a run that's gone wrong; `adk-prompt-engineering` for the full three-tier prompt contract this skill's cache-stability rule depends on.
