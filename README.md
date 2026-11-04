@@ -41,7 +41,8 @@ uv tool install nuvel-cli
 nuvel --help
 ```
 
-Tested with **`nuvel-cli` 0.4.0**, the latest release on PyPI (pipx 1.18.13, uv 0.12.21, Python 3.12).
+Tested with **`nuvel-cli` 0.4.0**, the latest release on PyPI (pipx 1.18.13, uv 0.12.21, Python 3.12.3);
+CI checks the same release with `pip install nuvel-cli` in a fresh venv.
 0.4.0 has no `--version` flag; `pipx list` or `uv tool list` shows the installed version.
 `pip install nuvel-cli` into a virtualenv works too. The bare `nuvel` name on PyPI is not this
 project.
@@ -256,6 +257,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate an
 
 | Command | Description |
 | ------- | ----------- |
+| `nuvel --version` | Print the installed `nuvel-cli` version |
 | `nuvel agent create <name>` | Scaffold a new agent (default framework: `adk`) |
 | `nuvel agent create <name> --framework <fw>` | Pick framework: `adk`, `hermes`, or `claude-agent-sdk` |
 | `nuvel agent create <name> --description "..."` | Scaffold with a one-liner description |

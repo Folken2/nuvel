@@ -10,8 +10,12 @@
 ## Install from PyPI
 
 ```bash
-pip install nuvel-cli
+pipx install nuvel-cli
+# or
+uv tool install nuvel-cli
 ```
+
+`pip install nuvel-cli` into a virtualenv works too. Tested with **`nuvel-cli` 0.4.0**, the latest release on PyPI. 0.4.0 has no `--version` flag; `pipx list` or `uv tool list` shows the installed version. 0.5.0 is not on PyPI yet: it depends on `nuvel-mcp`, which has to be published first. Until then, the current code installs from source.
 
 This installs the `nuvel` CLI and everything needed to **scaffold** on any supported backend. Running what you scaffold takes a little more, depending on the backend:
 
