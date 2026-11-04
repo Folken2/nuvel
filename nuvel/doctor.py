@@ -10,9 +10,10 @@ so the command can be pasted as is.
 Filesystem probes use os.path rather than Path.is_file()/is_dir(), which raise
 PermissionError below an unreadable directory on the Python versions we support.
 
-A key can come from the process environment or a .env file, and the
-environment wins: that is how load_dotenv() behaves at runtime. Secret values
-are never printed, only the names of the variables that hold them.
+A key can come from the process environment or a .env file. The environment
+wins, as load_dotenv() does at runtime, except in a Hermes profile: Hermes loads
+its .env with override=True, so there the file wins. Secret values are never
+printed, only the names of the variables that hold them.
 """
 
 from __future__ import annotations
@@ -44,8 +45,14 @@ OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-_PLACEHOLDER_HINTS = ("your_", "your-", "your ", "_here", "changeme", "change_me", "xxx", "todo")
-_MIN_KEY_LENGTH = 16  # Well below any provider's real keys, so only an obvious non-key trips it.
+_PLACEHOLDER_HINTS = (
+    "your_", "your-", "your ", "_here", "changeme", "change_me", "xxx", "todo",
+    "placeholder", "example", "sample", "dummy", "fake", "replace", "insert",
+    "not-a-key", "not_a_key", "notakey",
+)
+# Well below any provider's real keys, so only an obvious non-key trips these.
+_MIN_KEY_LENGTH = 16
+_MIN_KEY_DISTINCT_CHARS = 8
 _NETWORK_TIMEOUT = 5.0
 _STALE_CACHE_DAYS = 30
 _ASCII_GLYPHS = str.maketrans({"→": "->", "—": "-"})
@@ -162,9 +169,12 @@ def _source_root() -> Optional[Path]:
 
 def _pip_install(*args: str) -> str:
     """A pip install for the Python doctor runs under; venvs made by uv have no pip."""
+    pip = shlex.join([sys.executable, "-m", "pip", "install", *args])
     if importlib.util.find_spec("pip"):
-        return shlex.join([sys.executable, "-m", "pip", "install", *args])
-    return shlex.join(["uv", "pip", "install", "--python", sys.executable, *args])
+        return pip
+    if shutil.which("uv"):
+        return shlex.join(["uv", "pip", "install", "--python", sys.executable, *args])
+    return f"{shlex.join([sys.executable, '-m', 'ensurepip'])} && {pip}"
 
 
 def _reinstall_fix() -> str:
@@ -174,9 +184,25 @@ def _reinstall_fix() -> str:
         # This is `make install`, except that it can't pick up another environment's pip.
         command = _pip_install("-e", f"{root}/packages/nuvel-mcp", "-e", str(root))
         return f"Reinstall this source checkout: {command}"
-    if "pipx" in Path(sys.prefix).parts:
+    if "pipx" in Path(sys.prefix).parts and shutil.which("pipx"):
         return "Reinstall the published package: pipx reinstall nuvel-cli"
     return f"Reinstall the published package: {_pip_install('--force-reinstall', 'nuvel-cli')}"
+
+
+def _python_upgrade_fix() -> str:
+    """The running Python is too old, so anything installed into it has to be rebuilt."""
+    root = _source_root()
+    if root:
+        venv = f"{root}/.venv"
+        install = ["-e", f"{root}/packages/nuvel-mcp", "-e", str(root)]
+        where = "rebuild this source checkout's venv"
+    else:
+        venv = f"{Path.home()}/.nuvel-venv"
+        install = ["nuvel-cli"]
+        where = "install the published package into a new venv"
+    create = shlex.join(["python3.11", "-m", "venv", venv])
+    pip = shlex.join([f"{venv}/bin/python", "-m", "pip", "install", *install])
+    return f"Install Python 3.11 or newer, then {where}: {create} && {pip}"
 
 
 def check_python_version() -> Check:
@@ -185,8 +211,7 @@ def check_python_version() -> Check:
     if (major, minor) >= (3, 11):
         return Check("Python version", OK, detail)
     return Check(
-        "Python version", FAIL, f"{detail} (need >= 3.11)",
-        "Install Python 3.11 or newer, then reinstall: pipx install --python python3.11 nuvel-cli",
+        "Python version", FAIL, f"{detail} (need >= 3.11)", _python_upgrade_fix(),
     )
 
 
@@ -454,9 +479,6 @@ def _check_env_key(key: str, env: dict[str, str], fix: str = "", missing: str = 
 
 def _key_problem(key: str, env: dict[str, str], prefix: str = "") -> Optional[str]:
     """Why this value can't be a real API key, or None. Never quotes the value."""
-    stem = key.removesuffix("_API_KEY")
-    if any(env.get(f"{stem}{suffix}", "").strip() for suffix in ("_API_BASE", "_BASE_URL")):
-        return None  # A proxy or gateway sets its own key format.
     value = env[key]
     if not value.isascii() or any(char.isspace() for char in value):
         return "malformed: contains spaces or non-ASCII characters"
@@ -464,6 +486,8 @@ def _key_problem(key: str, env: dict[str, str], prefix: str = "") -> Optional[st
         return f"malformed: does not start with {prefix}"
     if len(value) < _MIN_KEY_LENGTH:
         return "malformed: too short to be a real key"
+    if len(set(value)) < _MIN_KEY_DISTINCT_CHARS:
+        return "malformed: too repetitive to be a real key"
     return None
 
 
@@ -482,9 +506,9 @@ def _find_env_file(start: Path) -> Optional[Path]:
     return None
 
 
-def _effective_env(env_file: Optional[Path]) -> dict[str, str]:
+def _effective_env(env_file: Optional[Path], *, file_wins: bool = False) -> dict[str, str]:
     env = parse_env_file(env_file) if env_file else {}
-    return {**env, **os.environ}
+    return {**os.environ, **env} if file_wins else {**env, **os.environ}
 
 
 def check_env_file_valid(path: Path) -> Check:
@@ -603,7 +627,7 @@ def _provider_key_checks(
             known = ", ".join(_PROVIDERS)
             check = _safe(
                 _check_api_key, key, key, env,
-                f"{key_fix(key)}; a real key is a long random string from {name}'s dashboard. "
+                f"A real key is a long random string from {name}'s dashboard. {key_fix(key)}. "
                 f"Or route the model through a provider doctor knows ({known})",
             )
             if check.status == FAIL:
@@ -611,7 +635,7 @@ def _provider_key_checks(
             checks.append(check)
             continue
         shape = f"starts with {provider.key_prefix}" if provider.key_prefix else "is a long random string"
-        fix = f"{key_fix(key)}; a real key {shape} (get one at {provider.keys_page})"
+        fix = f"A real key {shape} (get one at {provider.keys_page}). {key_fix(key)}"
         checks.append(_safe(_check_api_key, key, key, env, fix, provider.key_prefix))
     return checks
 
@@ -650,7 +674,7 @@ def check_provider_reachable(
         if url is None:
             return Check(
                 check_name, FAIL, f"{provider.base_env} is not an http(s) URL",
-                f"Set {provider.base_env} to the server's URL, like http://<host>:11434",
+                f"Set {provider.base_env} to the server's URL, like http://192.168.1.10:11434",
             )
         where = f"not reachable at {url} (from {provider.base_env})"
         fix = (
@@ -687,13 +711,13 @@ def run_network_checks(providers: Iterable[str], env: Optional[dict[str, str]] =
         if name in _PROVIDERS else
         Check(
             f"{name} reachable", WARN, "doctor does not know its endpoint, nothing probed",
-            f"Confirm it responds: curl -I <{name} base URL>",
+            f"Find {name}'s API URL in its docs and confirm it responds to curl -I",
         )
         for name in providers
     ]
     return checks or [Check(
         "provider reachable", WARN, "no known provider configured, nothing probed",
-        "Confirm your provider's endpoint responds: curl -I <its base URL>",
+        "Find your provider's API URL in its docs and confirm it responds to curl -I",
     )]
 
 
@@ -859,6 +883,28 @@ _MODEL_DEFAULTS = {
 }
 
 
+def _openrouter_catalog() -> Optional[dict]:
+    from nuvel.pricing import fetch_openrouter
+
+    try:
+        return fetch_openrouter()
+    except Exception:  # noqa: BLE001 - a hint is not worth failing the check over
+        return None
+
+
+def _pricing_fix(model: str, path: Path, catalog: Optional[dict]) -> str:
+    from nuvel.pricing import _lookup_catalog
+
+    model_id = model.removeprefix("openrouter/")
+    add = f"nuvel pricing add --target {shlex.quote(str(path))} {shlex.quote(model_id)}"
+    by_hand = f'{json.dumps(model)}: {{"input": <USD per token>, "output": <USD per token>}}'
+    if catalog is None:
+        return f"Once OpenRouter is reachable, run: {add}. If it isn't listed there, add to {path} by hand: {by_hand}"
+    if _lookup_catalog(catalog, model_id):
+        return f"Add it: {add}"
+    return f"OpenRouter doesn't list it, so add to {path} by hand (prices of 0 if it's free): {by_hand}"
+
+
 def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
     """Verify pricing.json has entries for every active model.
 
@@ -869,6 +915,9 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
 
     Without coverage, llm_response.cost_usd and run_end.total_cost_usd
     stay null and the traces command center can't show cost.
+
+    `nuvel pricing add` only knows OpenRouter's catalog, so an uncovered model
+    is looked up there to tell whether that command can work for it.
     """
     plugins = _find_agent_plugins_dir(cwd)
     if plugins is None:
@@ -899,6 +948,8 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
 
     pricing = {k: v for k, v in raw.items() if not k.startswith("_")}
     checks: list[Check] = []
+    active = [env.get(var) or default for var, default in _MODEL_DEFAULTS.items()]
+    catalog = None if all(_find_pricing_entry(m, pricing) for m in active) else _openrouter_catalog()
     for var, default in _MODEL_DEFAULTS.items():
         model = env.get(var) or default
         source = ".env" if env.get(var) else "default"
@@ -911,7 +962,7 @@ def check_pricing_coverage(cwd: Path, env: dict[str, str]) -> list[Check]:
             checks.append(Check(
                 name, WARN,
                 f"no entry for {model!r} ({source}) — costs will be null",
-                f"Add it: nuvel pricing add {model.removeprefix('openrouter/')}",
+                _pricing_fix(model, pricing_path, catalog),
             ))
     return checks
 
@@ -936,6 +987,11 @@ def _config_file_check(
     return Check(".env file", FAIL, "missing", missing_fix)
 
 
+def _key_prompt(key: str) -> str:
+    """Set a key without it landing in the shell history: reads it from a silent prompt."""
+    return f"read -rs {key} && export {key}"
+
+
 def _required_keys(providers: Iterable[str]) -> list[str]:
     return [key for name in providers if (key := _provider_key(name))]
 
@@ -957,11 +1013,12 @@ def run_meta_checks(cwd: Path, env_file: Optional[Path], env: dict[str, str]) ->
         prefix = Path(sys.prefix).resolve()
         home = prefix if pkg.is_relative_to(prefix) else None
         missing_fix = (
-            f"Create it: echo '{example_key}=<your key>' >> {shlex.quote(f'{home}/.env')}" if home
-            else f"Skip the file and export the key instead: export {example_key}=<your key>"
+            f"Create it, typing the key at the silent prompt (bash or zsh): read -rs {example_key} && "
+            f"echo \"{example_key}=${example_key}\" >> {shlex.quote(f'{home}/.env')}" if home
+            else f"Skip the file and type the key at a silent prompt (bash or zsh): {_key_prompt(example_key)}"
         )
     checks = [_config_file_check(env_file, keys, env, missing_fix)]
-    keys_checks = _provider_key_checks(providers, env, lambda key: f"Set it: export {key}=<your key>")
+    keys_checks = _provider_key_checks(providers, env, lambda key: f"Set it, typing the key at the silent prompt (bash or zsh): {_key_prompt(key)}")
     ignored = parse_env_file(cwd / ".env") if env_file != cwd / ".env" else {}
     for check in keys_checks:
         if check.status == FAIL and check.name in ignored:
@@ -985,7 +1042,7 @@ def _load_agent_config(cwd: Path, info: AgentInfo) -> _AgentConfig:
         env_file = root / ".env" if os.path.isfile(root / ".env") else None
     else:
         env_file = _find_env_file(root)
-    env = _effective_env(env_file)
+    env = _effective_env(env_file, file_wins=info.framework == "hermes")
     hermes_check, hermes_provider, platforms = None, None, []
     if info.framework == "hermes":
         hermes_check, hermes_provider, platforms = check_hermes_config(root)
@@ -1205,11 +1262,11 @@ def check_target(cwd: Optional[Path]) -> Optional[Check]:
     if cwd is None:
         return Check(
             "directory", FAIL, "the current directory no longer exists",
-            "cd to an existing directory and rerun, or pass one: nuvel doctor --path <dir>",
+            'Rerun from an existing directory: cd "$HOME" && nuvel doctor',
         )
     unreadable = Check(
         "directory", FAIL, f"{cwd} cannot be read",
-        f"Fix its permissions (chmod u+rx {shlex.quote(str(cwd))}), or pass another: nuvel doctor --path <dir>",
+        f"Fix its permissions, or pass another directory to --path: chmod u+rx {shlex.quote(str(cwd))}",
     )
     try:
         with os.scandir(cwd):
@@ -1219,7 +1276,7 @@ def check_target(cwd: Optional[Path]) -> Optional[Check]:
     except OSError:
         return Check(
             "directory", FAIL, f"{cwd} does not exist or is not a directory",
-            "Pass an existing directory: nuvel doctor --path <dir>",
+            'Pass an existing directory: nuvel doctor --path "$HOME"',
         )
     return None if os.access(cwd, os.X_OK) else unreadable
 

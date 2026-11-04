@@ -30,6 +30,7 @@ _patchers = [
         side_effect=lambda name, provider, **_: doctor.Check(f"{name} reachable", doctor.OK),
     ),
     mock.patch.dict(os.environ, {"HOME": _home.name}),
+    mock.patch("nuvel.pricing.fetch_openrouter", return_value={}),
 ]
 
 
@@ -284,7 +285,7 @@ class TestCleanBox(_TmpDirCase):
             code, out = self._run(cwd=self.root)
         self.assertEqual(code, 1)
         self.assertIn("[FAIL]  OPENROUTER_API_KEY", out)
-        self.assertIn("export OPENROUTER_API_KEY=", out)
+        self.assertIn("export OPENROUTER_API_KEY", out)
 
     def test_every_problem_has_one_next_step_and_no_traceback(self):
         with self._isolated_meta():
@@ -695,7 +696,7 @@ class TestSymlinkLoopPath(_TmpDirCase):
     def test_text_names_a_next_step(self):
         code, out = self._run(cwd=self._loop())
         self.assertEqual(code, 1)
-        self.assertIn("nuvel doctor --path <dir>", out)
+        self.assertIn('nuvel doctor --path "$HOME"', out)
         self.assertIn("Summary", out)
 
     def test_json_still_reports(self):
@@ -862,7 +863,7 @@ class TestDeletedCwd(_TmpDirCase):
         self.assertNotIn("Traceback", proc.stderr)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("no longer exists", proc.stdout)
-        self.assertIn("cd to an existing directory", proc.stdout)
+        self.assertIn('cd "$HOME" && nuvel doctor', proc.stdout)
 
     def test_json(self):
         proc = self._doctor_in_deleted_cwd("--json")
@@ -1147,9 +1148,70 @@ class TestReinstallFix(unittest.TestCase):
         self.assertNotIn("-e", shlex.split(fix))
 
     def test_venv_without_pip_goes_through_uv(self):
-        with mock.patch.object(doctor.importlib.util, "find_spec", return_value=None):
+        with (
+            mock.patch.object(doctor.importlib.util, "find_spec", return_value=None),
+            mock.patch.object(doctor.shutil, "which", return_value="/bin/uv"),
+        ):
             command = doctor._pip_install("nuvel-cli")
         self.assertEqual(shlex.split(command), ["uv", "pip", "install", "--python", sys.executable, "nuvel-cli"])
+
+    def test_venv_without_pip_or_uv_bootstraps_pip(self):
+        with (
+            mock.patch.object(doctor.importlib.util, "find_spec", return_value=None),
+            mock.patch.object(doctor.shutil, "which", return_value=None),
+        ):
+            command = doctor._pip_install("nuvel-cli")
+        bootstrap, install = command.split(" && ")
+        self.assertEqual(shlex.split(bootstrap), [sys.executable, "-m", "ensurepip"])
+        self.assertEqual(shlex.split(install), [sys.executable, "-m", "pip", "install", "nuvel-cli"])
+
+    def test_pipx_install_reinstalls_through_pipx(self):
+        with (
+            mock.patch.object(doctor, "_source_root", return_value=None),
+            mock.patch.object(doctor.sys, "prefix", "/home/me/.local/pipx/venvs/nuvel-cli"),
+            mock.patch.object(doctor.shutil, "which", return_value="/bin/pipx"),
+        ):
+            self.assertEqual(doctor._reinstall_fix(), "Reinstall the published package: pipx reinstall nuvel-cli")
+
+    def test_pipx_venv_without_pipx_on_path_falls_back_to_pip(self):
+        with (
+            mock.patch.object(doctor, "_source_root", return_value=None),
+            mock.patch.object(doctor.sys, "prefix", "/home/me/.local/pipx/venvs/nuvel-cli"),
+            mock.patch.object(doctor.shutil, "which", return_value=None),
+        ):
+            self.assertNotIn("pipx reinstall", doctor._reinstall_fix())
+
+    def test_pipx_prefix_in_a_checkout_still_gets_the_checkout_hint(self):
+        with (
+            mock.patch.object(doctor.sys, "prefix", "/home/me/.local/pipx/venvs/nuvel-cli"),
+            mock.patch.object(doctor.shutil, "which", return_value="/bin/pipx"),
+        ):
+            self.assertIn("source checkout", doctor._reinstall_fix())
+
+
+class TestPythonUpgradeFix(unittest.TestCase):
+    def _steps(self, fix: str) -> list[list[str]]:
+        return [shlex.split(step) for step in fix.split(": ", 1)[1].split(" && ")]
+
+    def test_checkout_rebuilds_its_venv_with_the_workspace_member(self):
+        with mock.patch.object(doctor, "_source_root", return_value=Path("/my dir")):
+            fix = doctor._python_upgrade_fix()
+        self.assertIn("source checkout", fix)
+        self.assertNotIn("pipx", fix)
+        self.assertEqual(self._steps(fix), [
+            ["python3.11", "-m", "venv", "/my dir/.venv"],
+            ["/my dir/.venv/bin/python", "-m", "pip", "install", "-e", "/my dir/packages/nuvel-mcp", "-e", "/my dir"],
+        ])
+
+    def test_published_install_makes_a_new_venv(self):
+        with mock.patch.object(doctor, "_source_root", return_value=None):
+            fix = doctor._python_upgrade_fix()
+        venv = f"{Path.home()}/.nuvel-venv"
+        self.assertIn("published package", fix)
+        self.assertEqual(self._steps(fix), [
+            ["python3.11", "-m", "venv", venv],
+            [f"{venv}/bin/python", "-m", "pip", "install", "nuvel-cli"],
+        ])
 
 
 class TestApiKeyValue(unittest.TestCase):
@@ -1164,6 +1226,8 @@ class TestApiKeyValue(unittest.TestCase):
             "", "   ", "<your key>", "*** key>", "<value>", "***", "...", "your key", "your-api-key",
             "your_key_here", "sk-or-", "sk-test", "abc", "sk-ant-api03-a-different-providers-key",
             "sk-or-v1-has a-space-in-it-000", "sk-or-v1-nön-äscii-value-000",
+            "placeholder-placeholder", "sk-or-placeholder-value", "sk-or-example-key-value",
+            "sk-or-fake-key-1234567890", "not a key", "sk-or-aaaaaaaaaaaaaaaaaaaa",
         ):
             with self.subTest(value=value):
                 check = self._check(value)
@@ -1192,11 +1256,15 @@ class TestApiKeyValue(unittest.TestCase):
         self.assertEqual(check.status, doctor.FAIL)
         self.assertIn("long random string from acme's dashboard", check.fix)
 
-    def test_custom_endpoint_sets_its_own_key_format(self):
-        self.assertEqual(self._check("sk-1234", "openai", OPENAI_BASE_URL="http://proxy:4000").status, doctor.OK)
-        self.assertEqual(self._check("sk-1234", "openai", OPENAI_API_BASE="http://proxy:4000").status, doctor.OK)
-        # A proxy doesn't make our own fill-in-the-blank text a key.
-        self.assertEqual(self._check("<your key>", "openai", OPENAI_BASE_URL="http://proxy:4000").status, doctor.FAIL)
+    def test_custom_endpoint_does_not_excuse_a_value_that_is_not_a_key(self):
+        for env in ({"OPENROUTER_API_BASE": "http://proxy:4000"}, {"OPENROUTER_BASE_URL": "http://proxy:4000"}):
+            for value in ("not a key", "<your key>", "sk-1234", "placeholder-placeholder"):
+                with self.subTest(env=env, value=value):
+                    self.assertEqual(self._check(value, **env).status, doctor.FAIL)
+
+    def test_placeholder_without_a_known_key_shape_fails(self):
+        self.assertEqual(self._check("placeholder-placeholder", "gemini").status, doctor.FAIL)
+        self.assertEqual(self._check("placeholder-placeholder", "acme").status, doctor.FAIL)
 
     def test_webhook_secrets_keep_the_placeholder_rule_only(self):
         self.assertEqual(doctor._check_env_key("SECRET", {"SECRET": "short"}).status, doctor.OK)
@@ -1246,6 +1314,178 @@ class TestHermesEnvLocation(_TmpDirCase):
         env_file, key = self._env_checks(profile)
         self.assertEqual((env_file.status, key.status), (doctor.OK, doctor.OK))
         self.assertIn(f"{profile}/.env", env_file.detail)
+
+    def test_exported_key_does_not_mask_a_placeholder_in_the_profile(self):
+        # Hermes loads its .env with override=True, so the placeholder is what would run.
+        profile = self._profile()
+        (profile / ".env").write_text("OPENROUTER_API_KEY=<your key>\n")
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-v1-0123456789abcdef"}):
+            _, key = self._env_checks(profile)
+        self.assertEqual(key.status, doctor.FAIL)
+
+    def test_exported_key_counts_when_the_profile_does_not_set_it(self):
+        profile = self._profile()
+        (profile / ".env").write_text("OTHER=1\n")
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-v1-0123456789abcdef"}):
+            _, key = self._env_checks(profile)
+        self.assertEqual(key.status, doctor.OK)
+
+    def test_generated_agent_env_still_loses_to_the_environment(self):
+        agent = self._adk_agent("OPENROUTER_API_KEY=<your key>\n")
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-v1-0123456789abcdef"}):
+            checks = doctor.run_agent_checks(agent, doctor.detect_agent(agent))
+        self.assertEqual(self._check(checks, "OPENROUTER_API_KEY").status, doctor.OK)
+
+
+def _command(fix: str) -> str:
+    """The command a next step ends with, as a user would paste it."""
+    return fix.rsplit(": ", 1)[1]
+
+
+class TestHintsActuallyRun(_TmpDirCase):
+    """Runs next steps through a shell, since a hint only has to read well to pass a substring check."""
+
+    REAL_KEY = "sk-or-v1-0123456789abcdef"
+
+    def _shell(self, script: str, stdin: str = "") -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
+
+    def _meta_key_fix(self, **env) -> str:
+        checks = doctor.run_meta_checks(self.root, None, env)
+        return self._check(checks, "OPENROUTER_API_KEY").fix
+
+    def test_key_prompt_sets_a_key_doctor_then_accepts(self):
+        command = _command(self._meta_key_fix())
+        proc = self._shell(f'{command} && printenv OPENROUTER_API_KEY', f"{self.REAL_KEY}\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), self.REAL_KEY)
+        checks = doctor.run_meta_checks(self.root, None, {"OPENROUTER_API_KEY": proc.stdout.strip()})
+        self.assertEqual(self._check(checks, "OPENROUTER_API_KEY").status, doctor.OK)
+
+    def _installed_env_file_fix(self, prefix: Path) -> str:
+        with (
+            mock.patch.object(doctor, "_source_root", return_value=None),
+            mock.patch.object(doctor, "__file__", str(prefix / "lib" / "nuvel" / "doctor.py")),
+            mock.patch.object(doctor.sys, "prefix", str(prefix)),
+        ):
+            return self._check(doctor.run_meta_checks(self.root, None, {}), ".env file").fix
+
+    def test_env_file_prompt_writes_a_key_doctor_then_accepts(self):
+        prefix = self.root / "my venv"
+        prefix.mkdir()
+        proc = self._shell(_command(self._installed_env_file_fix(prefix)), f"{self.REAL_KEY}\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        env = doctor.parse_env_file(prefix / ".env")
+        self.assertEqual(env, {"OPENROUTER_API_KEY": self.REAL_KEY})
+
+    def test_export_fallback_runs_when_there_is_no_venv_to_write_to(self):
+        with (
+            mock.patch.object(doctor, "_source_root", return_value=None),
+            mock.patch.object(doctor, "__file__", str(self.root / "elsewhere" / "doctor.py")),
+            mock.patch.object(doctor.sys, "prefix", str(self.root / "venv")),
+        ):
+            fix = self._check(doctor.run_meta_checks(self.root, None, {}), ".env file").fix
+        proc = self._shell(f"{_command(fix)} && printenv OPENROUTER_API_KEY", f"{self.REAL_KEY}\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), self.REAL_KEY)
+
+    def test_missing_directory_hint_runs(self):
+        check = doctor.check_target(self.root / "gone")
+        nuvel = shlex.join([sys.executable, "-m", "nuvel.cli"])
+        proc = subprocess.run(
+            ["bash", "-c", f"{_command(check.fix).replace('nuvel', nuvel, 1)} --json"],
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "HOME": str(self.root), "PYTHONPATH": str(Path(doctor.__file__).parent.parent)},
+        )
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["cwd"], str(self.root))
+        self.assertNotIn("directory", [c["name"] for c in report["checks"]])
+
+    def test_no_command_in_a_next_step_is_left_with_a_blank_to_fill(self):
+        agent = self.root / "agent"
+        agent.mkdir()
+        (agent / "requirements.txt").write_text("google-adk\n")
+        (agent / "agent.py").write_text("")
+        (agent / ".env").write_text("FAST_MODEL=acme/m\nREASONING_MODEL=acme/m\n")
+        checks = [
+            *doctor.run_meta_checks(self.root, None, {}),
+            *doctor.run_agent_checks(agent, doctor.detect_agent(agent)),
+            *doctor.run_network_checks(["acme"]),
+            *doctor.run_network_checks([]),
+            doctor.check_target(self.root / "gone"),
+            _REAL_REACHABLE("ollama", doctor._PROVIDERS["ollama"], 0.1, env={"OLLAMA_API_BASE": "ftp://x"}),
+        ]
+        for check in checks:
+            with self.subTest(check=check.name):
+                self.assertNotRegex(check.fix, r"(export \w+=|curl -I |--path |echo |http://)\S*<")
+                self.assertNotRegex(check.fix, r"<(its|\w+ base|dir|host)")
+
+    def _pricing_fix(self, model: str, catalog: dict | None) -> tuple[str, Path]:
+        plugins = self.root / "my pkg" / "plugins"
+        plugins.mkdir(parents=True)
+        pricing = plugins / "pricing.json"
+        pricing.write_text("{}\n")
+        side_effect = RuntimeError("offline") if catalog is None else None
+        with mock.patch("nuvel.pricing.fetch_openrouter", return_value=catalog, side_effect=side_effect):
+            checks = doctor.check_pricing_coverage(self.root, {"FAST_MODEL": model, "REASONING_MODEL": model})
+        self.assertEqual(checks[0].status, doctor.WARN)
+        return checks[0].fix, pricing
+
+    def test_pricing_hint_for_a_listed_model_succeeds_from_any_cwd(self):
+        from nuvel.cli import main
+
+        price = {"input": 1e-06, "output": 2e-06}
+        fix, pricing = self._pricing_fix("openrouter/acme/m", {"acme/m": price})
+        argv = shlex.split(fix.split(": ", 1)[1])
+        self.assertEqual(argv[0], "nuvel")
+        with mock.patch("nuvel.pricing.fetch_openrouter", return_value={"acme/m": price}):
+            code = main(argv[1:])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(pricing.read_text())["acme/m"]["input"], 1e-06)
+        self.assertTrue(doctor._find_pricing_entry("openrouter/acme/m", json.loads(pricing.read_text())))
+
+    def test_pricing_hint_for_an_unlisted_model_does_not_offer_the_command(self):
+        fix, pricing = self._pricing_fix("ollama/llama3", {"acme/m": {"input": 0.0, "output": 0.0}})
+        self.assertNotIn("nuvel pricing add", fix)
+        self.assertIn(str(pricing), fix)
+        self.assertIn('"ollama/llama3"', fix)
+
+    def test_pricing_hint_says_so_when_the_catalog_is_out_of_reach(self):
+        fix, pricing = self._pricing_fix("acme/m", None)
+        self.assertIn("Once OpenRouter is reachable", fix)
+        self.assertIn(f"nuvel pricing add --target {shlex.quote(str(pricing))} acme/m", fix)
+        self.assertIn("by hand", fix)
+
+    def test_pricing_catalog_is_fetched_once_and_only_when_needed(self):
+        plugins = self.root / "pkg" / "plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "pricing.json").write_text('{"acme/m": {"input": 0, "output": 0}}')
+        with mock.patch("nuvel.pricing.fetch_openrouter", return_value={}) as fetch:
+            doctor.check_pricing_coverage(self.root, {"FAST_MODEL": "acme/m", "REASONING_MODEL": "acme/m"})
+            fetch.assert_not_called()
+            doctor.check_pricing_coverage(self.root, {"FAST_MODEL": "a/b", "REASONING_MODEL": "c/d"})
+            fetch.assert_called_once()
+
+
+@unittest.skipUnless(
+    os.environ.get("NUVEL_TEST_INSTALL_HINT"),
+    "builds a venv and downloads every dependency; set NUVEL_TEST_INSTALL_HINT=1",
+)
+class TestSourceReinstallHintInFreshVenv(_TmpDirCase):
+    def test_hint_succeeds_where_a_plain_editable_install_would_not(self):
+        venv = self.root / "fresh venv"
+        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+        python = str(venv / "bin" / "python")
+        with mock.patch.object(doctor.sys, "executable", python):
+            fix = doctor._reinstall_fix()
+        proc = subprocess.run(["bash", "-c", _command(fix)], capture_output=True, text=True, timeout=1800)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = subprocess.run(
+            [python, "-m", "nuvel.cli", "doctor", "--json"], capture_output=True, text=True, timeout=300,
+        )
+        checks = {c["name"]: c["status"] for c in json.loads(report.stdout)["checks"]}
+        self.assertEqual(checks["nuvel-cli package"], doctor.OK)
+        self.assertEqual(checks["declared dependencies"], doctor.OK)
 
 
 class _HeadHandler(http.server.BaseHTTPRequestHandler):
