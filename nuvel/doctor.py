@@ -189,6 +189,20 @@ def _reinstall_fix() -> str:
     return f"Reinstall the published package: {_pip_install('--force-reinstall', 'nuvel-cli')}"
 
 
+def _usable_python() -> Optional[str]:
+    """A Python on PATH that can build nuvel's venv; Debian splits ensurepip out of its python3."""
+    probe = "import sys, ensurepip, venv; sys.exit(sys.version_info < (3, 11))"
+    for name in ("python3", *(f"python3.{minor}" for minor in range(20, 10, -1))):
+        if not shutil.which(name):
+            continue
+        try:
+            if subprocess.run([name, "-c", probe], capture_output=True, timeout=5).returncode == 0:
+                return name
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return None
+
+
 def _python_upgrade_fix() -> str:
     """The running Python is too old, so anything installed into it has to be rebuilt."""
     root = _source_root()
@@ -200,9 +214,15 @@ def _python_upgrade_fix() -> str:
         venv = f"{Path.home()}/.nuvel-venv"
         install = ["nuvel-cli"]
         where = "install the published package into a new venv"
-    create = shlex.join(["python3.11", "-m", "venv", venv])
+    python = _usable_python()
+    if not python:
+        return (
+            "Install Python 3.11 or newer from https://www.python.org/downloads/ (on Debian or Ubuntu, "
+            f"also its venv package, such as python3-venv), then run nuvel doctor again for the commands to {where}"
+        )
+    create = shlex.join([python, "-m", "venv", venv])
     pip = shlex.join([f"{venv}/bin/python", "-m", "pip", "install", *install])
-    return f"Install Python 3.11 or newer, then {where}: {create} && {pip}"
+    return f"Use {python} (Python 3.11 or newer, already on PATH) to {where}: {create} && {pip}"
 
 
 def check_python_version() -> Check:
@@ -442,6 +462,8 @@ _FIXED_PROVIDERS: dict[str, str] = {
     "anthropic-managed-agents": "anthropic",
 }
 
+_COMPOSIO_KEYS_PAGE = "https://composio.dev"
+
 # The gateway refuses every request without these.
 _GATEWAY_KEYS: dict[str, tuple[str, ...]] = {
     "slack": ("COMPOSIO_WEBHOOK_SECRET",),
@@ -482,6 +504,9 @@ def _key_problem(key: str, env: dict[str, str], prefix: str = "") -> Optional[st
     value = env[key]
     if not value.isascii() or any(char.isspace() for char in value):
         return "malformed: contains spaces or non-ASCII characters"
+    stem = key.removesuffix("_API_KEY")
+    if any(env.get(f"{stem}{suffix}", "").strip() for suffix in ("_API_BASE", "_BASE_URL")):
+        return None  # A proxy or gateway sets its own key format, e.g. LiteLLM's sk-1234.
     if prefix and not value.startswith(prefix):
         return f"malformed: does not start with {prefix}"
     if len(value) < _MIN_KEY_LENGTH:
@@ -830,8 +855,26 @@ def run_cache_checks() -> list[Check]:
     ]
 
 
+def _systemd_manages_docker() -> bool:
+    if not os.path.isdir("/run/systemd/system"):
+        return False
+    try:
+        return subprocess.run(
+            ["systemctl", "cat", "docker.service"], capture_output=True, timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _docker_start_fix() -> str:
+    if sys.platform == "darwin" and os.path.isdir("/Applications/Docker.app"):
+        return "Only needed to build the image; start Docker Desktop: open -a Docker"
+    if _systemd_manages_docker():
+        return "Only needed to build the image; start Docker: sudo systemctl start docker"
+    return "Only needed to build the image; start the Docker daemon the way this host runs it, then confirm: docker info"
+
+
 def _check_docker_running() -> Check:
-    start_fix = "Only needed to build the image; start Docker: sudo systemctl start docker"
     if not shutil.which("docker"):
         return Check(
             "Docker available", WARN, "docker CLI not on PATH",
@@ -843,10 +886,10 @@ def _check_docker_running() -> Check:
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return Check("Docker available", WARN, f"failed: {exc}", start_fix)
+        return Check("Docker available", WARN, f"failed: {exc}", _docker_start_fix())
     if r.returncode == 0:
         return Check("Docker available", OK, "daemon reachable")
-    return Check("Docker available", WARN, "daemon not reachable", start_fix)
+    return Check("Docker available", WARN, "daemon not reachable", _docker_start_fix())
 
 
 def _find_pricing_entry(model: str, pricing: dict) -> Optional[str]:
@@ -1088,8 +1131,9 @@ def run_agent_checks(cwd: Path, info: AgentInfo, config: Optional[_AgentConfig] 
 
     if _composio_in_use(cwd):
         checks.append(_safe(
-            _check_env_key, "COMPOSIO_API_KEY", "COMPOSIO_API_KEY", env,
-            f"Add COMPOSIO_API_KEY=<value> to {root}/.env",
+            _check_api_key, "COMPOSIO_API_KEY", "COMPOSIO_API_KEY", env,
+            f"A real key is a long random string (get one at {_COMPOSIO_KEYS_PAGE}, under Settings > Project Settings > API Keys). "
+            f"Add COMPOSIO_API_KEY=<your key> to {root}/.env",
         ))
 
     gateways_dir = cwd / "gateways"

@@ -987,7 +987,7 @@ class TestGatewaySetup(_TmpDirCase):
 
     _REAL_VALUES = {
         "your_openrouter_api_key_here": "sk-or-real-value",
-        "your_composio_api_key_here": "ak-real-value",
+        "your_composio_api_key_here": "ak-0123456789abcdef",
         "your_telegram_bot_token_here": "123:real-value",
         "change_me_to_a_long_random_string": "real-random-secret",
     }
@@ -1193,13 +1193,18 @@ class TestPythonUpgradeFix(unittest.TestCase):
     def _steps(self, fix: str) -> list[list[str]]:
         return [shlex.split(step) for step in fix.split(": ", 1)[1].split(" && ")]
 
+    def setUp(self):
+        patcher = mock.patch.object(doctor, "_usable_python", return_value="python3.12")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_checkout_rebuilds_its_venv_with_the_workspace_member(self):
         with mock.patch.object(doctor, "_source_root", return_value=Path("/my dir")):
             fix = doctor._python_upgrade_fix()
         self.assertIn("source checkout", fix)
         self.assertNotIn("pipx", fix)
         self.assertEqual(self._steps(fix), [
-            ["python3.11", "-m", "venv", "/my dir/.venv"],
+            ["python3.12", "-m", "venv", "/my dir/.venv"],
             ["/my dir/.venv/bin/python", "-m", "pip", "install", "-e", "/my dir/packages/nuvel-mcp", "-e", "/my dir"],
         ])
 
@@ -1209,9 +1214,99 @@ class TestPythonUpgradeFix(unittest.TestCase):
         venv = f"{Path.home()}/.nuvel-venv"
         self.assertIn("published package", fix)
         self.assertEqual(self._steps(fix), [
-            ["python3.11", "-m", "venv", venv],
+            ["python3.12", "-m", "venv", venv],
             [f"{venv}/bin/python", "-m", "pip", "install", "nuvel-cli"],
         ])
+
+    def test_no_usable_python_prints_no_command_that_cannot_run(self):
+        for root in (Path("/my dir"), None):
+            with (
+                self.subTest(root=root),
+                mock.patch.object(doctor, "_source_root", return_value=root),
+                mock.patch.object(doctor, "_usable_python", return_value=None),
+            ):
+                fix = doctor._python_upgrade_fix()
+                self.assertIn("https://www.python.org/downloads/", fix)
+                self.assertIn("run nuvel doctor again", fix)
+                self.assertNotIn(" -m venv", fix)
+
+
+class TestUsablePython(_TmpDirCase):
+    """Real scripts on a real PATH, as the probe has to run them to believe them."""
+
+    def _path(self, **scripts: int) -> mock._patch:
+        for name, code in scripts.items():
+            path = self.root / name.replace("_", ".")
+            path.write_text(f"#!/bin/sh\nexit {code}\n")
+            path.chmod(0o755)
+        return mock.patch.dict(os.environ, {"PATH": str(self.root)})
+
+    def test_takes_a_python_the_probe_accepts(self):
+        with self._path(python3_12=0):
+            self.assertEqual(doctor._usable_python(), "python3.12")
+
+    def test_too_old_python3_is_skipped_for_a_newer_one(self):
+        with self._path(python3=1, python3_11=0):
+            self.assertEqual(doctor._usable_python(), "python3.11")
+
+    def test_nothing_usable_is_none(self):
+        with self._path(python3=1, python3_13=127):
+            self.assertIsNone(doctor._usable_python())
+
+
+class TestDockerStartFix(unittest.TestCase):
+    def _fix(self, platform: str, dirs: tuple[str, ...], systemctl_code: int = 0) -> str:
+        with (
+            mock.patch.object(doctor.sys, "platform", platform),
+            mock.patch.object(doctor.os.path, "isdir", side_effect=lambda path: path in dirs),
+            mock.patch.object(
+                doctor.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], systemctl_code),
+            ),
+        ):
+            return doctor._docker_start_fix()
+
+    def test_systemd_hint_only_where_systemd_runs_docker(self):
+        systemd = ("/run/systemd/system",)
+        self.assertIn("sudo systemctl start docker", self._fix("linux", systemd))
+        self.assertNotIn("systemctl", self._fix("linux", systemd, systemctl_code=1))
+        self.assertNotIn("systemctl", self._fix("linux", ()))
+
+    def test_macos_opens_docker_desktop_only_if_installed(self):
+        self.assertIn("open -a Docker", self._fix("darwin", ("/Applications/Docker.app",)))
+        fix = self._fix("darwin", ())
+        self.assertNotIn("open -a", fix)
+        self.assertNotIn("systemctl", fix)
+        self.assertIn("docker info", fix)
+
+    def test_missing_systemctl_is_not_a_crash(self):
+        with (
+            mock.patch.object(doctor.os.path, "isdir", return_value=True),
+            mock.patch.object(doctor.subprocess, "run", side_effect=FileNotFoundError("systemctl")),
+        ):
+            self.assertFalse(doctor._systemd_manages_docker())
+
+
+class TestComposioKey(_TmpDirCase):
+    def _check(self, value: str) -> doctor.Check:
+        (self.root / "requirements.txt").write_text("google-adk\n")
+        (self.root / "agent.py").write_text("")
+        (self.root / "tools").mkdir(exist_ok=True)
+        (self.root / "tools" / "composio_mcp.py").write_text("")
+        (self.root / ".env").write_text(f"COMPOSIO_API_KEY={value}\n")
+        checks = doctor.run_agent_checks(self.root, doctor.detect_agent(self.root))
+        return next(c for c in checks if c.name == "COMPOSIO_API_KEY")
+
+    def test_values_that_are_not_keys_fail_with_shape_and_source(self):
+        for value in ("", "'not a key'", "<your key>", "your_composio_api_key_here", "abc"):
+            with self.subTest(value=value):
+                check = self._check(value)
+                self.assertEqual(check.status, doctor.FAIL)
+                self.assertIn("long random string", check.fix)
+                self.assertIn(doctor._COMPOSIO_KEYS_PAGE, check.fix)
+
+    def test_real_shaped_key_passes(self):
+        self.assertEqual(self._check("ak_0123456789abcdef").status, doctor.OK)
 
 
 class TestApiKeyValue(unittest.TestCase):
@@ -1258,9 +1353,15 @@ class TestApiKeyValue(unittest.TestCase):
 
     def test_custom_endpoint_does_not_excuse_a_value_that_is_not_a_key(self):
         for env in ({"OPENROUTER_API_BASE": "http://proxy:4000"}, {"OPENROUTER_BASE_URL": "http://proxy:4000"}):
-            for value in ("not a key", "<your key>", "sk-1234", "placeholder-placeholder"):
+            for value in ("not a key", "<your key>", "placeholder-placeholder"):
                 with self.subTest(env=env, value=value):
                     self.assertEqual(self._check(value, **env).status, doctor.FAIL)
+
+    def test_custom_endpoint_accepts_the_proxys_own_key_format(self):
+        for env in ({"OPENROUTER_API_BASE": "http://proxy:4000"}, {"OPENROUTER_BASE_URL": "http://proxy:4000"}):
+            with self.subTest(env=env):
+                self.assertEqual(self._check("sk-1234", **env).status, doctor.OK)
+        self.assertEqual(self._check("sk-1234").status, doctor.FAIL)
 
     def test_placeholder_without_a_known_key_shape_fails(self):
         self.assertEqual(self._check("placeholder-placeholder", "gemini").status, doctor.FAIL)
@@ -1486,6 +1587,28 @@ class TestSourceReinstallHintInFreshVenv(_TmpDirCase):
         checks = {c["name"]: c["status"] for c in json.loads(report.stdout)["checks"]}
         self.assertEqual(checks["nuvel-cli package"], doctor.OK)
         self.assertEqual(checks["declared dependencies"], doctor.OK)
+
+
+@unittest.skipUnless(
+    os.environ.get("NUVEL_TEST_INSTALL_HINT"),
+    "builds a venv and downloads every dependency; set NUVEL_TEST_INSTALL_HINT=1",
+)
+class TestPythonUpgradeHintInCopiedCheckout(_TmpDirCase):
+    def test_hint_builds_a_working_venv(self):
+        repo = Path(doctor.__file__).resolve().parent.parent
+        copy = self.root / "check out"
+        shutil.copytree(repo, copy, ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "generated-agents"))
+        with mock.patch.object(doctor, "_source_root", return_value=copy):
+            fix = doctor._python_upgrade_fix()
+        proc = subprocess.run(["bash", "-c", _command(fix)], capture_output=True, text=True, timeout=1800)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        report = subprocess.run(
+            [str(copy / ".venv/bin/python"), "-m", "nuvel.cli", "doctor", "--json"],
+            capture_output=True, text=True, timeout=300, cwd=self.root,
+        )
+        checks = {c["name"]: c["status"] for c in json.loads(report.stdout)["checks"]}
+        self.assertEqual(checks["Python version"], doctor.OK)
+        self.assertEqual(checks["nuvel-cli package"], doctor.OK)
 
 
 class _HeadHandler(http.server.BaseHTTPRequestHandler):
