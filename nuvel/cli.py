@@ -414,11 +414,22 @@ def _add_new_agent_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _version() -> str:
+    """The installed nuvel-cli version, from package metadata."""
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("nuvel-cli")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown (no installed package metadata)"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nuvel",
         description="nuvel — scaffold, run, and explore agents across frameworks.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
 # ── agent create (primary) ──────────────────────────────────────────

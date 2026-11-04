@@ -96,3 +96,64 @@ jobs:
         env:
           NUVEL_MCP_TEST_OAUTH_STORE: postgres
         run: pytest packages/nuvel-mcp/tests -q
+
+  # Proves the branch builds an installable wheel: build both distributions, install the
+  # wheels (not `-e .`) into a fresh venv, and run the CLI from outside the checkout so nothing
+  # can be imported from source. A fresh venv + pip rather than pipx/uv: it needs nothing beyond
+  # the stdlib, and pip installs a wheel exactly as pipx does underneath. The nuvel-mcp wheel is
+  # installed alongside because nuvel-mcp is not on PyPI yet. If this fails, packaging is broken.
+  wheel-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheels
+        run: |
+          python -m pip install --upgrade build
+          python -m build --wheel --outdir dist .
+          python -m build --wheel --outdir dist packages/nuvel-mcp
+          ls dist
+
+      - name: Install the wheels into a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/pip" install dist/nuvel_mcp-*.whl dist/nuvel_cli-*.whl
+
+      - name: Run the installed CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          wheel-venv/bin/nuvel --version
+          wheel-venv/bin/nuvel --help
+          wheel-venv/bin/nuvel skills list
+
+  # Proves the published install path still works: the latest nuvel-cli from PyPI in a fresh
+  # venv. Releases before 0.5.0 have no `--version` flag; that is reported as a warning, not
+  # skipped silently. `--help` must work on whatever is published.
+  published-install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install nuvel-cli from PyPI into a fresh venv
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv pypi-venv
+          pypi-venv/bin/pip install nuvel-cli
+          pypi-venv/bin/pip show nuvel-cli
+
+      - name: Run the published CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          pypi-venv/bin/nuvel --help
+          if ! pypi-venv/bin/nuvel --version; then
+            version=$(pypi-venv/bin/python -c "import importlib.metadata as m; print(m.version('nuvel-cli'))")
+            echo "::warning::published nuvel-cli $version has no --version flag (added in 0.5.0)"
+          fi
