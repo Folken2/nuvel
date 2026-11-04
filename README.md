@@ -159,8 +159,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 ```
 
-`requirements-dev.txt` installs the CLI in editable mode together with the `nuvel-mcp` workspace
-member (which is not on an index yet) and the runtime dependencies. See
+`requirements-dev.txt` installs the CLI in editable mode together with the runtime dependencies,
+including `nuvel-mcp` from its release tag on GitHub (it is not on PyPI yet). See
 [CONTRIBUTING.md](CONTRIBUTING.md#development-setup) for why the order matters.
 
 ## Getting Started

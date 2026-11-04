@@ -180,9 +180,8 @@ def _pip_install(*args: str) -> str:
 def _reinstall_fix() -> str:
     root = _source_root()
     if root:
-        # nuvel-mcp is on no index, so a checkout has to install it from its own tree first.
         # This is `make install`, except that it can't pick up another environment's pip.
-        command = _pip_install("-e", f"{root}/packages/nuvel-mcp", "-e", str(root))
+        command = _pip_install("-e", str(root))
         return f"Reinstall this source checkout: {command}"
     if "pipx" in Path(sys.prefix).parts and shutil.which("pipx"):
         return "Reinstall the published package: pipx reinstall nuvel-cli"
@@ -208,7 +207,7 @@ def _python_upgrade_fix() -> str:
     root = _source_root()
     if root:
         venv = f"{root}/.venv"
-        install = ["-e", f"{root}/packages/nuvel-mcp", "-e", str(root)]
+        install = ["-e", str(root)]
         where = "rebuild this source checkout's venv"
     else:
         venv = f"{Path.home()}/.nuvel-venv"

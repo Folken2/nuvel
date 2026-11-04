@@ -19,7 +19,7 @@ PLUGIN_FLAGS = \
 
 # Install the package in editable mode (exposes the `nuvel` binary)
 install:
-	pip install -e packages/nuvel-mcp -e .
+	pip install -e .
 
 # ADK dev UI with all plugins loaded
 dev-ui:

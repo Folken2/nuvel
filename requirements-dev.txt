@@ -5,12 +5,12 @@
 #
 # Why a separate file: `pyproject.toml` takes the project's dependencies from
 # `requirements.txt` (`dependencies = { file = ["requirements.txt"] }`), so that file is the
-# *published* dependency list and pins `nuvel-mcp` as an external package. `nuvel-mcp` is a
-# workspace member (`packages/nuvel-mcp`) that is not on any index yet, so it can only be
-# resolved locally — hence the editable line first, in this file only.
+# *published* dependency list. This file adds the editable install of the CLI and its test
+# extras on top.
 #
-# Never add a local path to requirements.txt: it would end up in the published metadata and
-# break every consumer of the released package.
--e ./packages/nuvel-mcp
+# Never add a local path to either file: requirements.txt would carry it into the published
+# metadata and break every consumer of the released package.
+# nuvel-mcp will come from PyPI once it is published there; until then the release is its git tag (no PyPI credential yet).
+nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@v0.5.0
 -r requirements.txt
 -e .[test]

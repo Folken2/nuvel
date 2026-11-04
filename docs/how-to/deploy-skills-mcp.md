@@ -335,7 +335,7 @@ The same commands exist as `nuvel mcp db …`.
 
 ## Deploy on Railway
 
-`packages/nuvel-mcp/` ships a `Dockerfile` for this. The image binds
+The [nuvel-mcp repository](https://github.com/Folken2/nuvel-mcp) ships a `Dockerfile` at its root for this. The image binds
 `0.0.0.0:$PORT` with `--allow-remote`. With `NUVEL_MCP_DATABASE_URL` set, all
 state is in Postgres; without it, it falls back to files under `/data`. The
 server runs as the unprivileged system user `nuvel` (uid 10001), which owns
@@ -346,8 +346,8 @@ its config-as-code `railway.json` is deprecated.
 1. Install the IaC SDK once with `npm install --prefix .railway`, link the
    repository to your project with `railway link`, then review and apply the
    definition with `railway config plan` and `railway config apply`. To set it
-   up by hand instead, point the service's **Root Directory** at
-   `/packages/nuvel-mcp` with the Dockerfile builder.
+   up by hand instead, point the service at the `Folken2/nuvel-mcp` repository
+   (Root Directory `/`) with the Dockerfile builder.
 2. Under **Settings → Networking**, generate a domain on port `8080`.
 3. Create a Neon project and copy its **pooled** connection string into the
    `NUVEL_MCP_DATABASE_URL` variable (step 5). That replaces the volume. Without

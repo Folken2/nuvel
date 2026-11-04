@@ -29,10 +29,10 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest tests packages/nuvel-mcp/tests -v
+        run: pytest tests -v
 
   # Proves the documented development install works on a clean machine: one command from
-  # CONTRIBUTING.md, then a smoke check that the CLI and the workspace member are usable.
+  # CONTRIBUTING.md, then a smoke check that the CLI and the released nuvel-mcp are usable.
   # If this job fails, the first command a new contributor runs is broken.
   dev-install:
     runs-on: ubuntu-latest
@@ -54,45 +54,7 @@ jobs:
         run: |
           .venv/bin/python -c "import nuvel, nuvel_mcp; print('imports ok')"
           .venv/bin/nuvel --help
+          # nuvel-mcp must come from its git tag, never a local path.
+          .venv/bin/python -c "import json, importlib.metadata as m; u = json.loads(m.distribution('nuvel-mcp').read_text('direct_url.json'))['url']; print(u); assert u.startswith('https://github.com/Folken2/nuvel-mcp'), u"
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | .venv/bin/nuvel mcp serve | grep '"serverInfo"'
           .venv/bin/python -m pytest tests/test_config.py -q
-
-  # The Postgres stores, against a real server. The matrix above runs without
-  # psycopg, so it also proves nuvel-mcp still works with no dependencies.
-  postgres:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: nuvel
-          POSTGRES_DB: nuvel_test
-          # Throwaway CI container: no password, so none is written down here.
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U nuvel" --health-interval 5s
-          --health-timeout 5s --health-retries 10
-    env:
-      NUVEL_MCP_TEST_DATABASE_URL: postgresql://nuvel@localhost:5432/nuvel_test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e packages/nuvel-mcp "psycopg[binary,pool]>=3.2,<4" pytest
-
-      - name: Run nuvel-mcp tests on Postgres
-        run: pytest packages/nuvel-mcp/tests -q
-
-      - name: Run the OAuth suites on the Postgres OAuth store
-        env:
-          NUVEL_MCP_TEST_OAUTH_STORE: postgres
-        run: pytest packages/nuvel-mcp/tests -q

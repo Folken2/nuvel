@@ -1,2 +1,0 @@
-# Spanish currency words.
-euro euros dólar dólares libra libras peso pesos céntimo céntimos

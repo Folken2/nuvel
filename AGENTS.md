@@ -15,7 +15,7 @@ It ships as:
 - Knowledge skills in `nuvel/backends/<framework>/skills/`.
 - A CLI scaffolder exposed as `nuvel agent create` (deprecated alias: `nuvel new`).
 - A meta-agent exposed as `nuvel run`, implemented as a Google ADK `LlmAgent` in `nuvel/agent.py`.
-- A Skills MCP server exposed as `nuvel mcp serve` (stdio or HTTP), in `packages/nuvel-mcp/src/nuvel_mcp/` (stdlib only; `nuvel/mcp/` is a deprecated alias).
+- A Skills MCP server exposed as `nuvel mcp serve` (stdio or HTTP), in the `nuvel-mcp` package from [Folken2/nuvel-mcp](https://github.com/Folken2/nuvel-mcp) (stdlib only; `nuvel/mcp/` is a deprecated alias).
 
 Generated projects are written to `generated-agents/<name>/` and are standalone runnable FastAPI apps. They should not depend on importing the local `nuvel` package at runtime.
 
@@ -122,7 +122,7 @@ HTTP security defaults and settings:
 
 **Everything over HTTP is gated.** `initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call` (all nine tools, read-only ones included), the `GET /mcp` and `/sse` streams, and `DELETE /mcp` all require `Authorization: Bearer <access token>`. The only unauthenticated surfaces are `/healthz`, the two `/.well-known/` documents, `/register`, `/authorize`, `/oauth/callback` (and `/oauth/dev-login`), `/token`, and CORS preflights. Without a valid token the server answers `401` with `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource", scope="skills:read skills:write"` (plus `error="invalid_token"` when a token was presented). That lets MCP clients run discovery → registration → authorization → retry on their own. Every token failure (unknown, expired, revoked, wrong client, wrong resource) gets the same `401`. `403` is reserved for a valid token that isn't allowed: a missing scope, or a user since removed from the allowlist.
 
-The server is its own authorization server, in `packages/nuvel-mcp/src/nuvel_mcp/oauth.py`, stdlib only:
+The server is its own authorization server, in `nuvel_mcp/oauth.py` (in the `nuvel-mcp` repository), stdlib only:
 
 - **Scopes**: `skills:read` covers every MCP method and the read-only tools. `skills:write` covers `install_skill`, `propose_improvement`, `record_feedback`, and any unknown tool, so it fails closed. Clients get both unless they ask for less.
 - **Dynamic registration** (`POST /register`) accepts `redirect_uris`, `client_name` and `token_endpoint_auth_method` (`none`, `client_secret_basic` or `client_secret_post`; only confidential clients get a `client_secret`). Redirect URIs must be `http://localhost:*` or `http://127.0.0.1:*`, or listed exactly in `NUVEL_OAUTH_REDIRECT_ALLOWLIST` (comma-separated); anything else is `invalid_redirect_uri`. Registered clients can only use `authorization_code` + `refresh_token`. Because registration is open, `client_credentials` is reserved for operator-issued clients (`nuvel mcp client create`).
@@ -167,7 +167,7 @@ It exposes:
 
 **The feedback store.** All local skill feedback lands in one directory: `--feedback-dir`, else `$NUVEL_FEEDBACK_DIR`, else `~/.nuvel/feedback` (kept out of the skills hub so a read-only clone works). It holds `<skill>/<id>.json` per `record_feedback` report plus `feedback-queue.jsonl` for queued proposals. `check_skill_health` and `get_skill`'s `health` read both, so a queued proposal is visible immediately (repeat submissions of the same proposal share a `feedback_id` and count once). `theme/name` and `name` address the same skill. The former `NUVEL_FEEDBACK_QUEUE` variable is no longer read; the server logs a warning if it is set.
 
-The code lives in `packages/nuvel-mcp/src/nuvel_mcp/` (`server.py` = JSON-RPC protocol and tools, shared by both transports via `SkillsMCPServer.dispatch`; `http_transport.py` = the HTTP transports, sessions and OAuth routes; `oauth.py` = the OAuth 2.1 store, authorization server and token validation; `skills_loader.py` = hub discovery/loading; `installer.py` = the plan/apply installer behind `install_skill`; `feedback.py` = the feedback store and health computation; `cli.py` = the `serve` / `client` / `token` commands shared by `nuvel-mcp` and `nuvel mcp`) with `nuvel/commands/mcp_serve.py` delegating to it. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
+The code lives in `src/nuvel_mcp/` of the [Folken2/nuvel-mcp](https://github.com/Folken2/nuvel-mcp) repository (`server.py` = JSON-RPC protocol and tools, shared by both transports via `SkillsMCPServer.dispatch`; `http_transport.py` = the HTTP transports, sessions and OAuth routes; `oauth.py` = the OAuth 2.1 store, authorization server and token validation; `skills_loader.py` = hub discovery/loading; `installer.py` = the plan/apply installer behind `install_skill`; `feedback.py` = the feedback store and health computation; `cli.py` = the `serve` / `client` / `token` commands shared by `nuvel-mcp` and `nuvel mcp`) with `nuvel/commands/mcp_serve.py` delegating to it. It is deliberately dependency-free so it runs without the ADK/agent stack installed; keep it that way.
 
 ## Role scoping
 

@@ -1,2 +1,0 @@
-# English currency words.
-euro euros dollar dollars pound pounds pence penny cent cents quid bucks

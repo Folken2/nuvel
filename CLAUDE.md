@@ -15,8 +15,8 @@ Generated projects land in `generated-agents/<name>/` and are standalone runnabl
 ## Common commands
 
 ```bash
-make install     # pip install -e packages/nuvel-mcp -e .  (exposes `nuvel` and `nuvel-mcp` console scripts)
-make test        # python -m pytest tests/ -v  (CI also runs packages/nuvel-mcp/tests)
+make install     # pip install -e .  (exposes `nuvel` and `nuvel-mcp` console scripts)
+make test        # python -m pytest tests/ -v
 make run         # nuvel run         (meta-agent, prod-style)
 make dev         # nuvel run --dev   (in-memory sessions)
 make dev-ui      # adk web with all 13 plugins loaded (meta-agent's own chain, not the 17-plugin generated-agent chain)
@@ -29,9 +29,9 @@ CLI surface (full table in README): `nuvel agent create`, `nuvel skills list|sea
 
 ## Architecture — the parts that span multiple files
 
-### Monorepo: two PyPI packages
+### `nuvel-mcp` is a separate repository
 
-The repo publishes two distributions at the same version, from one tag: `nuvel-cli` (root `pyproject.toml`, import `nuvel`) and `nuvel-mcp` (`packages/nuvel-mcp/`, import `nuvel_mcp`, no runtime dependencies and no extras; its HTTP transport and OAuth are stdlib-only). The Skills MCP server lives in `nuvel_mcp`; `nuvel.mcp` is a deprecated shim and `nuvel mcp serve` delegates to `nuvel_mcp.cli`. Its tests are in `packages/nuvel-mcp/tests/`. `release.yml` checks the tag against both versions and builds both into `dist/`.
+This repo publishes `nuvel-cli` (root `pyproject.toml`, import `nuvel`). The Skills MCP server, `nuvel-mcp` (import `nuvel_mcp`, no runtime dependencies; its HTTP transport and OAuth are stdlib-only), lives in its own repository, [Folken2/nuvel-mcp](https://github.com/Folken2/nuvel-mcp), with its own tests and CI; change it there. This repo depends on a release tag of it (`nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@<tag>` in `requirements.txt` and `requirements-dev.txt`) until it is on PyPI. `nuvel.mcp` is a deprecated shim and `nuvel mcp serve` delegates to `nuvel_mcp.cli`.
 
 ### Three parallel backends
 
