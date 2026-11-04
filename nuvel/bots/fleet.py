@@ -26,7 +26,9 @@ or torn down (:meth:`destroy`).
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +41,9 @@ from .skills import SkillManager
 
 #: Default Hermes home; its ``fleets/`` dir holds the tracking records.
 DEFAULT_HERMES_HOME = Path.home() / ".hermes"
+
+#: Every top-level key a manifest may carry; anything else is most likely a typo.
+_MANIFEST_KEYS = ("name", "company", "hub", "default_model", "bots", "vision", "manager")
 
 
 # --------------------------------------------------------------------------- #
@@ -141,6 +146,12 @@ class FleetDeployer:
             raise FleetError(f"invalid YAML in {manifest_path}: {exc}") from exc
         if not isinstance(raw, dict):
             raise FleetError(f"manifest {manifest_path} must be a YAML mapping")
+        unknown = sorted(str(k) for k in raw if k not in _MANIFEST_KEYS)
+        if unknown:
+            raise FleetError(
+                f"manifest {manifest_path} has unknown key(s): {', '.join(unknown)} "
+                f"(expected: {', '.join(_MANIFEST_KEYS)})"
+            )
         name = raw.get("name")
         if not name:
             raise FleetError(f"manifest {manifest_path} is missing a 'name'")
@@ -358,9 +369,7 @@ class FleetDeployer:
             self._link_vision(bot_name, vision_file)
         record["has_vision"] = True
         record["vision_path"] = str(vision_file)
-        self._record_path(fleet_name).write_text(
-            json.dumps(record, indent=2), encoding="utf-8"
-        )
+        self._write_record(fleet_name, record)
 
     # ------------------------------------------------------------------ #
     # governance — routines (scheduled tasks)
@@ -407,7 +416,6 @@ class FleetDeployer:
 
     def _save_record(self, manifest: _FleetManifest, result: FleetDeployResult) -> None:
         """Persist a deploy result to ``<hermes_home>/fleets/<name>.json``."""
-        self._fleets_dir.mkdir(parents=True, exist_ok=True)
         record = {
             "fleet_name": result.fleet_name,
             "company": manifest.company,
@@ -420,22 +428,65 @@ class FleetDeployer:
             "manager": result.manager,
             "routines": result.routines,
         }
-        self._record_path(result.fleet_name).write_text(
-            json.dumps(record, indent=2), encoding="utf-8"
-        )
+        self._write_record(result.fleet_name, record)
+
+    def _write_record(self, fleet_name: str, record: dict) -> None:
+        """Atomically write a tracking record (temp file + rename).
+
+        A write that fails part-way leaves the previous record untouched rather
+        than a truncated one that ``status``/``destroy`` can no longer read.
+        """
+        path = self._record_path(fleet_name)
+        tmp = None
+        try:
+            self._fleets_dir.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=self._fleets_dir, prefix=f".{fleet_name}.", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, indent=2))
+            os.replace(tmp, path)
+        except OSError as exc:
+            raise FleetError(
+                f"could not write the record for fleet {fleet_name!r} to {path}: "
+                f"{exc.strerror or exc}"
+            ) from exc
+        finally:
+            if tmp is not None and os.path.exists(tmp):
+                os.unlink(tmp)
 
     def _read_record(self, fleet_name: str) -> dict | None:
         """Return the raw tracking record for ``fleet_name``, or ``None``."""
         path = self._record_path(fleet_name)
         if not path.is_file():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FleetError(
+                f"fleet record {path} is unreadable or corrupted ({exc}); "
+                "delete it or redeploy the fleet"
+            ) from exc
+        if not isinstance(data, dict):
+            raise FleetError(
+                f"fleet record {path} is corrupted (expected a JSON object); "
+                "delete it or redeploy the fleet"
+            )
+        return data
 
     def status(self, fleet_name: str) -> FleetStatus | None:
         """Return the tracked status for ``fleet_name``, or ``None`` if unknown."""
         data = self._read_record(fleet_name)
         if data is None:
             return None
+        try:
+            return self._status_from_record(data)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FleetError(
+                f"fleet record {self._record_path(fleet_name)} is corrupted "
+                f"(bad or missing field: {exc}); delete it or redeploy the fleet"
+            ) from exc
+
+    @staticmethod
+    def _status_from_record(data: dict) -> FleetStatus:
         return FleetStatus(
             fleet_name=data["fleet_name"],
             company=data.get("company", ""),

@@ -237,9 +237,10 @@ class SkillManager:
         """
         home = Path(hermes_home).expanduser() if hermes_home else DEFAULT_HERMES_HOME
         skills_root = home / "profiles" / bot_name / "skills"
+        # Resolve every ref before copying any, so a bad ref installs nothing.
+        records = [self._resolve(ref) for ref in skill_refs]
         installed: list[InstalledSkill] = []
-        for ref in skill_refs:
-            record = self._resolve(ref)
+        for record in records:
             dest = skills_root / record.category / record.name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(record.directory, dest, dirs_exist_ok=True)
@@ -247,6 +248,11 @@ class SkillManager:
                 InstalledSkill(name=record.name, category=record.category, path=str(dest))
             )
         return installed
+
+    def check_refs(self, skill_refs: list[str]) -> None:
+        """Raise :class:`SkillNotFoundError` unless every ref resolves to one skill."""
+        for ref in skill_refs:
+            self._resolve(ref)
 
     def _resolve(self, ref: str) -> _SkillRecord:
         """Resolve a skill reference to exactly one :class:`_SkillRecord`."""

@@ -102,7 +102,12 @@ class PricingFile:
 
 
 def load(path: Path) -> PricingFile:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a JSON object of model prices")
     pf = PricingFile(path=path)
     for k, v in raw.items():
         if k.startswith("_"):
@@ -145,7 +150,10 @@ def fetch_openrouter() -> dict[str, dict[str, float]]:
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+        raise RuntimeError(
+            f"OpenRouter request failed: cannot reach {OPENROUTER_MODELS_URL} "
+            f"({getattr(exc, 'reason', exc)}); check your network connection"
+        ) from exc
     except TimeoutError as exc:
         # A stall during resp.read() surfaces as a bare socket.timeout, not URLError.
         raise RuntimeError(f"OpenRouter request timed out: {exc}") from exc
@@ -249,6 +257,26 @@ def _fmt_price(v: float) -> str:
     return f"${v * 1_000_000:.4f}/Mtok"
 
 
+def _reports_errors(cmd):
+    """Turn the failures a user can cause or hit into one line on stderr.
+
+    A missing or malformed pricing.json, an unreachable OpenRouter and an
+    unwritable file are the user's to fix, not a bug to dump a traceback for.
+    """
+    def wrapper(args: argparse.Namespace) -> int:
+        try:
+            return cmd(args)
+        except OSError as exc:
+            target = f": {exc.filename}" if exc.filename else ""
+            print(f"error: {exc.strerror or exc}{target}", file=sys.stderr)
+        except (ValueError, RuntimeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    return wrapper
+
+
+@_reports_errors
 def _cmd_list(args: argparse.Namespace) -> int:
     path = resolve_pricing_path(args.target)
     if not path.is_file():
@@ -289,6 +317,7 @@ def _print_diff(diff: SyncDiff, *, dry_run: bool) -> None:
         print("\n(dry-run — no file written)")
 
 
+@_reports_errors
 def _cmd_sync(args: argparse.Namespace) -> int:
     path = resolve_pricing_path(args.target)
     if not path.is_file():
@@ -312,6 +341,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+@_reports_errors
 def _cmd_add(args: argparse.Namespace) -> int:
     path = resolve_pricing_path(args.target)
     if not path.is_file():

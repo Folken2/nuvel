@@ -25,3 +25,7 @@ class CacheError(EvalError):
 
 class SchemaVersionError(EvalError):
     """A serialized payload carries a schema version we don't support."""
+
+
+class ProviderError(EvalError):
+    """The model provider could not be used: no API key, a rejected key, or unreachable."""
