@@ -4,7 +4,8 @@ Inspired by `hermes doctor`. Prints a categorised checklist with
 [OK] / [WARN] / [FAIL] markers and exits non-zero on any [FAIL]; every
 [WARN] and [FAIL] carries one next step. `--json` emits the same findings
 as structured output. Every check is wrapped so a single missing dependency
-cannot abort the whole report.
+cannot abort the whole report. Paths in a next-step command are shell-quoted,
+so the command can be pasted as is.
 
 Filesystem probes use os.path rather than Path.is_file()/is_dir(), which raise
 PermissionError below an unreadable directory on the Python versions we support.
@@ -24,6 +25,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,7 @@ FAIL = "FAIL"
 _PLACEHOLDER_HINTS = ("your_", "_here", "changeme", "change_me", "xxx", "todo")
 _NETWORK_TIMEOUT = 5.0
 _STALE_CACHE_DAYS = 30
+_ASCII_GLYPHS = str.maketrans({"→": "->", "—": "-"})
 _REPORT_FIX = (
     "Report this with the output of `nuvel doctor --json`: "
     "https://github.com/Folken2/nuvel/issues"
@@ -72,6 +75,7 @@ class AgentInfo:
     framework: str | None = None
     reasons: list[str] = field(default_factory=list)
     root: Path | None = None  # Where the agent's .env lives, when not the cwd.
+    problems: list[Check] = field(default_factory=list)  # Found while detecting the agent.
 
 
 # ── helpers ─────────────────────────────────────────────────────────
@@ -80,7 +84,7 @@ class AgentInfo:
 def _crashed(name: str, exc: Exception) -> Check:
     fix = _REPORT_FIX
     if isinstance(exc, OSError) and exc.filename:
-        fix = f"Check that the path exists and you can read it: ls -ld {exc.filename}"
+        fix = f"Check that the path exists and you can read it: ls -ld {shlex.quote(str(exc.filename))}"
     return Check(name, FAIL, f"check raised {type(exc).__name__}: {exc}", fix)
 
 
@@ -154,10 +158,10 @@ def _source_root() -> Optional[Path]:
 def _reinstall_fix() -> str:
     root = _source_root()
     if root:
-        return f"Reinstall from source: {sys.executable} -m pip install -e {root}"
+        return f"Reinstall from source: {shlex.join([sys.executable, '-m', 'pip', 'install', '-e', str(root)])}"
     if "pipx" in Path(sys.prefix).parts:
         return "Reinstall: pipx reinstall nuvel-cli"
-    return f"Reinstall: {sys.executable} -m pip install --force-reinstall nuvel-cli"
+    return f"Reinstall: {shlex.quote(sys.executable)} -m pip install --force-reinstall nuvel-cli"
 
 
 def check_python_version() -> Check:
@@ -207,7 +211,7 @@ def check_distribution() -> Check:
         except (OSError, ValueError):  # TOMLDecodeError and UnicodeDecodeError are ValueErrors.
             return Check(
                 name, FAIL, f"cannot read {pyproject}",
-                f"Fix or restore it: git -C {root} checkout -- pyproject.toml",
+                f"Fix or restore it: git -C {shlex.quote(str(root))} checkout -- pyproject.toml",
             )
         wanted = declared.get("project", {}).get("version")
         if wanted and wanted != version:
@@ -326,10 +330,16 @@ def detect_agent(cwd: Path) -> AgentInfo:
     if not os.path.isfile(req) or not has_entry:
         return info
     try:
-        text = req.read_text(encoding="utf-8").lower()
+        raw = req.read_bytes()
     except OSError:
         return info
     info.is_agent = True
+    try:
+        text = raw.decode("utf-8").lower()
+    except UnicodeDecodeError:
+        # A stray byte need not hide the framework; a UTF-16 file will, until re-saved.
+        text = raw.decode("utf-8", errors="replace").lower()
+        info.problems.append(Check("requirements.txt", FAIL, "not valid UTF-8", f"Re-save {req} as UTF-8"))
     if "google-adk" in text:
         info.framework = "adk"
     elif "claude-agent-sdk" in text:
@@ -443,7 +453,7 @@ def check_env_file_valid(path: Path) -> Check:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return Check(name, FAIL, f"unreadable: {exc.strerror}", f"Fix its permissions: chmod u+r {path}")
+        return Check(name, FAIL, f"unreadable: {exc.strerror}", f"Fix its permissions: chmod u+r {shlex.quote(str(path))}")
     except UnicodeDecodeError:
         return Check(name, FAIL, "not valid UTF-8", f"Re-save {path} as UTF-8")
     try:
@@ -506,7 +516,7 @@ def check_hermes_config(profile: Path) -> tuple[Check, Optional[str], list[str]]
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return Check(name, FAIL, f"unreadable: {exc.strerror}", f"Fix its permissions: chmod u+r {path}"), None, []
+        return Check(name, FAIL, f"unreadable: {exc.strerror}", f"Fix its permissions: chmod u+r {shlex.quote(str(path))}"), None, []
     except UnicodeDecodeError:
         return Check(name, FAIL, "not valid UTF-8", f"Re-save {path} as UTF-8"), None, []
     try:
@@ -620,7 +630,7 @@ def check_writable(label: str, path: Path, fix: str = "") -> Check:
     except OSError as exc:
         return Check(
             label, FAIL, f"{target} is not writable ({exc.strerror})",
-            fix or f"Make it writable: chmod u+w {target}",
+            fix or f"Make it writable: chmod u+w {shlex.quote(str(target))}",
         )
     return Check(label, OK, str(path))
 
@@ -673,7 +683,7 @@ def check_scored_cache(label: str, path: Path) -> Check:
         return Check(
             label, WARN,
             f"{stale} of {len(entries)} entries unreadable or older than {_STALE_CACHE_DAYS} days",
-            f"Clear it (examples are re-scored on the next run): rm -rf {path}",
+            f"Clear it (examples are re-scored on the next run): rm -rf {shlex.quote(str(path))}",
         )
     return Check(label, OK, f"{len(entries)} entries")
 
@@ -689,12 +699,12 @@ def check_skills_hub_clone(path: Path) -> Check:
     except OSError:
         return Check(
             label, WARN, "clone looks broken: no readable HEAD",
-            f"Remove it (it is re-cloned on the next `nuvel bots` run): rm -rf {path}",
+            f"Remove it (it is re-cloned on the next `nuvel bots` run): rm -rf {shlex.quote(str(path))}",
         )
     if age_days > _STALE_CACHE_DAYS:
         return Check(
             label, WARN, f"last fetched {age_days} days ago",
-            f"Update it: git -C {path} pull --ff-only",
+            f"Update it: git -C {shlex.quote(str(path))} pull --ff-only",
         )
     return Check(label, OK, f"fetched {age_days} days ago")
 
@@ -859,12 +869,12 @@ def run_meta_checks(cwd: Path, env_file: Optional[Path], env: dict[str, str]) ->
     root = _source_root()
     example_key = keys[0] if keys else "OPENROUTER_API_KEY"
     if root and os.path.isfile(root / ".env.example"):
-        missing_fix = f"Create it: cp {root}/.env.example {root}/.env"
+        missing_fix = f"Create it: cp {shlex.quote(f'{root}/.env.example')} {shlex.quote(f'{root}/.env')}"
     else:
         prefix = Path(sys.prefix).resolve()
         home = prefix if pkg.is_relative_to(prefix) else None
         missing_fix = (
-            f"Create it: echo '{example_key}=<your key>' >> {home}/.env" if home
+            f"Create it: echo '{example_key}=<your key>' >> {shlex.quote(f'{home}/.env')}" if home
             else f"Skip the file and export the key instead: export {example_key}=<your key>"
         )
     checks = [_config_file_check(env_file, keys, env, missing_fix)]
@@ -903,12 +913,13 @@ def run_agent_checks(cwd: Path, info: AgentInfo, config: Optional[_AgentConfig] 
     config = config or _load_agent_config(cwd, info)
     env_path, env, providers = config.env_file, config.env, config.providers
 
+    checks.extend(info.problems)
     if config.hermes_check:
         checks.append(config.hermes_check)
 
     example = root / ".env.example"
     missing_fix = (
-        f"Create it: cp {example} {root}/.env" if os.path.isfile(example)
+        f"Create it: cp {shlex.quote(str(example))} {shlex.quote(f'{root}/.env')}" if os.path.isfile(example)
         else f"Create {root}/.env with the keys listed below"
     )
     checks.append(_config_file_check(env_path, _required_keys(providers), env, missing_fix))
@@ -1011,8 +1022,8 @@ def check_acp_handshake(cwd: Path, pkg: str, timeout: float = 20.0) -> Check:
     """
     name = "ACP stdio handshake"
     cmd = [sys.executable, "-m", f"{pkg}.acp"]
-    deps_fix = f"Install the agent's deps: {sys.executable} -m pip install -r {cwd}/requirements.txt"
-    debug_fix = f"Run it directly to see the error: cd {cwd} && {' '.join(cmd)}"
+    deps_fix = f"Install the agent's deps: {shlex.join([sys.executable, '-m', 'pip', 'install', '-r', f'{cwd}/requirements.txt'])}"
+    debug_fix = f"Run it directly to see the error: cd {shlex.quote(str(cwd))} && {shlex.join(cmd)}"
     env = {**os.environ, "DEV_MODE": "true", "LOG_LEVEL": "ERROR"}
     try:
         proc = subprocess.Popen(
@@ -1111,7 +1122,7 @@ def check_target(cwd: Optional[Path]) -> Optional[Check]:
         )
     unreadable = Check(
         "directory", FAIL, f"{cwd} cannot be read",
-        f"Fix its permissions (chmod u+rx {cwd}), or pass another: nuvel doctor --path <dir>",
+        f"Fix its permissions (chmod u+rx {shlex.quote(str(cwd))}), or pass another: nuvel doctor --path <dir>",
     )
     try:
         with os.scandir(cwd):
@@ -1195,25 +1206,35 @@ def _print_json(
     print(json.dumps(report, indent=2))
 
 
+def _print_line(line: str = "") -> None:
+    """Print to whatever stdout can encode: a report is no use if a glyph or path kills it."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        line.encode(encoding)
+    except UnicodeEncodeError:
+        line = line.translate(_ASCII_GLYPHS).encode(encoding, "backslashreplace").decode(encoding)
+    print(line)
+
+
 def _print_text(
     cwd: Optional[Path], sections: list[tuple[str, list[Check]]], acp_pkg: Optional[str],
 ) -> None:
-    print("nuvel doctor")
-    print(f"cwd: {cwd or '(no longer exists)'}")
-    print()
+    _print_line("nuvel doctor")
+    _print_line(f"cwd: {cwd or '(no longer exists)'}")
+    _print_line()
     for title, checks in sections:
-        print(title)
+        _print_line(title)
         for c in checks:
-            print(c.format())
-        print()
+            _print_line(c.format())
+        _print_line()
     if acp_pkg:
-        print("  Zed — add to settings.json (agent_servers):")
+        _print_line("  Zed — add to settings.json (agent_servers):")
         for line in zed_config_snippet(cwd, acp_pkg).splitlines():
-            print(f"    {line}")
-        print()
+            _print_line(f"    {line}")
+        _print_line()
     summary = _summarize(sections)
-    print("Summary")
-    print(f"  {summary['ok']} ok, {summary['warn']} warn, {summary['fail']} fail")
+    _print_line("Summary")
+    _print_line(f"  {summary['ok']} ok, {summary['warn']} warn, {summary['fail']} fail")
 
 
 def run_doctor(cwd: Path | None = None, *, as_json: bool = False) -> int:
@@ -1221,6 +1242,8 @@ def run_doctor(cwd: Path | None = None, *, as_json: bool = False) -> int:
         target = (cwd or Path.cwd()).resolve()
     except OSError:  # The shell's cwd was deleted out from under it.
         target = None
+    except RuntimeError:  # A symlink loop, before Python 3.13. check_target reports it.
+        target = Path(os.path.abspath(cwd or "."))
     acp_pkg = detect_acp_package(target) if target else None
     sections = collect_sections(target, acp_pkg)
     code = 1 if _summarize(sections)["fail"] else 0

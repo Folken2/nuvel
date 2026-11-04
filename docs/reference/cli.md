@@ -348,4 +348,4 @@ result = scaffold_agent(
 # on success: result["path"], result["files_created"], etc.
 ```
 
-The `buzz` and `hermes` backends export the same function signature. Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.
+The `buzz` and `hermes` backends export a `scaffold_agent()` with the same core arguments plus their own (`hermes` also accepts `with_litellm`, only to reject it). Channel flags on those backends return `{"status": "error", "message": ...}` if any are set.

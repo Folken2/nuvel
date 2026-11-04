@@ -7,7 +7,7 @@ description: >-
   when a session's history is growing past the context window, when
   deciding whether RESUMABILITY should stay on for a stateless deployment,
   or when tuning COMPACTION_INTERVAL / COMPACTION_OVERLAP /
-  COMPACTION_RETENTION. Pairs with adk-long-horizon-guardrails (which stops
+  COMPACTION_TOKEN_THRESHOLD / COMPACTION_RETENTION. Pairs with adk-long-horizon-guardrails (which stops
   runaway runs) and adk-prompt-engineering (the cache-stable prompt tiers,
   a separate but adjacent long-horizon cost lever).
 ---

@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -680,6 +681,156 @@ class TestNoTraceback(_TmpDirCase):
         check, _, _ = doctor.check_hermes_config(profile)
         self.assertEqual(check.status, doctor.FAIL)
         self.assertIn("chmod u+r", check.fix)
+
+
+class TestSymlinkLoopPath(_TmpDirCase):
+    def _loop(self) -> Path:
+        loop = self.root / "loop"
+        loop.symlink_to(loop)
+        return loop
+
+    def test_text_names_a_next_step(self):
+        code, out = self._run(cwd=self._loop())
+        self.assertEqual(code, 1)
+        self.assertIn("nuvel doctor --path <dir>", out)
+        self.assertIn("Summary", out)
+
+    def test_json_still_reports(self):
+        loop = self._loop()
+        code, out = self._run(cwd=loop, as_json=True)
+        self.assertEqual(code, 1)
+        report = json.loads(out)
+        self.assertEqual(report["cwd"], str(loop))
+        target = [c for c in report["checks"] if c["section"] == "Target"]
+        self.assertEqual(target[0]["status"], doctor.FAIL)
+        self.assertTrue(target[0]["fix"])
+
+    def test_cli_exits_without_a_traceback(self):
+        proc = subprocess.run(
+            [sys.executable, "-m", "nuvel.cli", "doctor", "--path", str(self._loop())],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotIn("Traceback", proc.stderr)
+
+
+class TestRequirementsEncoding(_TmpDirCase):
+    def _agent_with_requirements(self, raw: bytes) -> Path:
+        self._adk_agent()
+        (self.root / "requirements.txt").write_bytes(raw)
+        return self.root / "requirements.txt"
+
+    def test_stray_byte_keeps_the_framework_and_every_section(self):
+        req = self._agent_with_requirements(b"# caf\xe9\ngoogle-adk==1.26.0\n")
+        code, out = self._run(cwd=self.root, as_json=True)
+        self.assertEqual(code, 1)
+        checks = json.loads(out)["checks"]
+        found = next(c for c in checks if c["name"] == "requirements.txt")
+        self.assertEqual(found["status"], doctor.FAIL)
+        self.assertEqual(found["fix"], f"Re-save {req} as UTF-8")
+        self.assertEqual(
+            [title for title in dict.fromkeys(c["section"] for c in checks)],
+            ["Install", "Agent (adk)", "State", "Network", "Caches"],
+        )
+
+    def test_utf16_file_is_still_an_agent_that_says_to_resave(self):
+        self._agent_with_requirements("google-adk==1.26.0\n".encode("utf-16"))
+        code, out = self._run(cwd=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("as UTF-8", out)
+        self.assertNotIn("check raised", out)
+        self.assertNotIn("Report this", out)
+
+    def test_utf8_requirements_add_no_finding(self):
+        self._adk_agent()
+        self.assertEqual(doctor.detect_agent(self.root).problems, [])
+
+
+class TestStdoutEncoding(_TmpDirCase):
+    def _run_encoded(self, encoding: str, cwd: Path | None = None) -> str:
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding=encoding)
+        with mock.patch.object(doctor.sys, "stdout", stream):
+            doctor.run_doctor(cwd=cwd or self.root)
+            stream.flush()
+        return raw.getvalue().decode(encoding)
+
+    def test_legacy_encodings_print_the_whole_report(self):
+        for encoding in ("cp1252", "ascii"):
+            with self.subTest(encoding=encoding):
+                out = self._run_encoded(encoding)
+                self.assertIn("-> ", out)
+                self.assertIn("Summary", out)
+
+    def test_utf8_keeps_the_arrow(self):
+        self.assertIn("→ ", self._run_encoded("utf-8"))
+
+    def test_path_stdout_cannot_encode_does_not_crash(self):
+        target = self.root / "naïve→日本"
+        target.mkdir()
+        out = self._run_encoded("ascii", cwd=target)
+        self.assertIn(r"na\xefve", out)
+        self.assertIn("Summary", out)
+
+    def test_undecodable_filename_does_not_crash_utf8(self):
+        out = self._run_encoded("utf-8", cwd=Path(self.root, "gone\udcff"))
+        self.assertIn(r"gone\udcff", out)
+
+
+class TestCommandsAreShellQuoted(_TmpDirCase):
+    def _split(self, fix: str, command: str) -> list[str]:
+        return shlex.split(fix[fix.index(command):])
+
+    def setUp(self):
+        super().setUp()
+        self.spaced = self.root / "my dir"
+        self.spaced.mkdir()
+
+    def test_stale_cache_rm_targets_one_path(self):
+        (self.spaced / "k.json").symlink_to(self.root / "nowhere")
+        fix = doctor.check_scored_cache("c", self.spaced).fix
+        self.assertEqual(self._split(fix, "rm -rf"), ["rm", "-rf", str(self.spaced)])
+
+    def test_broken_hub_clone_rm_targets_one_path(self):
+        (self.spaced / ".git").mkdir()
+        fix = doctor.check_skills_hub_clone(self.spaced).fix
+        self.assertEqual(self._split(fix, "rm -rf"), ["rm", "-rf", str(self.spaced)])
+
+    def test_stale_hub_clone_pull_targets_one_path(self):
+        (self.spaced / ".git").mkdir()
+        (self.spaced / ".git" / "HEAD").write_text("ref")
+        old = time.time() - 90 * 86400
+        os.utime(self.spaced / ".git" / "HEAD", (old, old))
+        fix = doctor.check_skills_hub_clone(self.spaced).fix
+        self.assertEqual(self._split(fix, "git -C"), ["git", "-C", str(self.spaced), "pull", "--ff-only"])
+
+    def test_agent_env_cp_targets_two_paths(self):
+        (self.spaced / "requirements.txt").write_text("google-adk==1.26.0\n")
+        (self.spaced / "agent.py").write_text("# agent")
+        (self.spaced / ".env.example").write_text("X=1\n")
+        info = doctor.detect_agent(self.spaced)
+        fix = self._check(doctor.run_agent_checks(self.spaced, info), ".env file").fix
+        self.assertEqual(
+            self._split(fix, "cp "),
+            ["cp", f"{self.spaced}/.env.example", f"{self.spaced}/.env"],
+        )
+
+    def test_unreadable_target_chmod_targets_one_path(self):
+        self.spaced.chmod(0)
+        self.addCleanup(self.spaced.chmod, 0o755)
+        self.assertIn(f"chmod u+rx {shlex.quote(str(self.spaced))}", doctor.check_target(self.spaced).fix)
+
+    def test_crashed_check_ls_targets_one_path(self):
+        def boom():
+            raise PermissionError(13, "Permission denied", "/some where")
+
+        fix = doctor._safe(boom, "x").fix
+        self.assertEqual(self._split(fix, "ls -ld"), ["ls", "-ld", "/some where"])
+
+    def test_reinstall_from_a_spaced_checkout(self):
+        with mock.patch.object(doctor, "_source_root", return_value=self.spaced):
+            fix = doctor._reinstall_fix()
+        self.assertEqual(self._split(fix, "/")[-2:], ["-e", str(self.spaced)])
 
 
 class TestDeletedCwd(_TmpDirCase):
