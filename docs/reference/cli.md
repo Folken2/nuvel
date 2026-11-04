@@ -2,6 +2,14 @@
 
 All `nuvel` subcommands and flags.
 
+## `nuvel --version`
+
+Print the installed `nuvel-cli` version (read from package metadata) and exit. Added after 0.4.0.
+
+```bash
+nuvel --version   # nuvel 0.5.0.dev0
+```
+
 ## `nuvel agent create`
 
 Scaffold a new agent project.

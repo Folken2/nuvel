@@ -29,6 +29,61 @@ Skills, scaffolder, or meta-agent — build agents on Google ADK, Hermes Agent, 
   </p>
 -->
 
+## Quick Install
+
+**Install the CLI from PyPI.** The distribution is **`nuvel-cli`** and it gives you the `nuvel` command:
+
+```bash
+pipx install nuvel-cli
+# or
+uv tool install nuvel-cli
+
+nuvel --help
+```
+
+Tested with **`nuvel-cli` 0.4.0**, the latest release on PyPI (pipx 1.18.13, uv 0.12.21,
+Python 3.12.3). CI installs the same release with `pip install nuvel-cli` in a fresh venv.
+0.4.0 has no `--version` flag; `pipx list` or `uv tool list` shows the installed version.
+`pip install nuvel-cli` into a virtualenv works too. The bare `nuvel` name on PyPI is not this
+project.
+
+0.5.0 is not on PyPI yet. It depends on `nuvel-mcp`, which is pinned to its git tag, and PyPI
+rejects a package whose dependencies include a direct URL. `nuvel-mcp` has to be published to PyPI
+first. Until then, install the current code from source.
+
+**Install the current code from source:**
+
+```bash
+git clone https://github.com/Folken2/nuvel.git
+cd nuvel
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+```
+
+`requirements-dev.txt` installs the CLI in editable mode together with the runtime dependencies,
+including `nuvel-mcp` from its release tag on GitHub (it is not on PyPI yet). See
+[CONTRIBUTING.md](CONTRIBUTING.md#development-setup) for why the order matters.
+
+To install the current code as a tool rather than an editable checkout, build the wheel and
+install it (`nuvel-mcp` comes from its git tag, so `git` must be on your PATH):
+
+```bash
+pip install build
+python -m build --wheel --outdir dist .
+pipx install dist/nuvel_cli-*.whl
+# or
+uv tool install dist/nuvel_cli-*.whl
+
+nuvel --version
+```
+
+**Use the skills with Claude Code:**
+
+```bash
+git clone https://github.com/Folken2/nuvel.git
+# Skills live in nuvel/backends/adk/skills/ and a ready-made SKILL.md is at .claude/skills/nuvel/
+```
+
 ## What is nuvel?
 
 nuvel is an open-source toolkit for building production-ready agents across the agent frameworks that matter — Google ADK, Hermes Agent, and the Claude Agent SDK. It ships in three shapes — knowledge skills, a CLI scaffolder, and an autonomous meta-agent — and you use whichever fits the way you already work.
@@ -133,36 +188,6 @@ Agent Plugins ([agent-plugins.org](https://agent-plugins.org) v1.0.0) for integr
 
 Drop a plugin into your agent's plugin directory, or reference the skills from your agent's skill loader — each is self-contained, independently versioned, and follows the agent-plugins.org packaging standard. See `plugins/README.md` for full docs.
 
-## Quick Install
-
-**Use the skills with Claude Code:**
-
-```bash
-git clone https://github.com/Folken2/nuvel.git
-# Skills live in nuvel/backends/adk/skills/ and a ready-made SKILL.md is at .claude/skills/nuvel/
-```
-
-**Install the CLI from PyPI:**
-
-```bash
-pip install nuvel-cli
-```
-
-> The PyPI distribution is named **`nuvel-cli`** (the bare `nuvel` name was too close to an existing package). The CLI command and all imports stay `nuvel` — `pip install nuvel-cli` then `nuvel agent create my-agent`.
-
-**Or install from source (always available):**
-
-```bash
-git clone https://github.com/Folken2/nuvel.git
-cd nuvel
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-```
-
-`requirements-dev.txt` installs the CLI in editable mode together with the runtime dependencies,
-including `nuvel-mcp` from its release tag on GitHub (it is not on PyPI yet). See
-[CONTRIBUTING.md](CONTRIBUTING.md#development-setup) for why the order matters.
-
 ## Getting Started
 
 ### 1. Scaffold an agent
@@ -232,6 +257,7 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate an
 
 | Command | Description |
 | ------- | ----------- |
+| `nuvel --version` | Print the installed `nuvel-cli` version |
 | `nuvel agent create <name>` | Scaffold a new agent (default framework: `adk`) |
 | `nuvel agent create <name> --framework <fw>` | Pick framework: `adk`, `hermes`, or `claude-agent-sdk` |
 | `nuvel agent create <name> --description "..."` | Scaffold with a one-liner description |
