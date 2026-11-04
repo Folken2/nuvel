@@ -145,3 +145,11 @@ def test_with_acp_flag_warns_it_is_unsupported(tmp_path):
 )
 def test_frozen_modules_stay_importable(module):
     importlib.import_module(module)
+
+
+def test_version_flag_prints_the_installed_distribution_version():
+    from importlib.metadata import version
+
+    result = _nuvel("--version")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"nuvel {version('nuvel-cli')}"
