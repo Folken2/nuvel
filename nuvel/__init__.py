@@ -9,7 +9,11 @@ def __getattr__(name):
         from . import agent as _agent
 
         return _agent
+    # Lazy too: it needs pyyaml, and `nuvel doctor` must start without it.
+    if name == "bots":
+        # import_module, not `from . import bots`: that form consults hasattr(nuvel,
+        # "bots"), which lands back here and recurses.
+        import importlib
+
+        return importlib.import_module(".bots", __name__)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-from . import bots

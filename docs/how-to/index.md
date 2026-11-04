@@ -22,7 +22,7 @@ Recipes for common tasks. Each page is self-contained — pick the one matching 
 
 ## Operating an agent
 
-- [Diagnose with `nuvel doctor`](../reference/cli.md#nuvel-doctor) — health check for the install and any generated ADK or Claude Agent SDK agent.
+- [Diagnose with `nuvel doctor`](../reference/cli.md#nuvel-doctor) — health check for the install, the `nuvel run` setup and any generated ADK, Hermes or Claude Agent SDK agent.
 
 ## Shipping it
 

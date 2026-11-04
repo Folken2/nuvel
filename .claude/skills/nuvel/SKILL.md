@@ -74,7 +74,7 @@ nuvel new <kebab-name> \
   [--persona] [--with-composio] [--workflow] [--with-acp]
 ```
 
-The default `--output-dir` is `./generated-agents` relative to wherever you run from. See the **Feature flags** section above to decide on `--persona`, `--with-composio`, `--workflow`, and `--with-acp`. Pass `--system-prompt` only if the user gave you exact text — otherwise leave it off and write the prompt properly in step 4.
+The default `--output-dir` is `./generated-agents` relative to wherever you run from. See the **Feature flags** section above to decide on `--persona`, `--with-composio`, `--workflow`, and `--with-acp`. Pass `--system-prompt` only if the user gave you exact text — otherwise leave it off and write the prompt properly in step 4. To check the result, run `nuvel doctor --path <agent-dir>` once its `.env` is set: it exits non-zero and prints a next step for each problem; add `--json` for structured output.
 
 Verify: `ls generated-agents/<name>/` should show `<snake_name>/`, `run_adk.py`, `requirements.txt`, `.env.example`, `tests/`.
 

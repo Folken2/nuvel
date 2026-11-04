@@ -5,7 +5,7 @@ either value changes here, every downstream surface is updated:
 
   Python (import directly):
     - nuvel/config/llm.py             (meta-agent's own LiteLlm instances)
-    - nuvel/doctor.py                 (pricing.json coverage check)
+    - nuvel/doctor.py                 (provider key, network and pricing.json checks)
 
   Templates (substituted at scaffold time via _build_replacements):
     - nuvel/backends/adk/templates/{{agent_package}}/config/llm.py

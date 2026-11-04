@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `nuvel doctor --json`, and new doctor checks: install integrity, `.env` and Hermes `config.yaml` validity, writable state dirs, provider reachability, stale caches. Every `[WARN]` and `[FAIL]` now prints one next step.
 - `platform_sync`: with `NUVEL_PLATFORM_SYNC=1` and `NUVEL_PLATFORM_DATABASE_URL`, the meta-agent writes each completed run to Postgres (`runs`, `trace_events`), `nuvel evalv2 run` writes `eval_results` and `nuvel pricing sync|add` writes `model_prices`. Re-syncing never duplicates rows; with the database unconfigured or unreachable the run completes normally and logs one warning. Schema and row shapes: `docs/reference/platform-sync.md`.
 - `nuvel-mcp` package: the Skills MCP server as its own dependency-free distribution (`uvx nuvel-mcp serve`).
 - `nuvel-mcp client create --person <name> --company <name>` saves who is behind the new client in the same step (as `clients label` does; needs the database). A bad value or a missing database stops before any client is created.
@@ -29,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `nuvel doctor` now exits non-zero in more cases: with no API key for the configured provider (including a provider it doesn't recognise, which is expected to use `<PROVIDER>_API_KEY`), offline, or with a placeholder still in a required key. An API key that isn't shaped like one now fails too (spaces or non-ASCII characters, too short, too repetitive, or the wrong prefix for its provider). Scripts relying on its old exit code should expect this.
 - `claude-agent-sdk` is a supported `--framework` choice again, alongside `adk` and `hermes`, and `nuvel agent create`, `nuvel skills list` and `nuvel skills search` offer exactly those three.
 - **Breaking:** `record_recipe_signal` takes `nuvel.recipe_signal/2`, a weekly content-free snapshot (`status` of `draft`, `active` or `retired`, plus `uses`, `successes`, `corrections`, `days_used`), and `nuvel.recipe_signal/1` (per-event signals with an `event` field) is removed. `nuvel traces recipes` and the dashboard `/recipes` page read the latest `/2` snapshot per recipe and `nuvel.recipe/3` recipes; a recipe without text shows its steps only.
 - **Breaking:** `share_recipe` takes `nuvel.recipe/3` and `nuvel.recipe/2` is removed. Structure (`steps` without notes, and `stats`) is required; free text is optional and lives under `text` (`language`, `title`, `when_to_use`, `step_notes`, `pitfalls`, `narrative`). The server masks `text` as before, and a recipe without it skips masking and is stored with `masking.lexicon` null. Dropped pointers are under `/text/`.
