@@ -7,12 +7,6 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 
-[manifest]
-members = [
-    "nuvel-cli",
-    "nuvel-mcp",
-]
-
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -1676,7 +1670,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.83.0,<1.106.3" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
-    { name = "nuvel-mcp", editable = "packages/nuvel-mcp" },
+    { name = "nuvel-mcp", git = "https://github.com/Folken2/nuvel-mcp?rev=v0.5.0" },
     { name = "pgvector", specifier = ">=0.3,<1.0" },
     { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.7" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23,<2.0" },
@@ -1688,8 +1682,8 @@ provides-extras = ["docs", "test"]
 
 [[package]]
 name = "nuvel-mcp"
-version = "0.5.0.dev0"
-source = { editable = "packages/nuvel-mcp" }
+version = "0.5.0"
+source = { git = "https://github.com/Folken2/nuvel-mcp?rev=v0.5.0#1eb58080e5a6a1888c2770a2276f7617d81b6d08" }
 
 [[package]]
 name = "openai"

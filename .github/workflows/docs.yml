@@ -32,7 +32,6 @@ jobs:
 
       - name: Install docs dependencies
         run: |
-          pip install ./packages/nuvel-mcp
           pip install ".[docs]"
 
       - name: Build site

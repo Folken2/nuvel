@@ -1,2 +1,0 @@
-# Catalan currency words.
-euro euros dòlar dòlars lliura lliures cèntim cèntims

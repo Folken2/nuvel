@@ -31,22 +31,23 @@ cp .env.example .env
 # add your OPENROUTER_API_KEY
 ```
 
-One command installs everything: the CLI in editable mode, the `nuvel-mcp` workspace member
-(it is not on any index yet), the runtime dependencies from `requirements.txt`, and the test
-extras.
+One command installs everything: the CLI in editable mode, the runtime dependencies from
+`requirements.txt` (including `nuvel-mcp`), and the test extras.
 
 Contributors using `uv` can instead run `uv sync --all-extras`.
 
-### Why the workspace member comes first
+### Where `nuvel-mcp` comes from
 
-`pyproject.toml` reads the project's dependencies from `requirements.txt`
-(`dependencies = { file = ["requirements.txt"] }`), so that file is the *published* dependency
-list and pins `nuvel-mcp` as an external package. Installing `requirements.txt` on its own
-therefore fails on a clean checkout: nothing on any index provides `nuvel-mcp`. The editable
-install in `requirements-dev.txt` satisfies the pin locally.
+The Skills MCP server is its own repository, [Folken2/nuvel-mcp](https://github.com/Folken2/nuvel-mcp),
+with its own CI and releases; change it there, not here. `pyproject.toml` reads the project's
+dependencies from `requirements.txt` (`dependencies = { file = ["requirements.txt"] }`), so that
+file is the *published* dependency list. It installs `nuvel-mcp` from a release tag
+(`nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@<tag>`) until the package is on PyPI.
+To move to a newer `nuvel-mcp`, change the tag in both `requirements.txt` and
+`requirements-dev.txt`.
 
 Do **not** add a local path to `requirements.txt` — it would land in the published metadata and
-break consumers of the released package. Publishing `nuvel-mcp` is tracked separately.
+break consumers of the released package.
 
 Run the test suite:
 
@@ -88,16 +89,14 @@ API tokens stored in GitHub secrets. The workflow in
 [.github/workflows/release.yml](.github/workflows/release.yml) triggers on a
 `v*.*.*` tag push and:
 
-1. Builds sdist + wheel for both `nuvel-cli` and `nuvel-mcp` and verifies the tag matches the `version` in both `pyproject.toml` and `packages/nuvel-mcp/pyproject.toml` (the two packages always release at the same version)
+1. Builds sdist + wheel for `nuvel-cli` and verifies the tag matches the `version` in `pyproject.toml` (`nuvel-mcp` is released from its own repository)
 2. Publishes to PyPI through the OIDC-backed `pypi` environment
 3. Creates a GitHub release with auto-generated notes
 
 To cut a release:
 
 ```bash
-# 1. Bump version in pyproject.toml AND packages/nuvel-mcp/pyproject.toml
-#    and move the nuvel-mcp range in requirements.txt to match
-#    (e.g. 0.6.0 -> nuvel-mcp>=0.6.0,<0.7)
+# 1. Bump version in pyproject.toml
 # 2. Commit, push, and tag
 git commit -am "release: 0.2.0"
 git tag v0.2.0
@@ -108,20 +107,16 @@ One-time setup before the first release:
 
 - Register `nuvel` on PyPI and add this repo as a Trusted Publisher
   (`pypi.org` → Account → Publishing → Add a new pending publisher).
-- Do the same for `nuvel-mcp`: the PyPI project does not exist yet, so add a
-  *pending publisher* for it (same repo, workflow `release.yml`, environment
-  `pypi`). This is a manual maintainer step outside the repo.
 - Create a GitHub environment named `pypi` (Settings → Environments → New
   environment).
 
-### Before merging the `nuvel-mcp` branch
+### `nuvel-mcp` must be on PyPI first
 
-`nuvel-cli` depends on `nuvel-mcp`, a name nobody has registered on PyPI yet.
-Before the branch that introduces it is pushed or merged, a maintainer must
-publish `nuvel-mcp` `0.5.0.dev0` (or a placeholder) through the pending
-publisher above, so no one else can claim the name in between
-(dependency confusion). Keep the compatible range pin
-(`nuvel-mcp>=0.5.0.dev0,<0.6`); do not switch to an exact pin.
+PyPI rejects uploads whose dependencies are direct URLs, and `requirements.txt`
+currently installs `nuvel-mcp` from a git tag. Before the next `nuvel-cli`
+release, `nuvel-mcp` has to be published to PyPI from its own repository and
+the git line in `requirements.txt` replaced with a version range (for example
+`nuvel-mcp>=0.5,<0.6`).
 
 ## Adding a new messaging-app channel
 

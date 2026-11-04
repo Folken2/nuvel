@@ -838,8 +838,8 @@ class TestCommandsAreShellQuoted(_TmpDirCase):
         with mock.patch.object(doctor, "_source_root", return_value=self.spaced):
             fix = doctor._reinstall_fix()
         self.assertEqual(
-            self._split(fix, "/")[-4:],
-            ["-e", f"{self.spaced}/packages/nuvel-mcp", "-e", str(self.spaced)],
+            self._split(fix, "/")[-2:],
+            ["-e", str(self.spaced)],
         )
 
 
@@ -1143,13 +1143,13 @@ class TestHubLocation(_TmpDirCase):
 
 
 class TestReinstallFix(unittest.TestCase):
-    def test_checkout_installs_the_unpublished_workspace_member_first(self):
+    def test_checkout_reinstalls_editable(self):
         fix = doctor._reinstall_fix()
         root = doctor._source_root()
         self.assertIn("source checkout", fix)
         self.assertEqual(
             shlex.split(fix.split(": ", 1)[1]),
-            [sys.executable, "-m", "pip", "install", "-e", f"{root}/packages/nuvel-mcp", "-e", str(root)],
+            [sys.executable, "-m", "pip", "install", "-e", str(root)],
         )
 
     def test_published_install_says_so(self):
@@ -1210,14 +1210,14 @@ class TestPythonUpgradeFix(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_checkout_rebuilds_its_venv_with_the_workspace_member(self):
+    def test_checkout_rebuilds_its_venv(self):
         with mock.patch.object(doctor, "_source_root", return_value=Path("/my dir")):
             fix = doctor._python_upgrade_fix()
         self.assertIn("source checkout", fix)
         self.assertNotIn("pipx", fix)
         self.assertEqual(self._steps(fix), [
             ["python3.12", "-m", "venv", "/my dir/.venv"],
-            ["/my dir/.venv/bin/python", "-m", "pip", "install", "-e", "/my dir/packages/nuvel-mcp", "-e", "/my dir"],
+            ["/my dir/.venv/bin/python", "-m", "pip", "install", "-e", "/my dir"],
         ])
 
     def test_published_install_makes_a_new_venv(self):
@@ -1604,10 +1604,23 @@ def prepare_metadata_for_build_editable(directory, config_settings=None):
     return info
 
 
+get_requires_for_build_wheel = get_requires_for_build_editable
+prepare_metadata_for_build_wheel = prepare_metadata_for_build_editable
+
+
+def build_wheel(directory, config_settings=None, metadata_directory=None):
+    return _build(directory, {})
+
+
 def build_editable(directory, config_settings=None, metadata_directory=None):
+    info = _metadata_files()[0]
+    return _build(directory, {"offline_editable_%s.pth" % info.split("-")[0]: str(pathlib.Path.cwd()) + "\\n"})
+
+
+def _build(directory, extra):
     info, files = _metadata_files()
     tree = {f"{info}/{name}": text for name, text in files.items()}
-    tree["offline_editable_%s.pth" % info.split("-")[0]] = str(pathlib.Path.cwd()) + "\\n"
+    tree.update(extra)
     rows = []
     for name, text in tree.items():
         digest = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=").decode()
@@ -1626,7 +1639,8 @@ class _OfflineInstallCase(_TmpDirCase):
     """Runs install hints with the real pip and no network, against this environment's dependencies.
 
     Everything but nuvel itself is on PYTHONPATH, so pip still has to find nuvel-cli and
-    nuvel-mcp where the hint says they are. PIP_NO_INDEX makes any download an error.
+    nuvel-mcp where the hint says they are. PIP_NO_INDEX makes any download an error, and
+    git fetches the nuvel-mcp URL requirements.txt names from a local stand-in repository.
     """
 
     def setUp(self):
@@ -1651,7 +1665,36 @@ class _OfflineInstallCase(_TmpDirCase):
             "PIP_NO_INDEX": "1",
             "PIP_NO_BUILD_ISOLATION": "0",  # pip reads this one inverted: 0 turns isolation off.
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            **self._local_nuvel_mcp(),
         }
+
+    def _local_nuvel_mcp(self) -> dict[str, str]:
+        """A local git repo at the tag requirements.txt pins, and git config sending its URL there."""
+        line = next(
+            l for l in (doctor._source_root() / "requirements.txt").read_text().splitlines()
+            if l.startswith("nuvel-mcp @ git+")
+        )
+        url, tag = line.split("git+", 1)[1].rsplit("@", 1)
+        repo = self.root / "nuvel-mcp"
+        repo.mkdir()
+        (repo / "pyproject.toml").write_text(
+            '[build-system]\nrequires = []\nbuild-backend = "setuptools.build_meta"\n\n'
+            f'[project]\nname = "nuvel-mcp"\nversion = "{tag.lstrip("v")}"\n'
+        )
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        for args in (["init", "-q"], ["add", "."], ["commit", "-qm", "stand-in"], ["tag", tag]):
+            subprocess.run([*git, *args], check=True, capture_output=True)
+        self.nuvel_mcp_tag = tag
+        return {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"url.{repo.as_uri()}.insteadOf",
+            "GIT_CONFIG_VALUE_0": url,
+        }
+
+    def _assert_nuvel_mcp_from_git_tag(self, python: str):
+        script = "import importlib.metadata as m; print(m.distribution('nuvel-mcp').read_text('direct_url.json'))"
+        proc = subprocess.run([python, "-c", script], env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(json.loads(proc.stdout)["vcs_info"]["requested_revision"], self.nuvel_mcp_tag, proc.stderr)
 
     def _bash(self, command: str) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", "-c", command], env=self.env, capture_output=True, text=True, timeout=120)
@@ -1677,13 +1720,10 @@ class TestSourceReinstallHint(_OfflineInstallCase):
         expected = [str(root) if arg == "." else f"{root}/{arg}" if "/" in arg else arg for arg in shlex.split(recipe)[1:]]
         self.assertEqual(shlex.split(_command(doctor._reinstall_fix()))[-len(expected):], expected)
 
-    def test_hint_succeeds_where_a_plain_editable_install_would_not(self):
+    def test_hint_installs_nuvel_mcp_from_its_git_tag(self):
         venv = self.root / "fresh venv"
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
         python = str(venv / "bin" / "python")
-        plain = self._bash(shlex.join([python, "-m", "pip", "install", "-e", str(doctor._source_root())]))
-        self.assertNotEqual(plain.returncode, 0)
-        self.assertIn("nuvel-mcp", plain.stderr)
         with (
             mock.patch.object(doctor.sys, "executable", python),
             mock.patch.object(doctor.importlib.util, "find_spec", return_value=object()),
@@ -1694,6 +1734,7 @@ class TestSourceReinstallHint(_OfflineInstallCase):
         checks = self._doctor_checks(python)
         self.assertEqual(checks["nuvel-cli package"], doctor.OK)
         self.assertEqual(checks["declared dependencies"], doctor.OK)
+        self._assert_nuvel_mcp_from_git_tag(python)
 
 
 class TestPythonUpgradeHint(_OfflineInstallCase):
@@ -1715,6 +1756,7 @@ class TestPythonUpgradeHint(_OfflineInstallCase):
         self.assertEqual(checks["Python version"], doctor.OK)
         self.assertEqual(checks["nuvel-cli package"], doctor.OK)
         self.assertEqual(checks["declared dependencies"], doctor.OK)
+        self._assert_nuvel_mcp_from_git_tag(str(copy / ".venv/bin/python"))
 
 
 class _HeadHandler(http.server.BaseHTTPRequestHandler):

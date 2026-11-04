@@ -51,12 +51,6 @@ nuvel/                                  # the Python package
 ├── config/                             # logging, LLM config (used by meta-agent)
 └── utils/
 
-packages/
-└── nuvel-mcp/                          # second PyPI package: `nuvel-mcp` (import `nuvel_mcp`)
-    ├── pyproject.toml                  # no runtime deps; `http` extra adds `mcp`
-    ├── src/nuvel_mcp/                  # Skills MCP server (cli, server, skills_loader, feedback, installer)
-    └── tests/                          # run in CI with `pytest tests packages/nuvel-mcp/tests`
-
 tests/                                  # pytest suite
 docs/                                   # this site (reader-facing) +
 └── superpowers/                        # internal specs/plans (ignored by mkdocs)
