@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,17 @@ def _rec(run_id: str, tenant: str | None = None, outcome: str = "success") -> di
 def _write(path: Path, *recs: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+
+
+def _bump_mtime(path: Path) -> None:
+    """Push `path`'s mtime a second forward.
+
+    The kernel stamps mtimes from a coarse clock, so a dir changed right after
+    the index stamped it can keep the same mtime; bump it so the index's
+    change signal does not depend on timestamp granularity.
+    """
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
 
 
 def test_walk_prunes_vendored_and_hidden_dirs(tmp_path: Path) -> None:
@@ -95,6 +107,7 @@ def test_skill_run_dir_index_rewalks_when_a_runs_dir_changes(
     index = traces_cli.SkillRunDirIndex([root])
     index.dirs()
     (root / new_dir).mkdir()
+    _bump_mtime((root / new_dir).parent)
     assert root / new_dir in index.dirs()
     assert len(calls) == 2
 
@@ -106,6 +119,7 @@ def test_skill_run_dir_index_sees_a_runs_dir_created_later(tmp_path: Path) -> No
     root.mkdir()
     assert index.dirs() == []
     (root / "_runs" / "p.s").mkdir(parents=True)
+    _bump_mtime(root)
     assert index.dirs() == [root / "_runs", root / "_runs" / "p.s"]
 
 
