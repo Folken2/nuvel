@@ -34,15 +34,15 @@ def _argv(command: str) -> list[str]:
              "--with-composio", "--with-telegram", "--persona"],
         ),
         (
-            "nuvel agent create bot -f buzz --system-prompt='-be terse'",
-            ["nuvel", "agent", "create", "bot", "-f", "buzz",
+            "nuvel agent create bot -f claude-agent-sdk --system-prompt='-be terse'",
+            ["nuvel", "agent", "create", "bot", "-f", "claude-agent-sdk",
              "--system-prompt=-be terse"],
         ),
         (
-            "nuvel agent create bot --framework=hermes --workflow --with-acp "
+            "nuvel agent create bot --framework=hermes --workflow "
             "--with-eval --with-litellm --with-slack --with-teams",
             ["nuvel", "agent", "create", "bot", "--framework=hermes", "--workflow",
-             "--with-acp", "--with-eval", "--with-litellm", "--with-slack",
+             "--with-eval", "--with-litellm", "--with-slack",
              "--with-teams"],
         ),
         ("nuvel agent create --help", ["nuvel", "agent", "create", "--help"]),
@@ -148,6 +148,9 @@ def test_allowed_shapes(command, expected):
         "nuvel agent create my-agent --description",
         "nuvel agent create my-agent --persona=yes",
         "nuvel agent create my-agent --framework evil",
+        "nuvel agent create my-agent --framework buzz",
+        "nuvel agent create my-agent -f anthropic-managed-agents",
+        "nuvel agent create my-agent --with-acp",
         "nuvel agent create ../escape",
         "nuvel agent create My_Agent",
         "nuvel agent create a b",

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-nuvel is a **toolkit for generating production-ready AI agents** across the frameworks that matter — Google ADK (default), Buzz, and Hermes Agent. It ships as three things at once:
+nuvel is a **toolkit for generating production-ready AI agents** across the frameworks that matter — Google ADK (default), Hermes Agent, and Claude Agent SDK. It ships as three things at once:
 
 1. **Knowledge skills** (Anthropic skills format) under `nuvel/backends/<fw>/skills/` — portable into any compatible coding agent.
 2. **A CLI scaffolder** (`nuvel agent create`) that stamps out a full project skeleton from templates.
@@ -39,11 +39,11 @@ Every framework has the same shape under `nuvel/backends/<framework>/`:
 
 - `scaffold.py` — orchestrates template copy + variable substitution for that framework.
 - `templates/` — the actual production skeleton that gets copied into generated agents (FastAPI server, plugin chain, Dockerfile, Railway config, tests). Paths like `{{agent_package}}/` are placeholders rewritten at scaffold time.
-- `skills/` — knowledge skills bundled with that framework (15 / 6 / 5 respectively).
+- `skills/` — knowledge skills bundled with that framework (ADK 15, Hermes 1, Claude Agent SDK 6).
 
 When adding cross-cutting features (e.g. a new `--with-<channel>` flag), you almost always need to touch **all three** scaffolders: the ADK one to implement it, the other two to add it to their rejection lists. See [CONTRIBUTING.md](CONTRIBUTING.md) "Adding a new messaging-app channel" for the canonical recipe.
 
-ADK has an additional `templates_overlays/` directory (e.g. `gateway-slack/`, `gateway-telegram/`, `gateway-teams/`, `acp/`) merged onto the base templates when the corresponding flag is set. The `acp/` overlay (`--with-acp`) adds an Agent Client Protocol adapter (`<pkg>/acp/`, stdio JSON-RPC per agentclientprotocol.com) plus a local terminal CLI (`<pkg>/cli.py`), both reusing the same `AgentHarness` Runner — so the agent is runnable as an editor subprocess and from the shell, not only as the FastAPI server.
+ADK has an additional `templates_overlays/` directory (e.g. `gateway-slack/`, `gateway-telegram/`, `gateway-teams/`) merged onto the base templates when the corresponding flag is set.
 
 ### Two plugin chains — don't confuse them
 

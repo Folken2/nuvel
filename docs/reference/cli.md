@@ -68,7 +68,7 @@ nuvel agent create <name> [options]
 | Argument / flag | Default | Description |
 |---|---|---|
 | `<name>` | *(required)* | Kebab-case agent name. Lowercase letters, digits, single hyphens; must start with a letter; max 40 chars. |
-| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `hermes`, `claude-agent-sdk`. See [Experimental](../experimental.md) for what is not supported. |
+| `--framework`, `-f` | `adk` | Backend framework. One of `adk`, `hermes`, `claude-agent-sdk`. See [Removed capabilities](../experimental.md) for what was removed. |
 | `--output-dir` | `./generated-agents` (or `$AGENTS_OUTPUT_DIR`) | Parent directory for the new agent. |
 | `--description` | `""` | Short agent description, baked into the README and the agent's metadata (`SOUL.md` on Hermes). |
 | `--system-prompt` | `""` | Inline system prompt seed. Overrides the per-overlay default frame on ADK, fills `prompt/system_prompt.md` on the Claude Agent SDK, and becomes the `# Purpose` section of `SOUL.md` on Hermes. |

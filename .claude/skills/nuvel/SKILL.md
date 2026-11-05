@@ -33,7 +33,7 @@ Throughout the rest of this skill `nuvel` means "whichever invocation works on t
 
 When in doubt: Mode A.
 
-## Feature flags — `--persona`, `--with-composio`, `--workflow`, `--with-acp`
+## Feature flags — `--persona`, `--with-composio`, `--workflow`
 
 `nuvel agent create` ships several optional bundles. Pick them up front; they shape the scaffold meaningfully and aren't easy to retrofit.
 
@@ -42,8 +42,6 @@ When in doubt: Mode A.
 **`--with-composio`** — wires the Composio Tool Router via ADK's `McpToolset`. One `composio.create(user_id=...)` call gives the agent ~1000 toolkits (Gmail, GitHub, Slack, Notion, Calendar, etc.) behind a single hosted MCP endpoint. Composio handles auth, tool discovery, and execution. Requires `COMPOSIO_API_KEY` at runtime; without it the toolset gracefully no-ops. Use this when **the agent's value is breadth of integrations** rather than depth in one domain. Independent of `--persona` — combine freely.
 
 **`--workflow`** — makes the root agent an ADK 2.0 `Workflow` graph (`agent_workflow.py`) instead of a single `LlmAgent`: a planning node and an execution node, both `mode='task'` with `output_schema` contracts, plus a deterministic routing node between them. `agent.py` becomes a shim re-exporting `root_agent`, so every import path is unchanged. Use it when the agent's work is **genuinely multi-step with branching** — plan-then-execute, triage-then-route, draft-then-review. Skip it for a single-purpose tool-using agent; a graph you don't need is just indirection. Read `adk-task-delegation` and `adk-workflow-graphs` before editing the graph.
-
-**`--with-acp`** — makes the agent **ACP-compatible and CLI-runnable**. Adds an `acp/` package implementing the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC 2.0 over stdio — the protocol Zed and other editors use to drive an agent as a subprocess) and a `cli.py` local terminal entrypoint. Run the protocol adapter with `python -m <pkg>.acp` (an editor spawns this and speaks `initialize` → `session/new` → `session/prompt` over the pipe); run the plain CLI with `python -m <pkg>.cli "prompt"` (one-shot) or `python -m <pkg>.cli` (REPL). Both reuse the same `AgentHarness`-wired Runner as the FastAPI server, so tools/plugins/memory/cost tracking behave identically. The ACP adapter also honors the editor's session capabilities: `mcpServers` declared in `session/new` (stdio / HTTP / SSE) are wired into that session's agent as tools, when the client advertises `fs` capabilities the agent gets `read_text_file` / `write_text_file` tools that operate on the editor's filesystem view (unsaved buffers included), and sensitive tool calls are gated by an editor approval prompt via `session/request_permission` (HITL — tune with `ACP_PERMISSION_MODE` = `off`/`sensitive`/`all` and `ACP_PERMISSION_TOOLS`). Independent of the other flags — combine freely. Use it when the agent should be **usable from an editor or a shell**, not only as an HTTP server. ADK-only (the other backends reject the flag).
 
 **When to combine.** Personal agent meant to act across the user's whole digital life: `--persona --with-composio`. Pure task bot needing many integrations: `--with-composio` only. Domain-specialist that should never drift (e.g. SQL analyst, data-pipeline operator): no flags. Personal companion without external tools: `--persona` only.
 
@@ -71,10 +69,10 @@ If the user gave you a vague brief ("an agent that helps with X"), name 2-3 conc
 nuvel new <kebab-name> \
   --description "one-line description" \
   --output-dir ./generated-agents \
-  [--persona] [--with-composio] [--workflow] [--with-acp]
+  [--persona] [--with-composio] [--workflow]
 ```
 
-The default `--output-dir` is `./generated-agents` relative to wherever you run from. See the **Feature flags** section above to decide on `--persona`, `--with-composio`, `--workflow`, and `--with-acp`. Pass `--system-prompt` only if the user gave you exact text — otherwise leave it off and write the prompt properly in step 4. To check the result, run `nuvel doctor --path <agent-dir>` once its `.env` is set: it exits non-zero and prints a next step for each problem; add `--json` for structured output.
+The default `--output-dir` is `./generated-agents` relative to wherever you run from. See the **Feature flags** section above to decide on `--persona`, `--with-composio`, and `--workflow`. Pass `--system-prompt` only if the user gave you exact text — otherwise leave it off and write the prompt properly in step 4. To check the result, run `nuvel doctor --path <agent-dir>` once its `.env` is set: it exits non-zero and prints a next step for each problem; add `--json` for structured output.
 
 Verify: `ls generated-agents/<name>/` should show `<snake_name>/`, `run_adk.py`, `requirements.txt`, `.env.example`, `tests/`.
 
@@ -164,11 +162,6 @@ nuvel new <kebab-name> --description "…" --persona
 
 # Just Composio (stateless task bot with many integrations)
 nuvel new <kebab-name> --description "…" --with-composio
-
-# ACP-compatible + CLI-runnable (editor subprocess + terminal REPL)
-nuvel new <kebab-name> --description "…" --with-acp
-#   then: python -m <snake_name>.acp     (Agent Client Protocol over stdio)
-#         python -m <snake_name>.cli "…"  (one-shot)  |  python -m <snake_name>.cli  (REPL)
 
 # Serve a skills hub over MCP (standalone, dependency-free package)
 nuvel-mcp serve --skills-dir ./skills-hub   # same as: nuvel mcp serve; or: uvx nuvel-mcp serve

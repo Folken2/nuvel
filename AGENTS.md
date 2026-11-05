@@ -7,8 +7,8 @@ Guidance for AI coding agents working in this repository.
 nuvel is a toolkit for generating production-ready AI agents across three frameworks:
 
 - Google ADK, the default framework.
-- Buzz (Nostr relay, Bitcoin/Lightning tools).
 - Hermes Agent (platform gateways).
+- Claude Agent SDK.
 
 It ships as:
 

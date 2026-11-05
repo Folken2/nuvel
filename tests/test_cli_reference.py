@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from nuvel.cli import FROZEN_COMMANDS, build_parser
+from nuvel.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "docs/reference/cli.md"
@@ -21,18 +21,12 @@ HEADING = re.compile(r"^(#{2,6}) `(nuvel(?: [a-z0-9-]+)*)`$")
 
 
 def _walk(parser: argparse.ArgumentParser, path: str = "nuvel"):
-    """Yield (command path, parser, is_leaf) for every command, frozen ones included."""
+    """Yield (command path, parser, is_leaf) for every command."""
     subparsers = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
     yield path, parser, not subparsers
     for action in subparsers:
-        # dict.items, not the visible iteration, so frozen commands are walked too.
-        for name, child in dict.items(action.choices):
+        for name, child in action.choices.items():
             yield from _walk(child, f"{path} {name}")
-
-
-def _visible(path: str) -> bool:
-    words = path.split()
-    return not (len(words) > 1 and words[1] in FROZEN_COMMANDS)
 
 
 def _arguments(parser: argparse.ArgumentParser):
@@ -47,7 +41,7 @@ def _arguments(parser: argparse.ArgumentParser):
 
 
 COMMANDS = {path: (parser, leaf) for path, parser, leaf in _walk(build_parser())}
-VISIBLE = sorted(path for path in COMMANDS if _visible(path))
+VISIBLE = sorted(COMMANDS)
 LEAVES = [path for path in VISIBLE if COMMANDS[path][1]]
 
 
@@ -76,7 +70,6 @@ SECTIONS = _sections()
 def test_walk_is_not_vacuous():
     assert {"nuvel agent create", "nuvel mcp client create", "nuvel bots skills search"} <= set(LEAVES)
     assert "--with-telegram" in _arguments(COMMANDS["nuvel agent create"][0])[0]
-    assert set(FROZEN_COMMANDS) and all(f"nuvel {name}" in COMMANDS for name in FROZEN_COMMANDS)
 
 
 def test_every_command_has_a_heading():
@@ -105,10 +98,12 @@ def test_help_and_version_are_documented():
     assert [name for name in ("`-h`", "`--help`", "`--version`") if name not in SECTIONS["nuvel"]] == []
 
 
-def test_frozen_capabilities_are_absent():
+def test_removed_acp_command_is_gone():
+    assert "nuvel acp" not in COMMANDS
+    assert "nuvel acp" not in REFERENCE.read_text(encoding="utf-8")
+
+
+def test_suppressed_arguments_are_not_documented():
     text = REFERENCE.read_text(encoding="utf-8")
-    hidden = [f"nuvel {name}" for name in FROZEN_COMMANDS]
-    for path, (parser, _) in COMMANDS.items():
-        hidden += _arguments(parser)[1]
-    assert hidden
+    hidden = [name for parser, _ in COMMANDS.values() for name in _arguments(parser)[1]]
     assert [term for term in hidden if term.strip("<>") in text] == []

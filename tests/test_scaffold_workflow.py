@@ -169,15 +169,6 @@ class TestWorkflowFlagRejectedByOtherBackends(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("--workflow", result["message"])
 
-    def test_managed_agents_rejects_workflow(self):
-        from nuvel.backends.anthropic_managed_agents.scaffold import (
-            scaffold_agent as managed_scaffold,
-        )
-
-        result = managed_scaffold(name="x-agent", workflow=True)
-        self.assertEqual(result["status"], "error")
-        self.assertIn("--workflow", result["message"])
-
 
 class TestCliWiring(unittest.TestCase):
     def test_new_parser_accepts_workflow_flag(self):

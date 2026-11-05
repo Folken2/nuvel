@@ -46,18 +46,7 @@ from pathlib import Path
 
 DEFAULT_FRAMEWORK = "adk"
 SUPPORTED_FRAMEWORKS = ("adk", "hermes", "claude-agent-sdk")
-DEPRECATED_FRAMEWORKS = ("anthropic-managed-agents",)
-# Frozen: still dispatchable for anyone who knows the name, but left out of the
-# usage line, the help listing and the "invalid choice" error.
-FROZEN_COMMANDS = ("acp",)
 _BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
-
-
-class _VisibleChoices(dict):
-    """Subcommand map that accepts frozen names but never lists them."""
-
-    def __iter__(self):
-        return (name for name in super().__iter__() if name not in FROZEN_COMMANDS)
 
 
 def _backend_module(framework: str) -> str:
@@ -69,23 +58,11 @@ def _skills_dir(framework: str) -> Path:
 
 
 def _scaffold_agent_for(framework: str):
-    if framework in DEPRECATED_FRAMEWORKS:
-        print(
-            f"\u26a0  Warning: '{framework}' is deprecated and will be removed in a "
-            f"future version. Use one of: {', '.join(SUPPORTED_FRAMEWORKS)}.",
-            file=sys.stderr,
-        )
     if framework == "adk":
         from nuvel.backends.adk.scaffold import scaffold_agent
         return scaffold_agent
     if framework == "claude-agent-sdk":
         from nuvel.backends.claude_agent_sdk.scaffold import scaffold_agent
-        return scaffold_agent
-    if framework == "anthropic-managed-agents":
-        from nuvel.backends.anthropic_managed_agents.scaffold import scaffold_agent
-        return scaffold_agent
-    if framework == "buzz":
-        from nuvel.backends.buzz.scaffold import scaffold_agent
         return scaffold_agent
     if framework == "hermes":
         from nuvel.backends.hermes.scaffold import scaffold_agent
@@ -139,14 +116,6 @@ def _scaffold_kwargs(scaffold_agent, args: argparse.Namespace) -> dict:
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    # Answered here because the frozen flag's only supported home is ADK, and
-    # a backend's own refusal may not name the backend.
-    if args.with_acp and args.framework != DEFAULT_FRAMEWORK:
-        print(f"Error: {_unsupported_message(['--with-acp'], args.framework)}", file=sys.stderr)
-        return 1
-    if args.with_acp:
-        print("\u26a0  Warning: --with-acp is experimental and unsupported.", file=sys.stderr)
-
     scaffold_agent = _scaffold_agent_for(args.framework)
 
     try:
@@ -167,14 +136,10 @@ def _cmd_new(args: argparse.Namespace) -> int:
             flags.append("composio")
         if result.get("workflow"):
             flags.append("workflow")
-        if result.get("with_acp"):
-            flags.append("acp")
         if result.get("with_eval"):
             flags.append("eval")
         if result.get("with_litellm"):
             flags.append("litellm")
-        if result.get("with_buzz"):
-            flags.append("buzz")
         if flags:
             print(f"Bundles: {', '.join(flags)}")
         channels = [
@@ -485,10 +450,6 @@ def _add_new_agent_args(parser: argparse.ArgumentParser) -> None:
              "typed contracts, and conditional routing, instead of a single LlmAgent.",
     )
     parser.add_argument(
-        "--with-acp", action="store_true",
-        help=argparse.SUPPRESS,  # frozen; _cmd_new warns it is unsupported
-    )
-    parser.add_argument(
         "--with-eval", action="store_true",
         help="(adk only) Stamp a starter evalv2 suite into the agent "
              "(skills/default/eval/suite.yaml + a sample example). Run it with "
@@ -594,9 +555,6 @@ def build_parser() -> argparse.ArgumentParser:
     from nuvel.commands import mcp_serve
     mcp_serve.register(sub)
 
-    from nuvel.commands import acp_serve
-    acp_serve.register(sub)
-
     # These subcommands pull optional third-party deps (fastapi/uvicorn, the
     # eval stack). Register them when importable; skip cleanly when they're not,
     # so the stdlib-only commands above still work in a bare environment.
@@ -619,7 +577,6 @@ def build_parser() -> argparse.ArgumentParser:
     from nuvel.evalv2 import cli as evalv2_cli
     evalv2_cli.register(sub)
 
-    sub.choices = _VisibleChoices(sub.choices)
     return parser
 
 

@@ -3,8 +3,7 @@ scaffold.py — The Hermes Stamping Script
 
 Copies the template skeleton from nuvel/backends/hermes/templates/ into a
 target directory, renames the {{agent_package}} directory, and substitutes
-placeholders — the same Copy-Boilerplate-Adapt shape as the ADK and Buzz
-backends.
+placeholders — the same Copy-Boilerplate-Adapt shape as the ADK backend.
 
 What lands is a **Hermes profile**, not a Python program: SOUL.md (identity),
 config.yaml (model, turn budget, platforms, skills), .env.example (secrets),
@@ -20,7 +19,7 @@ One overlay is applied from nuvel/backends/hermes/templates_overlays/<bundle>/:
                     allowed_users / mention_only knobs spelled out.
 
 Everything else (`--persona`, `--with-composio`, `--with-slack`,
-`--with-teams`, `--workflow`, `--with-eval`, `--with-acp`) is ADK-only or
+`--with-teams`, `--workflow`, `--with-eval`) is ADK-only or
 meaningless for Hermes, and is rejected rather than silently ignored.
 
 Usage:
@@ -187,7 +186,6 @@ def scaffold_agent(
     with_telegram: bool = False,
     with_teams: bool = False,
     workflow: bool = False,
-    with_acp: bool = False,
     with_eval: bool = False,
     model: str = DEFAULT_HERMES_MODEL,
     telegram_bot_token: str = "",
@@ -209,7 +207,7 @@ def scaffold_agent(
         telegram_bot_token: Seed for `TELEGRAM_BOT_TOKEN` in .env.example.
                             Blank by default — the token is a credential.
 
-    The persona / composio / slack / teams / workflow / eval / acp bundles are
+    The persona / composio / slack / teams / workflow / eval bundles are
     ADK-only; passing them here returns an error rather than silently ignoring.
 
     Returns:
@@ -237,15 +235,6 @@ def scaffold_agent(
         return {
             "status": "error",
             "message": "--with-eval is not yet supported for the hermes backend. Use --framework adk.",
-        }
-    if with_acp:
-        return {
-            "status": "error",
-            "message": (
-                "--with-acp is not supported for the hermes backend — Hermes owns the "
-                "runtime, so there is no process for nuvel to hand an ACP adapter to. "
-                "Use --framework adk."
-            ),
         }
     for flag_name, flag_set in (
         ("with-slack", with_slack),
@@ -303,7 +292,6 @@ def scaffold_agent(
             "files": files_created,
             "persona": False,
             "with_composio": False,
-            "with_acp": False,
             "with_telegram": with_telegram,
             "model": model,
         }

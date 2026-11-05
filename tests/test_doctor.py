@@ -123,15 +123,6 @@ class TestAgentDetection(unittest.TestCase):
         self.assertTrue(info.is_agent)
         self.assertEqual(info.framework, "claude-agent-sdk")
 
-    def test_detects_managed_agent(self):
-        root = Path(self.tmpdir)
-        (root / "requirements.txt").write_text("anthropic>=0.40\n")
-        (root / "setup.py").write_text("# setup")
-        (root / "server.py").write_text("# server")
-        info = doctor.detect_agent(root)
-        self.assertTrue(info.is_agent)
-        self.assertEqual(info.framework, "anthropic-managed-agents")
-
 
 class TestAgentChecks(unittest.TestCase):
     def setUp(self):
@@ -1093,36 +1084,6 @@ class TestHermesSetup(_TmpDirCase):
         with mock.patch.object(doctor, "check_hermes_config", wraps=doctor.check_hermes_config) as parse:
             self._run(cwd=project)
         self.assertEqual(parse.call_count, 1)
-
-
-class TestAcpSetup(_TmpDirCase):
-    def _agent(self) -> Path:
-        from nuvel.backends.adk.scaffold import scaffold_agent
-
-        return Path(scaffold_agent("my-agent", output_dir=str(self.root), with_acp=True)["path"])
-
-    def test_working_adapter_passes(self):
-        package = self.root / "stub_agent" / "acp"
-        package.mkdir(parents=True)
-        (package / "__main__.py").write_text(
-            "import json, sys\n"
-            "request = json.loads(sys.stdin.readline())\n"
-            "result = {'protocolVersion': 2, 'agentCapabilities': {}}\n"
-            "print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)\n"
-        )
-        check = doctor.check_acp_handshake(self.root, "stub_agent")
-        self.assertEqual(check.status, doctor.OK, check.detail)
-
-    def test_scaffolded_adapter_answers_initialize(self):
-        check = doctor.check_acp_handshake(self._agent(), "my_agent", timeout=120.0)
-        self.assertEqual(check.status, doctor.OK, check.detail)
-
-    def test_json_carries_the_zed_config(self):
-        agent = self._agent()
-        ok = [doctor.Check("ACP stdio handshake", doctor.OK)]
-        with mock.patch.object(doctor, "run_acp_checks", return_value=ok):
-            _, out = self._run(cwd=agent, as_json=True)
-        self.assertIn("my-agent", json.loads(out)["zed_config"]["agent_servers"])
 
 
 class TestHubLocation(_TmpDirCase):

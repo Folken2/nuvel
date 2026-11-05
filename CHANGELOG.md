@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `nuvel.mcp` import path; import `nuvel_mcp` instead. Removal not before 0.7.
 
+### Removed
+
+- The capabilities frozen on 2026-11-03: ACP (`nuvel agent create --with-acp`, `nuvel acp serve`, `nuvel/acp/`, the ADK `acp` overlay and `nuvel doctor`'s ACP handshake check), the `buzz` backend and the `anthropic_managed_agents` backend. `--with-acp` and `nuvel acp` are now unknown to the parser, and `nuvel doctor` no longer reports an agent whose requirements name only `anthropic` as `anthropic-managed-agents`. See `docs/experimental.md`.
+
 ### Fixed
 
 - `nuvel agent create --framework hermes` and `--framework claude-agent-sdk` crashed with `TypeError: unexpected keyword 'with_litellm'`, because the CLI passed every flag to every backend. Each backend now gets only the flags it declares, and a flag it does not support exits with an error naming the flag and the backend.

@@ -20,7 +20,6 @@ def scaffold_agent(
     with_telegram: bool = False,
     with_teams: bool = False,
     workflow: bool = False,
-    with_acp: bool = False,
     with_eval: bool = False,
     with_litellm: bool = False,
     system_prompt: str = "",
@@ -40,7 +39,6 @@ def scaffold_agent(
         with_telegram: Add the Telegram Bot API gateway.
         with_teams: Add the MS Teams sidecar.
         workflow: Build an ADK 2.0 Workflow graph instead of an LlmAgent.
-        with_acp: Add the Agent Client Protocol stdio adapter.
         with_eval: Add an evalv2 suite starter.
         system_prompt: Optional inline system prompt seed.
     """
@@ -60,7 +58,6 @@ def scaffold_agent(
         with_telegram=with_telegram,
         with_teams=with_teams,
         workflow=workflow,
-        with_acp=with_acp,
         with_eval=with_eval,
         with_litellm=with_litellm,
     )

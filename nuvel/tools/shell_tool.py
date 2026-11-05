@@ -38,9 +38,7 @@ _MAX_TIMEOUT = 120  # seconds
 _MAX_OUTPUT_CHARS = 20_000  # per stream
 _MAX_ARG_CHARS = 4_000
 
-_FRAMEWORKS = frozenset(
-    {"adk", "buzz", "hermes", "claude-agent-sdk", "anthropic-managed-agents"}
-)
+_FRAMEWORKS = frozenset({"adk", "hermes", "claude-agent-sdk"})
 _AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 # Revisions / paths for read-only git commands: no leading "-", no shell or
 # control characters. `:` and `^~@{}` cover rev syntax like HEAD~1 or main@{1}.
@@ -69,7 +67,6 @@ _AGENT_CREATE_OPTS: dict[str, object] = {
     "--with-telegram": "flag",
     "--with-teams": "flag",
     "--workflow": "flag",
-    "--with-acp": "flag",
     "--with-eval": "flag",
     "--with-litellm": "flag",
 }
@@ -376,7 +373,7 @@ def run_cli(command: str, cwd: str = "", tool_context=None) -> dict:
     Allowed shapes (anything else, including python/pip/npm/npx/uv, is rejected):
     - `nuvel agent create <name> [--framework X] [--description '...']
       [--system-prompt '...'] [--persona] [--with-composio] [--with-slack]
-      [--with-telegram] [--with-teams] [--workflow] [--with-acp] [--with-eval]
+      [--with-telegram] [--with-teams] [--workflow] [--with-eval]
       [--with-litellm]` — agents always land in AGENTS_OUTPUT_DIR
     - `nuvel skills list [--framework X]`, `nuvel skills search <query>`
     - `nuvel doctor`
