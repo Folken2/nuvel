@@ -11,8 +11,8 @@ Runner with the full plugin chain. The turn makes the model call the agent's
 - the files: the memory file the tool wrote, and the user's attachment saved
   as an artifact by the SaveFilesAsArtifacts plugin.
 
-No network: the driver refuses every non-loopback connection, and the model
-never leaves the process. A regression in the scaffold, the runner wiring, or
+No network: both child processes start behind a guard that refuses every
+non-loopback connection and name lookup, and the model never leaves the process. A regression in the scaffold, the runner wiring, or
 the trace / artifact writers fails this test.
 """
 
@@ -25,8 +25,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 import nuvel
 
 _AGENT = "product-loop-agent"
@@ -34,10 +32,48 @@ _PKG = "product_loop_agent"
 _FACT = "The client's invoices are due on the 15th."
 _ATTACHMENT = b"line one of the client's notes\n"
 _REPLY = "Saved it to memory."
-# Known bug, also pinned by the strict xfail in tests/test_doctor.py: harness.py.tmpl
-# sets event_retention_size without token_threshold, which ADK 2.13's
-# EventsCompactionConfig rejects, so build_runner() raises before the first turn.
-_KNOWN_COMPACTION_BUG = "token_threshold and event_retention_size must be set together"
+
+# Every child process starts through this: it refuses non-loopback connections
+# and name lookups, then runs the real command (``-m module`` or a script path)
+# as ``__main__``.
+_NO_NETWORK = textwrap.dedent(
+    """
+    import ipaddress
+    import runpy
+    import socket
+    import sys
+
+    def _is_loopback(host):
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return host == "localhost"
+
+    _connect = socket.socket.connect
+    _getaddrinfo = socket.getaddrinfo
+
+    def _connect_loopback_only(sock, address):
+        if isinstance(address, tuple) and not _is_loopback(address[0]):
+            raise OSError(f"network access attempted: {address!r}")
+        return _connect(sock, address)
+
+    def _getaddrinfo_loopback_only(host, *args, **kwargs):
+        if host is not None and not _is_loopback(host):
+            raise OSError(f"name lookup attempted: {host!r}")
+        return _getaddrinfo(host, *args, **kwargs)
+
+    socket.socket.connect = _connect_loopback_only
+    socket.getaddrinfo = _getaddrinfo_loopback_only
+    socket.gethostbyname = lambda host: _getaddrinfo_loopback_only(host, None)[0][4][0]
+
+    del sys.argv[0]
+    if sys.argv[0] == "-m":
+        del sys.argv[0]
+        runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)
+    else:
+        runpy.run_path(sys.argv[0], run_name="__main__")
+    """
+)
 
 # Runs inside the generated agent's project directory, in its own process, so
 # the generated package's import-time config (TRACE_DIR, the AgentHarness
@@ -45,25 +81,7 @@ _KNOWN_COMPACTION_BUG = "token_threshold and event_retention_size must be set to
 _DRIVER = textwrap.dedent(
     """
     import asyncio
-    import ipaddress
     import json
-    import socket
-
-    _connect = socket.socket.connect
-
-    def _loopback_only(sock, address):
-        host = address[0] if isinstance(address, tuple) else None
-        if host is not None:
-            try:
-                local = ipaddress.ip_address(host).is_loopback
-            except ValueError:
-                local = host == "localhost"
-            if not local:
-                raise OSError(f"network access attempted: {{address!r}}")
-        return _connect(sock, address)
-
-    socket.socket.connect = _loopback_only
-
     from typing import AsyncGenerator
 
     from google.adk.models.base_llm import BaseLlm
@@ -118,10 +136,12 @@ _DRIVER = textwrap.dedent(
         ):
             if event.content:
                 texts += [p.text for p in event.content.parts or [] if p.text]
-        # TracePlugin writes JSONL on a background task; flush before exit.
-        from {pkg}.plugins import trace
-        await trace._file_writer.flush()
         await runner.close()
+        # The trace JSONL is written by a background task that exits once its
+        # queue idles; asyncio.run() would cancel it, so let it drain first.
+        pending = asyncio.all_tasks() - {{asyncio.current_task()}}
+        if pending:
+            await asyncio.wait(pending, timeout=30)
         print(json.dumps({{"session_id": session.id, "texts": texts, "calls": calls}}))
 
     asyncio.run(main())
@@ -129,14 +149,16 @@ _DRIVER = textwrap.dedent(
 )
 
 
-def _run(cmd: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+def _run_offline(
+    args: list[str], *, guard: Path, cwd: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess:
+    """Run ``python <args>`` behind the no-network guard; fail on a non-zero exit."""
     result = subprocess.run(
-        cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60
+        [sys.executable, str(guard), *args],
+        cwd=cwd, env=env, capture_output=True, text=True, timeout=120,
     )
-    if result.returncode != 0 and _KNOWN_COMPACTION_BUG in result.stderr:
-        pytest.xfail(f"generated AgentHarness cannot build a Runner: {_KNOWN_COMPACTION_BUG}")
     assert result.returncode == 0, (
-        f"{cmd[1:]} exited {result.returncode}\n"
+        f"{args} exited {result.returncode}\n"
         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
     return result
@@ -166,11 +188,14 @@ def test_create_run_and_assert_the_artefact(tmp_path: Path) -> None:
         ),
     )
 
+    guard = tmp_path / "no_network.py"
+    guard.write_text(_NO_NETWORK, encoding="utf-8")
+
     # 1. Create: the CLI a client runs.
-    _run(
-        [sys.executable, "-m", "nuvel", "agent", "create", _AGENT,
+    _run_offline(
+        ["-m", "nuvel", "agent", "create", _AGENT,
          "--output-dir", str(tmp_path), "--description", "End-to-end product loop agent"],
-        cwd=tmp_path, env=env,
+        guard=guard, cwd=tmp_path, env=env,
     )
     project = tmp_path / _AGENT
     assert (project / _PKG / "agent.py").is_file()
@@ -183,13 +208,16 @@ def test_create_run_and_assert_the_artefact(tmp_path: Path) -> None:
         _DRIVER.format(pkg=_PKG, fact=_FACT, reply=_REPLY, attachment=_ATTACHMENT),
         encoding="utf-8",
     )
-    result = _run(
-        [sys.executable, str(driver)],
+    result = _run_offline(
+        [str(driver)],
+        guard=guard,
         cwd=project,
         env={**env, "PYTHONPATH": os.pathsep.join([str(project), env["PYTHONPATH"]])},
     )
     outcome = json.loads(result.stdout.strip().splitlines()[-1])
     session_id = outcome["session_id"]
+    # The trace and run-record writers name their files after this session-id prefix.
+    file_id = session_id[:16]
 
     assert outcome["texts"] == [_REPLY]
     assert len(outcome["calls"]) == 2, "the model was not called once per step"
@@ -205,7 +233,7 @@ def test_create_run_and_assert_the_artefact(tmp_path: Path) -> None:
     )
 
     # 3b. Run record: the consolidated per-conversation JSON `nuvel eval` reads.
-    records = list((tmp_path / "traces" / "conversations").glob(f"*_{session_id[:16]}.json"))
+    records = list((tmp_path / "traces" / "conversations").glob(f"*_{file_id}.json"))
     assert len(records) == 1, f"expected one run record, found {records}"
     record = json.loads(records[0].read_text(encoding="utf-8"))
     assert record["meta"]["session_id"] == session_id
@@ -226,7 +254,7 @@ def test_create_run_and_assert_the_artefact(tmp_path: Path) -> None:
     assert turn["llm_calls"][-1]["response"] == _REPLY
 
     # 3c. Trace: the per-event JSONL, one ordered stream for the run.
-    traces = list((tmp_path / "traces").glob(f"*_{session_id[:16]}.jsonl"))
+    traces = list((tmp_path / "traces").glob(f"*_{file_id}.jsonl"))
     assert len(traces) == 1, f"expected one trace file, found {traces}"
     events = [json.loads(line) for line in traces[0].read_text(encoding="utf-8").splitlines()]
     kinds = [e["event"] for e in events]

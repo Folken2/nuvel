@@ -1113,10 +1113,6 @@ class TestAcpSetup(_TmpDirCase):
         check = doctor.check_acp_handshake(self.root, "stub_agent")
         self.assertEqual(check.status, doctor.OK, check.detail)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="harness.py.tmpl omits token_threshold, which EventsCompactionConfig requires under ADK 2.13",
-    )
     def test_scaffolded_adapter_answers_initialize(self):
         check = doctor.check_acp_handshake(self._agent(), "my_agent", timeout=120.0)
         self.assertEqual(check.status, doctor.OK, check.detail)

@@ -215,12 +215,15 @@ class AgentHarness:
         """Roll old events into summaries so long sessions don't blow the window.
 
         Fires on a sliding window of user turns (``compaction_interval``) with a
-        small ``overlap_size`` so summaries share context, and keeps the most
-        recent events verbatim (``event_retention_size``). Tunable via env.
+        small ``overlap_size`` so summaries share context, and also once a
+        prompt reaches ``token_threshold`` tokens, keeping the most recent
+        events verbatim (``event_retention_size``). ADK requires each pair to
+        be set together. Tunable via env.
         """
         return EventsCompactionConfig(
             compaction_interval=int(os.getenv("COMPACTION_INTERVAL", "8")),
             overlap_size=int(os.getenv("COMPACTION_OVERLAP", "2")),
+            token_threshold=int(os.getenv("COMPACTION_TOKEN_THRESHOLD", "100000")),
             event_retention_size=int(os.getenv("COMPACTION_RETENTION", "20")),
         )
 
