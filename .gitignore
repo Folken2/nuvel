@@ -39,11 +39,7 @@ node_modules/
 
 # Runtime artifacts
 traces/
-generated-agents/*/
-# Tracked agents — re-include them despite the wildcard above
-!generated-agents/outlook-king/
-!generated-agents/word-king/
-!generated-agents/ppt-king/
+generated-agents/
 logs/
 *.log
 

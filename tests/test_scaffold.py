@@ -243,22 +243,6 @@ class TestAdkDependencyConstraint(unittest.TestCase):
         first = template.read_text().splitlines()[0]
         self.assertEqual(first, self.CONSTRAINT)
 
-    def test_committed_generated_agents_have_no_obsolete_adk_pin(self):
-        """Committed sample agents must not pin an obsolete exact ADK version."""
-        generated = self.REPO_ROOT / "generated-agents"
-        if not generated.is_dir():
-            self.skipTest("generated-agents/ not present in this checkout")
-        offenders = []
-        for requirements in sorted(generated.glob("*/requirements.txt")):
-            for line in requirements.read_text().splitlines():
-                if not line.startswith("google-adk"):
-                    continue
-                if line.strip() != self.CONSTRAINT:
-                    offenders.append(
-                        f"{requirements.relative_to(self.REPO_ROOT)}: {line.strip()}"
-                    )
-        self.assertEqual(offenders, [], f"stale google-adk pins: {offenders}")
-
     def test_litellm_range_excludes_compromised_releases(self):
         """1.82.7/1.82.8 and 1.107.0 shipped credential stealers.
 
@@ -270,7 +254,6 @@ class TestAdkDependencyConstraint(unittest.TestCase):
         files = [
             self.REPO_ROOT / "requirements.txt",
             self.REPO_ROOT / "nuvel" / "backends" / "adk" / "templates" / "requirements.txt",
-            *sorted((self.REPO_ROOT / "generated-agents").glob("*/requirements.txt")),
         ]
         for requirements in files:
             lines = [

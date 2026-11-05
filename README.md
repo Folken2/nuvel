@@ -330,7 +330,7 @@ nuvel/
 │           └── skills/
 ├── .claude/skills/nuvel/      # Claude Code SKILL.md for driving the CLI
 ├── pyproject.toml             # Packaging + `nuvel` console script
-└── generated-agents/          # Output directory
+└── generated-agents/          # Default output directory (git-ignored, created on first scaffold)
 ```
 
 ### Key Design Decisions
