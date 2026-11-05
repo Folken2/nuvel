@@ -1,16 +1,40 @@
 # CLI reference
 
-All `nuvel` subcommands and flags.
+Every `nuvel` command and every flag. `tests/test_cli_reference.py` walks the real argument parser and fails when a command, flag or argument is missing from this page, or when this page documents a command the parser no longer has.
 
-## `nuvel --version`
+Every example on this page was run against `nuvel 0.5.0.dev0` in a scratch directory. In the output, `~` is the scratch home directory and `~/work` the directory the command ran in. Client secrets and URL keys are cut short.
 
-Print the installed `nuvel-cli` version (read from package metadata) and exit. Added after 0.4.0.
+## `nuvel`
+
+The entry point. It takes a command, and two options of its own.
 
 ```bash
-nuvel --version   # nuvel 0.5.0.dev0
+nuvel [-h] [--version] <command> ...
 ```
 
-## `nuvel agent create`
+| Flag | Description |
+|---|---|
+| `-h`, `--help` | Print help and exit `0`. Every command and subcommand below accepts it too. |
+| `--version` | Print the installed `nuvel-cli` version, read from package metadata, and exit `0`. Added after 0.4.0. |
+
+**Exit codes** (for every command): `0` on success; `2` when the command line is wrong (unknown command, missing or invalid argument), with the usage line and the error on stderr. Each command lists its other codes.
+
+```console
+$ nuvel --version
+nuvel 0.5.0.dev0
+
+$ nuvel
+usage: nuvel [-h] [--version]
+             {agent,new,skills,plugins,run,doctor,traces,pricing,mcp,dashboard,eval,bots,fleet,evalv2}
+             ...
+nuvel: error: the following arguments are required: command
+```
+
+## `nuvel agent`
+
+Manage agents. Its only subcommand is `create`.
+
+### `nuvel agent create`
 
 Scaffold a new agent project.
 
@@ -34,53 +58,190 @@ nuvel agent create <name> [options]
 | `--with-eval` | off | *(adk only)* Stamp a starter evalv2 suite into the agent. |
 | `--with-litellm` | off | *(adk only)* Generate a ready-to-run LiteLLM proxy alongside the agent. |
 
-### Validation
+**Exit codes:** `0` scaffolded; `1` invalid name, target directory already exists, or a flag the chosen backend does not support.
+
+#### Validation
 
 - `<name>` must match `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. Underscores, spaces, leading digits, double hyphens, trailing hyphens, and any uppercase character all fail.
 - A backend refuses a flag it doesn't support rather than silently ignoring it: the command exits non-zero with an error naming the flag and the backend. [Pick a backend](../how-to/pick-a-backend.md#nuvel-feature-support) lists which flags each backend honours.
 
-### When to use `--workflow`
+#### When to use `--workflow`
 
 Use it when the agent's work is **genuinely multi-step with branching** — plan-then-execute, triage-then-route, draft-then-review. Skip it for a single-purpose tool-using agent; a graph you don't need is just indirection. See [Build a workflow-native agent](../how-to/build-workflow-agent.md) for a worked example, and the bundled `adk-workflow-graphs` + `adk-task-delegation` skills for the underlying patterns.
 
-### Examples
+#### Examples
+
+```console
+$ nuvel agent create my-agent
+Agent scaffolded at: generated-agents/my-agent
+Files created: 75
+Framework: adk
+
+$ nuvel agent create support-bot --framework hermes --with-telegram --output-dir ./agents
+Agent scaffolded at: agents/support-bot
+Files created: 4
+Framework: hermes
+Channels: telegram
+
+$ nuvel agent create My_Agent
+Error: adk backend: Invalid agent name 'My_Agent'. Use lowercase letters, digits, and single hyphens; must start with a letter and cannot end with a hyphen.
+
+$ nuvel agent create tg-bot --framework hermes --with-slack
+Error: hermes backend: --with-slack is not supported for the hermes backend — Telegram (--with-telegram) is the platform this backend wires. Use --framework adk for the other gateways.
+```
+
+More invocations:
 
 ```bash
-# Bare ADK agent
-nuvel agent create my-agent
-
-# ADK agent with Composio tools and a Slack channel
-nuvel agent create my-agent --with-slack
-
-# Workflow-native agent: plan → execute graph with task-mode nodes
+nuvel agent create my-agent --with-slack          # ADK agent with Composio tools and a Slack channel
 nuvel agent create triage-bot --workflow --description "triage issues, route to the right team"
-
-# Persona-driven agent on Telegram with ~1000 tools
 nuvel agent create soulful-bot --persona --with-composio --with-telegram
+```
 
-# Custom output dir
-nuvel agent create my-agent --output-dir ./agents
+## `nuvel new`
+
+Deprecated alias for [`nuvel agent create`](#nuvel-agent-create): the same arguments, `<name>`, `--framework`, `-f`, `--output-dir`, `--description`, `--system-prompt`, `--persona`, `--with-composio`, `--with-slack`, `--with-telegram`, `--with-teams`, `--workflow`, `--with-eval` and `--with-litellm`, with the same defaults and the same exit codes. Use `nuvel agent create` instead.
+
+**Exit codes:** as `nuvel agent create`.
+
+```console
+$ nuvel new old-style --output-dir ./agents
+Agent scaffolded at: agents/old-style
+Files created: 75
+Framework: adk
 ```
 
 ## `nuvel skills`
 
-Inspect the bundled knowledge skills.
+Inspect the knowledge skills bundled with each backend.
 
 ### `nuvel skills list`
+
+List every bundled skill for a framework, one line per skill: its slug and the start of its description.
 
 ```bash
 nuvel skills list [--framework <fw>]
 ```
 
-Lists all bundled skills for the chosen framework. Each line shows the slug and a one-line description.
+| Flag | Default | Description |
+|---|---|---|
+| `--framework`, `-f` | `adk` | Whose skills to list: `adk`, `hermes` or `claude-agent-sdk`. |
+
+**Exit codes:** `0`, including when there are no skills (`No skills found.`).
+
+```console
+$ nuvel skills list -f hermes
+  hermes  Building and operating Hermes agents — the SOUL.md / config.yaml / skills pro...
+```
 
 ### `nuvel skills search`
+
+Case-insensitive substring match against each skill's slug, name and description.
 
 ```bash
 nuvel skills search <query> [--framework <fw>]
 ```
 
-Substring match (case-insensitive) against skill slug, name, and description.
+| Argument / flag | Default | Description |
+|---|---|---|
+| `<query>` | *(required)* | Text to look for. |
+| `--framework`, `-f` | `adk` | Whose skills to search. |
+
+**Exit codes:** `0`, including when nothing matches (`No skills found.`).
+
+```console
+$ nuvel skills search workflow
+  adk-agent-patterns   Agent architecture patterns for Google ADK 2.x — when to reach for a single L...
+  adk-workflow-graphs  Build graph-based agents with ADK 2.0 `Workflow` — declare nodes and edges, r...
+```
+
+## `nuvel plugins`
+
+Discover and inspect Agent Plugins: directories with a `plugin.json` manifest that bundle skills and MCP servers.
+
+### `nuvel plugins list`
+
+Load every plugin found in the configured plugin directories and print each one's name, version, description, skills and MCP servers. Errors in a plugin are printed under it; registry errors go to stderr.
+
+```bash
+nuvel plugins list
+```
+
+Takes no arguments. The directories come from `NUVEL_PLUGIN_DIRS` (comma-separated), else `./plugins`; see `nuvel plugins config`.
+
+**Exit codes:** `0`, including when no plugins are found.
+
+```console
+$ nuvel plugins list
+No plugins found.
+```
+
+### `nuvel plugins load`
+
+Load a single plugin directory and print it as `nuvel plugins list` would.
+
+```bash
+nuvel plugins load <dir>
+```
+
+| Argument | Description |
+|---|---|
+| `<dir>` | Path to a plugin directory, the one holding `plugin.json`. |
+
+**Exit codes:** `0` loaded; `1` not a directory, or the manifest is invalid.
+
+```console
+$ nuvel plugins load ./claude-code-plugin
+● claude-code v1.0.0
+    Nuvel integration plugin for Anthropic Claude Code CLI
+    skills:  cc-agent, cc-review, cc-setup
+    mcp:     nuvel-orgmemory (stdio)
+```
+
+### `nuvel plugins config`
+
+Print the plugin directories `nuvel plugins list` searches, and whether each exists.
+
+```bash
+nuvel plugins config
+```
+
+Takes no arguments.
+
+**Exit codes:** `0`.
+
+```console
+$ nuvel plugins config
+Plugin directories (set NUVEL_PLUGIN_DIRS to override):
+  ~/work/plugins  [missing]
+```
+
+## `nuvel run`
+
+Launch the meta-agent: an ADK agent served over HTTP that scaffolds, configures and iterates on other agents from a description. It runs `python -m nuvel.run_adk` in a child process and listens on `$PORT` (default 8000).
+
+```bash
+nuvel run [--dev]
+```
+
+| Flag | Description |
+|---|---|
+| `--dev` | Sets `DEV_MODE=true` for the meta-agent's session service (in-memory; no Postgres needed). |
+
+**Exit codes:** the server process's own exit code; `0` after a clean shutdown.
+
+```console
+$ nuvel run --dev
+[ADK] WARNING: No API_KEY set — endpoints are unauthenticated
+[ADK] Endpoints added: /health, /
+[ADK] Meta-Agent ready: http://0.0.0.0:8000
+INFO:     Started server process [270]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://:8000 (Press CTRL+C to quit)
+```
+
+The meta-agent itself is a nuvel-scaffolded ADK agent. Its source is under `nuvel/` in the repository.
 
 ## `nuvel doctor`
 
@@ -90,12 +251,61 @@ The first thing to run, and the first thing to attach to a bug report. Diagnoses
 nuvel doctor [--path <dir>] [--json]
 ```
 
-Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines, and every `[WARN]` and `[FAIL]` is followed by one next step. Exits non-zero if any check fails, so it fails on a machine with no configuration yet. Secret values are never printed.
+Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines, and every `[WARN]` and `[FAIL]` is followed by one next step. Secret values are never printed.
 
 | Flag | Description |
 |---|---|
 | `--path` | Run against this directory instead of the cwd. |
 | `--json` | Emit the same findings as JSON: `ok`, `exit_code`, `cwd`, `summary`, and `checks[]` with `section`, `name`, `status`, `detail`, `fix`. `cwd` is `null` if the current directory was deleted. |
+
+**Exit codes:** `0` when no check fails (warnings allowed); `1` when any check fails, so it fails on a machine with no configuration yet.
+
+```console
+$ cd generated-agents/my-agent && nuvel doctor
+nuvel doctor
+cwd: ~/work/generated-agents/my-agent
+
+Install
+  [OK]    Python version — 3.12.3
+  [OK]    nuvel-cli package — 0.5.0.dev0
+  [OK]    declared dependencies — 17 checked
+  [OK]    bundled files
+  [OK]    import yaml
+  [OK]    import fastapi
+  [OK]    import uvicorn
+  [OK]    import dotenv
+  [OK]    import litellm
+  [OK]    import composio
+  [OK]    import google.adk
+  [OK]    git on PATH
+
+Agent (adk)
+  [FAIL]  .env file — missing
+          → Create it: cp ~/work/generated-agents/my-agent/.env.example ~/work/generated-agents/my-agent/.env
+  [FAIL]  OPENROUTER_API_KEY — not set in .env or the environment
+          → A real key starts with sk-or- (get one at https://openrouter.ai/keys). Add OPENROUTER_API_KEY=<your key> to ~/work/generated-agents/my-agent/.env
+  [WARN]  Docker available — docker CLI not on PATH
+          → Only needed to build the image; install from https://docs.docker.com/get-docker/
+  [OK]    pricing.json: FAST_MODEL — openrouter/moonshotai/kimi-k2.5 (default) via 'moonshotai/kimi-k2.5'
+  [OK]    pricing.json: REASONING_MODEL — openrouter/google/gemini-3.1-pro-preview (default) via 'google/gemini-3.1-pro-preview'
+
+State
+  [OK]    traces dir — ~/work/generated-agents/my-agent/traces
+  [OK]    ~/.nuvel — ~/.nuvel
+  [OK]    ~/.cache/nuvel — ~/.cache/nuvel
+  [OK]    nuvel data dir — ~/.local/share/nuvel
+
+Network
+  [OK]    openrouter reachable — https://openrouter.ai/api/v1/models (HTTP 200)
+
+Caches
+  [OK]    evalv2 sample cache — empty
+  [OK]    evalv2 results cache — empty
+  [OK]    skills hub clone — not cloned
+
+Summary
+  22 ok, 1 warn, 2 fail
+```
 
 **Getting to green:**
 
@@ -113,47 +323,108 @@ Output is a grouped checklist with `[OK]` / `[WARN]` / `[FAIL]` lines, and every
 
 ## `nuvel traces`
 
-Inspect the JSONL trace logs every ADK agent emits. Auto-discovers `./traces`, `generated-agents/*/traces`, and `$TRACE_DIR`; extra paths can be passed with `--source`.
+Inspect the JSONL trace logs every ADK agent emits. Auto-discovers `./traces`, `generated-agents/*/traces`, and `$TRACE_DIR`; `--source`/`-s <dir>` (repeatable) adds more.
 
-Four subcommands. All accept `--source/-s <dir>` (repeatable) plus the filters `--agent <substring>` and `--since <YYYY-MM-DD|ISO>`.
+The filters these subcommands share:
+
+- `--agent`/`-a <q>` keeps runs whose agent name contains `<q>`.
+- `--since <date>` keeps runs at or after a date, `YYYY-MM-DD` or ISO 8601. Give it a UTC offset (`2026-05-15T00:00:00+00:00`): a date or time without one currently fails with a traceback against trace files whose timestamps carry an offset.
 
 ### `nuvel traces list`
+
+One row per run, newest first: when, agent, trace_id prefix, duration, LLM/tool counts, tokens, cost, input snippet.
 
 ```bash
 nuvel traces list [--limit N] [--agent <q>] [--since <date>] [-s <dir>]
 ```
 
-One row per run, newest first: when, agent, trace_id prefix, duration, LLM/tool counts, tokens, cost, input snippet. Default limit is 50 (`--limit 0` for all).
+| Flag | Default | Description |
+|---|---|---|
+| `--source`, `-s` | discovery | Extra trace directory to scan. Repeatable. |
+| `--agent`, `-a` | all | Agent name substring. |
+| `--since` | all | Only runs at or after this date. |
+| `--limit`, `-n` | `50` | Max rows; `0` for all. |
+
+**Exit codes:** `0`, including when no run is found (`No runs found.`).
+
+```console
+$ nuvel traces list
+WHEN                 AGENT                 ID            DUR    LLM  TOOLS  TOK    COST     INPUT
+-------------------  --------------------  ------------  -----  ---  -----  -----  -------  ----------------------------------------
+2026-05-15 10:31:14  (local)/outlook_king  7ae5f4645a1e  5.5s   1    -      2.0k   $0.0000  sort the last 50 messages by urgency
+2026-05-15 10:00:00  (local)/meta_agent    b1aef763f4e4  10.7s  1    2      3.3k   $0.0000  I want a background agent for technical…
+2026-05-15 09:58:00  (local)/ppt_king      c3d4e5f6a7b8  23.5s  2    2      12.3k  $0.0552  slide deck about Q3 results, board-frie…
+
+3 run(s).
+```
 
 ### `nuvel traces show`
+
+Full event timeline for one run, indented by `agent_depth` so sub-agent transfers and nested calls are visible.
 
 ```bash
 nuvel traces show <id> [--all] [-s <dir>]
 ```
 
-Full event timeline for one run. `<id>` is matched as a prefix against `trace_id` or `session_id`. Output is indented by `agent_depth` so sub-agent transfers and nested calls are visible.
+| Argument / flag | Description |
+|---|---|
+| `<id>` | A `trace_id` or `session_id`, or a prefix of one. |
+| `--all` | When the prefix matches several runs, show every one instead of refusing. |
+| `--source`, `-s` | Extra trace directory to scan. Repeatable. |
+
+**Exit codes:** `0` shown; `1` no run matches, or several match and `--all` was not given.
+
+```console
+$ nuvel traces show c3d4
+── c3d4e5f6a7b8c9d0 ─ (local)/ppt_king
+   file:     ~/work/traces/cost_breakdown.jsonl
+   session:  demo-session-3
+   started:  2026-05-15T09:58:00+00:00
+   ended:    2026-05-15T09:58:23.530+00:00
+   duration: 23.5s
+   llm/tool: 2/2  tokens: 12350  cost: $0.0552
+   input:    slide deck about Q3 results, board-friendly tone
+
+   09:58:00+00:  run_start      slide deck about Q3 results, board-friendly tone
+   09:58:00.010  agent_start    agent=ppt_king
+   09:58:00.020  llm_request    model=openrouter/google/gemini-3.1-pro-preview  msgs=2  tools=3
+   09:58:12.000  llm_response   latency=11980ms  tok=6020  calls=0
+   09:58:12.010  tool_start     tool=build_slide  args=title='Q3 in one line', subtitle='Revenue +18% YoY, margin …
+   09:58:13.450  tool_end       tool=build_slide  status=success  dur=1440ms
+   09:58:13.460  llm_request    model=openrouter/google/gemini-3.1-pro-preview  msgs=5  tools=3
+   09:58:22.100  llm_response   latency=8640ms  tok=6330  calls=0
+   09:58:22.110  tool_start     tool=add_chart  args=type='waterfall', data='segments'
+   09:58:23.500  tool_end       tool=add_chart  status=success  dur=1390ms
+   09:58:23.520  agent_end      agent=ppt_king
+   09:58:23.530  run_end        dur=23530ms  llm=2  tool=2  tok=12350  cost=$0.0552
+```
 
 ### `nuvel traces stats`
+
+Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total cost. Prints a cost-coverage warning at the bottom when runs have token usage but no cost — the symptom of a model missing from `pricing.json`. Run `nuvel doctor` to verify.
 
 ```bash
 nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>]
 ```
 
-Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total cost. Prints a cost-coverage warning at the bottom when runs have token usage but no cost — the symptom of a model missing from `pricing.json`. Run `nuvel doctor` to verify.
+| Flag | Description |
+|---|---|
+| `--source`, `-s` | Extra trace directory to scan. Repeatable. |
+| `--agent`, `-a` | Agent name substring. |
+| `--since` | Only runs at or after this date. |
 
-### `nuvel traces recipes`
+**Exit codes:** `0`, including when no run is found.
 
-```bash
-nuvel traces recipes [-s <dir>]
+```console
+$ nuvel traces stats
+AGENT    RUNS  LLM  TOOLS  TOKENS  DUR    COST
+-------  ----  ---  -----  ------  -----  -------
+(local)  3     4    4      17.6k   39.8s  $0.0552
+
+Total: 3 run(s), 17.6k tokens, $0.0552
 ```
-
-Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest shared version (`(structure only)` when the user did not share text). The feedback directory is always searched; `--source` adds more roots. Counters come from each recipe's latest weekly snapshot (`nuvel.recipe_signal/2`) per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
 
 ### `nuvel traces errors`
-
-```bash
-nuvel traces errors [--recent N] [--agent <q>] [--since <date>] [-s <dir>]
-```
 
 Surfaces failure rate across agents. Three error shapes are kept distinct:
 
@@ -161,43 +432,483 @@ Surfaces failure rate across agents. Three error shapes are kept distinct:
 - `tool_exception` — Python raised inside a tool body (likely a bug).
 - `tool_end{status=error}` — tool returned a structured error result (often user-facing: bad input, auth).
 
-Default view is a three-pane summary: by tool (with error rate against total invocations), by model (`llm_error` only), and by `error_type`. `--recent N` switches to a forensic view: last N error events newest-first with timestamps, agent labels, and message previews.
+```bash
+nuvel traces errors [--recent N] [--agent <q>] [--since <date>] [-s <dir>]
+```
+
+| Flag | Description |
+|---|---|
+| `--source`, `-s` | Extra trace directory to scan. Repeatable. |
+| `--agent`, `-a` | Agent name substring. |
+| `--since` | Only runs at or after this date. |
+| `--recent`, `-r` | Instead of the summary, print the last N error events, newest first, with timestamps, agent labels and message previews. |
+
+The default view is a three-pane summary: by tool (with error rate against total invocations), by model (`llm_error` only), and by `error_type`.
+
+**Exit codes:** `0`, including when there are no errors.
+
+```console
+$ nuvel traces errors --recent 2
+2026-05-15 10:31:19  (local)  7ae5f4645a1e  llm_error  model=openrouter/moonshotai/kimi-k2.5  type=RateLimitError
+    OpenRouter returned 429 after 3 retries
+2026-05-15 10:31:17  (local)  7ae5f4645a1e  tool_exception  tool=send_email  type=SMTPAuthenticationError
+    535 Authentication failed for service@example.com
+```
+
+### `nuvel traces recipes`
+
+Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest shared version (`(structure only)` when the user did not share text). Counters come from each recipe's latest weekly snapshot (`nuvel.recipe_signal/2`) per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
+
+```bash
+nuvel traces recipes [-s <dir>]
+```
+
+| Flag | Description |
+|---|---|
+| `--source`, `-s` | Extra directory to search for a `_recipes` tree. Repeatable. The feedback directory is always searched. |
+
+**Exit codes:** `0`, including when there is nothing to list.
+
+```console
+$ nuvel traces recipes
+No recipe signals found.
+```
 
 ## `nuvel pricing`
 
 Inspect and sync model pricing.json against OpenRouter — treated as the single source of truth for model pricing, including direct-provider ids that route through OR.
 
-All subcommands accept `--target/-t {template|agent|<path>}`. Default: the active generated agent's `<pkg>/plugins/pricing.json` if cwd is one, else the bundled template under `nuvel/backends/adk/templates/`.
+Every subcommand takes `--target`/`-t {template|agent|<path>}`. Default: the active generated agent's `<pkg>/plugins/pricing.json` if cwd is one, else the bundled template under `nuvel/backends/adk/templates/`.
 
 ### `nuvel pricing list`
+
+Print the resolved file path plus every entry with input/output prices in `$/Mtok`, sorted so diffs stay readable.
 
 ```bash
 nuvel pricing list [-t {template|agent|<path>}]
 ```
 
-Prints the resolved file path plus every entry with input/output prices in `$/Mtok`. Stable sorted so diffs stay readable.
+| Flag | Description |
+|---|---|
+| `--target`, `-t` | Which pricing.json: `template`, `agent`, or a path. |
+
+**Exit codes:** `0`; `1` when the file is missing or unreadable.
+
+```console
+$ nuvel pricing list -t ./pricing.json
+file: ~/work/pricing.json
+models: 10
+  anthropic/claude-opus-4        in $15.0000/Mtok  out $75.0000/Mtok
+  anthropic/claude-sonnet-4      in $3.0000/Mtok  out $15.0000/Mtok
+  deepseek/deepseek-r1           in $0.7000/Mtok  out $2.5000/Mtok
+  google/gemini-2.5-flash        in $0.3000/Mtok  out $2.5000/Mtok
+  google/gemini-2.5-pro          in $1.2500/Mtok  out $10.0000/Mtok
+  google/gemini-3-flash-preview  in $0.5000/Mtok  out $3.0000/Mtok
+  google/gemini-3.1-pro-preview  in $2.0000/Mtok  out $12.0000/Mtok
+  moonshotai/kimi-k2.5           in $0.4000/Mtok  out $1.9000/Mtok
+  openai/gpt-4o                  in $2.5000/Mtok  out $10.0000/Mtok
+  openai/gpt-4o-mini             in $0.1500/Mtok  out $0.6000/Mtok
+```
 
 ### `nuvel pricing sync`
+
+Fetches the OpenRouter model catalog and **refreshes the prices of entries already in pricing.json**. Does not pull OR's full catalog. Use `add <model>` to bring a new model in explicitly.
 
 ```bash
 nuvel pricing sync [--dry-run] [-t {template|agent|<path>}]
 ```
 
-Fetches the OpenRouter model catalog and **refreshes the prices of entries already in pricing.json**. Does not pull OR's full ~360-model catalog. Use `add <model>` to bring a new model in explicitly.
+| Flag | Description |
+|---|---|
+| `--target`, `-t` | Which pricing.json: `template`, `agent`, or a path. |
+| `--dry-run` | Print the diff without writing. |
 
-Prints a diff: added / updated / unchanged / not-on-OpenRouter. `--dry-run` skips the write. Comment keys (anything starting with `_`) are preserved.
+Prints a diff: added / updated / unchanged / not-on-OpenRouter. Comment keys (anything starting with `_`) are preserved.
+
+**Exit codes:** `0`; `1` when the file is missing or unreadable, OpenRouter is unreachable, or the write fails.
+
+```console
+$ nuvel pricing sync --dry-run -t ./pricing.json
+file: ~/work/pricing.json
+fetching https://openrouter.ai/api/v1/models …
+OpenRouter returned 455 models
+
+~ updated (1):
+    moonshotai/kimi-k2.5
+      input  $0.4000/Mtok → $0.5000/Mtok
+      output $1.9000/Mtok → $2.5000/Mtok
+? not on OpenRouter (3) — kept as-is:
+    anthropic/claude-opus-4
+    anthropic/claude-sonnet-4
+    deepseek/deepseek-r1
+= unchanged: 6
+
+(dry-run — no file written)
+```
 
 ### `nuvel pricing add`
+
+Add (or refresh) a single model by its OpenRouter id.
 
 ```bash
 nuvel pricing add <model> [--dry-run] [-t {template|agent|<path>}]
 ```
 
-Add (or refresh) a single model by its OpenRouter id (e.g. `anthropic/claude-opus-4.7`). Exits non-zero if the model isn't on OpenRouter.
+| Argument / flag | Description |
+|---|---|
+| `<model>` | OpenRouter model id, e.g. `anthropic/claude-opus-4.7`. |
+| `--target`, `-t` | Which pricing.json: `template`, `agent`, or a path. |
+| `--dry-run` | Print the result without writing. |
+
+**Exit codes:** `0` added, updated or unchanged; `1` when the model isn't on OpenRouter, the file is missing or unreadable, OpenRouter is unreachable, or the write fails.
+
+```console
+$ nuvel pricing add anthropic/claude-opus-4.7 --dry-run -t ./pricing.json
+file: ~/work/pricing.json
+fetching https://openrouter.ai/api/v1/models …
+added: anthropic/claude-opus-4.7  in $5.0000/Mtok  out $25.0000/Mtok
+(dry-run — no file written)
+```
+
+## `nuvel mcp`
+
+The Skills MCP server and its operator commands. They come from the separate `nuvel-mcp` package: `nuvel mcp <command>` and `nuvel-mcp <command>` take the same flags and behave the same. `nuvel-mcp` has no runtime dependencies and no extras. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
+
+Tuning and deployment settings (`NUVEL_MCP_PUBLIC_URL`, `NUVEL_OAUTH_*`, `NUVEL_MCP_REQUEST_DEADLINE`, `NUVEL_MCP_READ_TIMEOUT`, `NUVEL_MCP_MAX_CONNECTIONS`, ...) are listed in [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md).
+
+### `nuvel mcp serve`
+
+Serve a skills hub to MCP clients: skills as resources (`skill://{theme}/{name}`) and tools (`search_skills`, `list_skills`, `list_themes`, `get_skill`, `install_skill`, `fence_value`, `propose_improvement`, `record_feedback`, `check_skill_health`, `record_run_trace`). Runs until stdin closes (stdio) or it gets SIGTERM / Ctrl+C (HTTP).
+
+```bash
+uvx nuvel-mcp serve --skills-dir ./skills-hub
+nuvel mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store auto|local|postgres|MODULE:FACTORY] [--recipe-store auto|local|postgres|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--allow-remote] [--no-auth] [--require-auth]
+```
+
+| Flag | Description |
+|---|---|
+| `--skills-dir` | Skills hub to serve: a directory with `index.json`, or a repo root containing `skills/index.json`. Optional: without it the server starts in feedback-only mode and exposes just the feedback tools (`record_feedback`, `check_skill_health`, `propose_improvement`, `record_run_trace`). `nuvel mcp serve` used to serve the current directory when it was omitted; pass `--skills-dir .` to keep that. |
+| `--tools` | Comma-separated allow-list of tool names to expose. Default: every tool on stdio; over HTTP `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value`, `record_run_trace` and `check_skill_health`. `record_feedback`, `propose_improvement` and `install_skill` are exposed over HTTP only when named here. |
+| `--theme` | Expose only the skills in one theme (e.g. `hr`, `sales`). |
+| `--require` | Expose only skills whose `requires` frontmatter declares every listed capability. Repeatable; each value may be comma-separated. |
+| `--with-org-memory` | Resolve `{{ var_name }}` placeholders in skills against the org memory: a Postgres connection string (contains `://`) or an org-graph YAML path. Falls back to `NUVEL_ORG_MEMORY_DSN` / `NUVEL_ORG_GRAPH_PATH`. |
+| `--feedback-dir` | The local feedback store: `record_feedback` outcomes, queued `propose_improvement` proposals, and what `check_skill_health` reads. Default: `$NUVEL_FEEDBACK_DIR`, then `~/.nuvel/feedback`. |
+| `--trace-store` | Where `record_run_trace` keeps traces: `postgres` (`$NUVEL_MCP_DATABASE_URL`), `local` (JSONL under `<feedback-dir>/_runs/`) or `module:factory`, a zero-argument callable returning a `TraceStore`. Default `auto`: `postgres` when `NUVEL_MCP_DATABASE_URL` is set, else `local`. See [Skill run traces](skill-run-traces.md). |
+| `--recipe-store` | Where recipe signals and recipes are kept: `postgres`, `local` (files under `<feedback-dir>/_recipes/`) or `module:factory`, returning a `RecipeStore`. Default `auto`. |
+| `--transport` | `stdio` (default) or `http`: Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` + `/messages`, and `GET /healthz`. Both need only the standard library. |
+| `--host`, `--port` | HTTP bind address. Default `127.0.0.1:8080` (`--port 0` picks a free port). |
+| `--allow-remote` | Allow a non-loopback `--host`. Requires `NUVEL_MCP_PUBLIC_URL` and either GitHub OAuth credentials or `NUVEL_OAUTH_LOGIN=none` (URL keys and client credentials only). |
+| `--no-auth` | HTTP only: disable OAuth for local development. Refused unless `--host` is loopback. There is then no principal, so traces carry no `tenant` and `check_skill_health` aggregates all tenants, as over stdio. |
+| `--require-auth` | stdio only: gate every request on the access token in `$NUVEL_MCP_ACCESS_TOKEN`. HTTP is always gated unless `--no-auth`. |
+
+HTTP requires an OAuth 2.1 access token by default. The tenant of each run trace is the token's OAuth `client_id` (for an interactive login, the `client_id` plus a hash of the user). Operators create clients with `nuvel mcp client create` (the secret is printed once) and revoke access with `nuvel mcp client delete` or `nuvel mcp token revoke`. `propose_improvement` files issues against `github.com/Folken2/skills` when `GITHUB_TOKEN` is set, otherwise POSTs to `NUVEL_FEEDBACK_URL`, otherwise queues into `<feedback-dir>/feedback-queue.jsonl`.
+
+**Exit codes:** `0` after a clean shutdown; `1` unreadable skills hub, invalid `--trace-store` / `--recipe-store`, or the HTTP port cannot be bound; `2` refused configuration: `--tools` names no known tool, a non-loopback `--host` without `--allow-remote`, `--no-auth` on stdio or a non-loopback host, `--no-auth` with `--require-auth`, an invalid `NUVEL_MCP_*` setting, missing OAuth configuration, or a database that cannot be opened.
+
+```console
+$ nuvel mcp serve --transport http --no-auth --port 8811
+Storage: files under ~/.nuvel/feedback.
+WARNING: --no-auth: OAuth is OFF, every MCP method and tool (writes included) is open to anything that can reach 127.0.0.1:8811.
+nuvel-skills MCP server starting (skills_dir=none (feedback-only))
+Listening on http://127.0.0.1:8811  (streamable: /mcp, legacy SSE: /sse, health: /healthz)
+
+$ curl -s http://127.0.0.1:8811/healthz
+{"status": "ok", "transport": "http", "storage": "files", "skills": 0, "themes": 0, "tools": 4}
+
+$ nuvel mcp serve --transport http --host 0.0.0.0
+Storage: files under ~/.nuvel/feedback.
+Error: refusing to bind non-loopback address '0.0.0.0' without --allow-remote. The HTTP transport is meant to stay on 127.0.0.1 unless you deliberately expose it.
+```
+
+### `nuvel mcp client`
+
+Manage the OAuth clients of the HTTP server. The store is the database when `NUVEL_MCP_DATABASE_URL` is set, else the JSON file at `$NUVEL_MCP_OAUTH_STORE` or `~/.nuvel/oauth.json`.
+
+#### `nuvel mcp client create`
+
+Issue a confidential client (client credentials grant; plus the authorization code flow when `--redirect-uri` is given), or, with `--url-key`, a client reached through a connector URL with no sign-in. The secret or key is printed once; only its hash is kept.
+
+```bash
+nuvel mcp client create --name NAME [--redirect-uri URI ...] [--url-key [--expires-in DAYS]] [--person P] [--company C]
+```
+
+| Flag | Description |
+|---|---|
+| `--name` | *(required)* Human-readable client name. |
+| `--redirect-uri` | Allowed redirect URI (`https://`, or `http://` on loopback). Repeatable. |
+| `--url-key` | Issue a URL key instead of a secret and print the connector URL (`$NUVEL_MCP_PUBLIC_URL/mcp/k/<key>`). Not combinable with `--redirect-uri`. |
+| `--expires-in` | With `--url-key` only: the key stops working after this many days (fractions allowed). Default: until revoked. |
+| `--person` | Who uses this client, saved as with `nuvel mcp clients label`. Needs `$NUVEL_MCP_DATABASE_URL`. |
+| `--company` | Their company, saved the same way. |
+
+**Exit codes:** `0` created; `1` the OAuth store cannot be read; `2` invalid flags (`--expires-in` without `--url-key`, `--url-key` with `--redirect-uri`, a bad redirect URI or expiry, `--person`/`--company` without a database).
+
+```console
+$ nuvel mcp client create --name ci-runner
+{
+  "client_id": "nvcl_ng3XI-MS_mAbl8GiDYLTcA",
+  "client_secret": "nvcs_nekPKG…",
+  "client_name": "ci-runner",
+  "grant_types": [
+    "client_credentials"
+  ],
+  "redirect_uris": [],
+  "token_endpoint_auth_method": "client_secret_basic"
+}
+Store the client_secret now: only its hash is kept in ~/.nuvel/oauth.json.
+```
+
+#### `nuvel mcp client list`
+
+List registered clients, without secrets.
+
+```bash
+nuvel mcp client list [--json]
+```
+
+| Flag | Description |
+|---|---|
+| `--json` | Print JSON. |
+
+**Exit codes:** `0`, including when there are no clients; `1` the OAuth store cannot be read.
+
+```console
+$ nuvel mcp client list
+CLIENT_ID                    NAME                     TYPE         SOURCE TOKENS  CREATED
+nvcl_ng3XI-MS_mAbl8GiDYLTcA  ci-runner                confidential cli         0  2026-11-05 11:39
+nvcl_y4dE1myUyspLrcY0FEEiMQ  tester                   url-key      cli         0  2026-11-05 11:39
+```
+
+#### `nuvel mcp client delete`
+
+Delete a client and revoke all its tokens.
+
+```bash
+nuvel mcp client delete <client_id>
+```
+
+| Argument | Description |
+|---|---|
+| `<client_id>` | The client to delete. |
+
+**Exit codes:** `0` deleted; `1` no such client, or the OAuth store cannot be read.
+
+```console
+$ nuvel mcp client delete nvcl_ng3XI-MS_mAbl8GiDYLTcA
+Deleted client nvcl_ng3XI-MS_mAbl8GiDYLTcA and revoked its tokens.
+```
+
+### `nuvel mcp token`
+
+Manage the OAuth tokens of the HTTP server.
+
+#### `nuvel mcp token revoke`
+
+Revoke an access or refresh token, a URL key (or the connector URL holding it), or every token and URL key of a client id.
+
+```bash
+nuvel mcp token revoke <TOKEN_KEY_OR_CLIENT_ID>
+```
+
+| Argument | Description |
+|---|---|
+| `<TOKEN_KEY_OR_CLIENT_ID>` | A token, URL key, connector URL or client id. |
+
+**Exit codes:** `0` revoked; `1` nothing matches, or the OAuth store cannot be read.
+
+```console
+$ nuvel mcp token revoke nvcl_ng3XI-MS_mAbl8GiDYLTcA
+Revoked 0 access token(s), 0 refresh token(s) and 0 URL key(s) (client, client nvcl_ng3XI-MS_mAbl8GiDYLTcA).
+```
+
+### `nuvel mcp db`
+
+Manage the Postgres database named by `NUVEL_MCP_DATABASE_URL`. Needs the `psycopg` driver.
+
+Shared **exit codes** of the `db` commands: `2` when `NUVEL_MCP_DATABASE_URL` is not set or invalid; `1` on a database error (printed as one line, password redacted).
+
+```console
+$ nuvel mcp db status
+Error: NUVEL_MCP_DATABASE_URL is not set.
+```
+
+#### `nuvel mcp db migrate`
+
+Apply pending schema migrations.
+
+```bash
+nuvel mcp db migrate
+```
+
+Takes no arguments.
+
+**Exit codes:** `0` applied, or already up to date; see `nuvel mcp db` for `1` and `2`.
+
+```console
+$ nuvel mcp db migrate
+Applied 0001_initial.
+Applied 0002_row_level_security.
+Applied 0003_usage_insights.
+```
+
+#### `nuvel mcp db status`
+
+Show applied and pending migrations, and the row count of each table.
+
+```bash
+nuvel mcp db status [--json]
+```
+
+| Flag | Description |
+|---|---|
+| `--json` | Print JSON. |
+
+**Exit codes:** `0` up to date; `1` migrations are pending (or a database error); `2` no database configured.
+
+```console
+$ nuvel mcp db status
+Schema:   nuvel_mcp
+Applied:  1, 2, 3
+Pending:  -
+  client_profiles        0
+  oauth_access_tokens    0
+  oauth_clients          0
+  oauth_codes            0
+  oauth_refresh_tokens   0
+  oauth_url_keys         0
+  recipe_signals         0
+  recipes                0
+  skill_runs             0
+  usage_events           0
+```
+
+#### `nuvel mcp db import`
+
+Copy the file stores (OAuth JSON, traces, recipes) into the database, migrating it first. Traces and recipes are deduplicated; OAuth is imported only while the database has no OAuth state.
+
+```bash
+nuvel mcp db import [--oauth-store PATH] [--feedback-dir DIR] [--force-oauth]
+```
+
+| Flag | Description |
+|---|---|
+| `--oauth-store` | OAuth JSON file. Default: `$NUVEL_MCP_OAUTH_STORE`, then `~/.nuvel/oauth.json`. |
+| `--feedback-dir` | Feedback directory holding `_runs/` and `_recipes/`. Default: `$NUVEL_FEEDBACK_DIR`, then `~/.nuvel/feedback`. |
+| `--force-oauth` | Import the OAuth file even though the database already has OAuth state. Clients and keys deleted in the database since come back. |
+
+**Exit codes:** `0` imported; see `nuvel mcp db` for `1` and `2`.
+
+```console
+$ nuvel mcp db import
+  oauth_clients          +1
+  oauth_codes            +0
+  oauth_access_tokens    +0
+  oauth_refresh_tokens   +0
+  oauth_url_keys         +0
+  skill_runs             +0
+  recipe_signals         +0
+  recipes                +0
+Imported 1 row(s); 0 unreadable record(s) skipped.
+```
+
+### `nuvel mcp clients`
+
+Record who is behind each OAuth client id and list clients with their recent usage. Needs `NUVEL_MCP_DATABASE_URL`. What the usage log holds is listed in [Usage insights](../how-to/deploy-skills-mcp.md#usage-insights-what-is-collected).
+
+#### `nuvel mcp clients label`
+
+Set the person, company or notes of a client id. An empty value clears that field; omitted fields are kept. A client id with no client and no usage yet is labeled anyway, with a note.
+
+```bash
+nuvel mcp clients label <client_id> [--person P] [--company C] [--notes N]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<client_id>` | The client to label. |
+| `--person` | Who uses this client. |
+| `--company` | Their company. |
+| `--notes` | Free-form operator notes. |
+
+**Exit codes:** `0` labeled; `1` database error; `2` invalid value, or no database configured.
+
+```console
+$ nuvel mcp clients label nvcl_ng3XI-MS_mAbl8GiDYLTcA --person "Ana Ruiz" --company Acme
+Labeled nvcl_ng3XI-MS_mAbl8GiDYLTcA.
+```
+
+#### `nuvel mcp clients list`
+
+Every known client id with its label, last usage and events in the last 30 days.
+
+```bash
+nuvel mcp clients list [--json]
+```
+
+| Flag | Description |
+|---|---|
+| `--json` | Print JSON. |
+
+**Exit codes:** `0`, including when there are no clients; `1` database error; `2` no database configured.
+
+```console
+$ nuvel mcp clients list
+CLIENT_ID                    NAME       PERSON    COMPANY  LAST_SEEN  EVENTS_30D
+nvcl_ng3XI-MS_mAbl8GiDYLTcA  ci-runner  Ana Ruiz  Acme             -           0
+```
+
+### `nuvel mcp report`
+
+The usage report from the database: active clients, calls, tools, errors, latency, client apps, countries, skill runs and recipe adoption. Needs `NUVEL_MCP_DATABASE_URL`.
+
+```bash
+nuvel mcp report [--days N] [--json]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--days` | `7` | Window in days, ending now; 1 to 366. |
+| `--json` | off | Print JSON. |
+
+**Exit codes:** `0`; `1` database error; `2` `--days` out of range, or no database configured.
+
+```console
+$ nuvel mcp report --days 7
+Usage report: last 7 day(s), 2026-10-29T11:39 to 2026-11-05T11:39 UTC
+0 call(s), 0 error(s) (0.0%), 0 active client(s).
+No usage events in this window.
+
+Active clients
+  (none)
+
+Calls per day
+  (none)
+
+Methods
+  (none)
+
+Tools
+  (none)
+
+Client apps
+  (none)
+
+Countries
+  (no country recorded; see NUVEL_MCP_GEOIP_CSV)
+
+Skill runs
+  (none)
+
+Tools never called
+  check_skill_health, fence_value, get_skill, install_skill, list_skills, list_themes, propose_improvement, record_feedback, record_recipe_signal, record_run_trace, search_skills, share_recipe
+
+Recipe adoption
+  (none)
+```
 
 ## `nuvel dashboard`
 
-Open the local web dashboard over your trace logs.
+Open the local web dashboard over your trace logs. It serves until interrupted. Needs `fastapi` and `uvicorn`; without them the command is not registered.
 
 ```bash
 nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-open]
@@ -213,127 +924,566 @@ nuvel dashboard [--host HOST] [--port PORT] [--source DIR ...] [--demo] [--no-op
 
 Three pages: a home view (hero + headline stats + recent activity), a per-run detail with the thinking timeline, and `/recipes`, the **Recipe candidates** view (the same data as `nuvel traces recipes`, plus recipe status and the latest recipe per category: its action sequence and slots, and the masked narrative only when the user shared text). Live updates push new runs as the watcher sees them.
 
-## `nuvel eval`
+**Exit codes:** `0` after shutdown; `1` the port is in use.
 
-Online trace scorer. Heuristics-first, judge-on-pass. Writes `scored.jsonl` siblings into each trace directory; the dashboard joins on `trace_id` and surfaces a score column.
-
-```bash
-nuvel eval score [--since 7d] [--agent X] [--force] [--dry-run] [--max-cost-usd 1.00]
-nuvel eval report [--since 7d] [--agent X]
-nuvel eval worst  [-n 10] [--agent X]
-nuvel eval drift  [--window-days 7] [--threshold 0.1]
+```console
+$ nuvel dashboard --no-open --port 8799
+nuvel dashboard -> http://127.0.0.1:8799
 ```
 
-### `score`
+## `nuvel eval`
+
+Online trace scorer. Heuristics-first, judge-on-pass. Writes `scored.jsonl` siblings into each trace directory; the dashboard joins on `trace_id` and surfaces a score column. Without the eval dependencies the command is not registered.
+
+### `nuvel eval score`
 
 Run heuristics on every discovered trace; call the LLM judge on runs that survive the heuristic floor (so `no_assistant_output` / `incomplete_trace` skip the judge for free). Idempotent — runs with a matching `trace_id` + `scorer_version` are skipped unless `--force` is given.
 
+```bash
+nuvel eval score [-s <dir>] [--max-cost-usd 1.00] [--concurrency 5] [--force] [--dry-run]
+```
+
 | Flag | Default | Description |
 |---|---|---|
-| `--source / -s` | discover | Extra trace directory to scan. Repeatable. |
+| `--source`, `-s` | discover | Extra trace directory to scan. Repeatable. |
 | `--max-cost-usd` | `1.00` | Hard cap on judge spend. Once crossed, remaining runs score with heuristics only. |
 | `--concurrency` | `5` | Max simultaneous judge calls. |
 | `--force` | off | Rescore every run regardless of existing `scored.jsonl` rows. |
 | `--dry-run` | off | Compute scores but write nothing. |
 
-Resolves the judge model in this order: per-agent `generated-agents/<agent>/evals/rubric.yaml` `judge.model` → `EVAL_JUDGE_MODEL` env var → `DEFAULT_FAST_MODEL`. Calls go through `litellm.acompletion`, so any provider-prefixed id works.
+Resolves the judge model in this order: per-agent `generated-agents/<agent>/evals/rubric.yaml` `judge.model` → `EVAL_JUDGE_MODEL` env var → `DEFAULT_FAST_MODEL`. Calls go through `litellm.acompletion`, so any provider-prefixed id works. A failed judge call is logged and counted; the run keeps its heuristic score.
 
-### `report`
+**Exit codes:** `0`, including when judge calls fail.
+
+```console
+$ nuvel eval score
+Scored: 3
+  skipped (already scored at current version): 0
+  judge skipped (heuristic floor / disabled): 0
+  judge errors: 3
+  total judge cost: $0.0000
+
+Per directory:
+     3  ~/work/traces
+```
+
+(Run with no API key: each of the three judge calls failed, so each run kept its heuristic score.)
+
+### `nuvel eval report`
 
 Per-agent summary table: run count, mean overall, mean per component, most common flag.
 
-### `worst`
+```bash
+nuvel eval report [--agent <q>] [--since <date>] [-s <dir>]
+```
 
-N worst-scoring runs ranked by `overall`, with judge notes inline. The triage entry point: start your day with `nuvel eval worst -n 10`.
+| Flag | Description |
+|---|---|
+| `--source`, `-s` | Extra trace directory to scan. Repeatable. |
+| `--agent`, `-a` | Agent name substring. |
+| `--since` | Only scored rows at or after this date (`YYYY-MM-DD` or ISO; no offset means UTC). |
 
-### `drift`
+**Exit codes:** `0`, including when nothing is scored (`No scored runs.`).
 
-Rolling-window comparison per agent. Computes mean `overall` for the last `--window-days` and compares against the same-length window before it. Exits with code `2` if any agent crosses `--threshold` — so a future CI / webhook layer can react without further parsing.
+```console
+$ nuvel eval report
+AGENT    RUNS  OVERALL  SUCC  QUAL  EFFI  RELI  TOP FLAG
+-------  ----  -------  ----  ----  ----  ----  ----------------
+(local)  3     0.62     1.00  0.00  0.83  0.67  cost_outlier (1)
+```
+
+### `nuvel eval worst`
+
+The N worst-scoring runs ranked by `overall`, with judge notes inline. The triage entry point: start your day with `nuvel eval worst -n 10`.
+
+```bash
+nuvel eval worst [-n 10] [--agent <q>] [--since <date>] [-s <dir>]
+```
 
 | Flag | Default | Description |
 |---|---|---|
+| `--source`, `-s` | discover | Extra trace directory to scan. Repeatable. |
+| `--agent`, `-a` | all | Agent name substring. |
+| `--since` | all | Only scored rows at or after this date. |
+| `-n` | `10` | Max rows. |
+
+**Exit codes:** `0`, including when nothing is scored.
+
+```console
+$ nuvel eval worst -n 2
+SCORE  AGENT                    TRACE_ID       FLAGS / NOTE
+-----------------------------------------------------------
+0.55   (local)                  7ae5f4645a1e47 tool_error,llm_error
+0.62   (local)                  c3d4e5f6a7b8c9 cost_outlier,latency_outlier,token_bloat
+```
+
+### `nuvel eval drift`
+
+Rolling-window comparison per agent. Computes mean `overall` for the last `--window-days` and compares it against the same-length window before it.
+
+```bash
+nuvel eval drift [--window-days 7] [--threshold 0.1] [--agent <q>] [-s <dir>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--source`, `-s` | discover | Extra trace directory to scan. Repeatable. |
+| `--agent`, `-a` | all | Agent name substring. |
 | `--window-days` | `7` | Length of each rolling window. |
 | `--threshold` | `0.1` | Flag drift when `|delta| >= threshold`. |
 
-### `variants`
+**Exit codes:** `0` no drift; `2` any agent crosses `--threshold`, so a CI or webhook layer can react without parsing.
 
-```bash
-nuvel eval variants [--agent <q>]
+```console
+$ nuvel eval drift
+AGENT    CURRENT  BASELINE  DELTA  CUR_N  BASE_N  STATUS
+-------  -------  --------  -----  -----  ------  ------------
+(local)  0.62     -         -      3      0       insufficient
 ```
 
-Lists discovered replay-variant configs. Variants live in `generated-agents/<agent>/evals/variants/*.yaml` and describe an alternate system prompt (or other model parameters) to replay against historical traces. Each entry shows the variant name, version, and which agent it belongs to.
+## `nuvel bots`
 
-### `replay`
+Manage and talk to Hermes-backed bots: each bot is a Hermes profile, driven through the `hermes` executable. Needs the Hermes runtime installed.
+
+Every `bots` command takes these flags:
+
+| Flag | Description |
+|---|---|
+| `--hermes-bin` | Path to the `hermes` executable. Default: found on `PATH`. |
+| `--json` | Emit machine-readable JSON on stdout. |
+| `--verbose`, `-v` | Show the full traceback on error. |
+
+Shared **exit codes** of the `bots` commands: `0` on success; `1` when the bot does not exist or `hermes` fails, with the error on stderr.
+
+### `nuvel bots list`
+
+List all bots with their default model.
 
 ```bash
-nuvel eval replay <variant_name> [--agent <q>] [--since YYYY-MM-DD] [--max-cost-usd N] [--concurrency N] [--force] [--dry-run]
+nuvel bots list [--hermes-bin PATH] [--json] [-v]
 ```
 
-Replays a variant against historical traces and scores each replay with the same judge/rubric used by `score`. v1 replays the single LLM call (variant system prompt + historical user input + tool history) — not the full multi-turn loop. Results land in a `replays/<variant>.jsonl` sibling inside each trace directory.
+Takes only the shared flags: `--hermes-bin`, `--json`, `--verbose`, `-v`.
 
-| Flag | Default | Description |
+**Exit codes:** `0`; `1` `hermes` fails.
+
+```console
+$ nuvel bots list
+  default   —
+  demo-bot  —
+```
+
+### `nuvel bots create`
+
+Create a bot, optionally cloned from another and with hub skills installed.
+
+```bash
+nuvel bots create <name> [--model M] [--description D] [--clone-from BOT] [--skills a/b,c/d] [--list-skills] [--hub DIR] [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<name>` | Bot name: lowercase alphanumerics, `-` or `_`. |
+| `--model` | Default model for the bot. |
+| `--description` | Bot description. |
+| `--clone-from` | Seed config and skills from an existing bot. |
+| `--skills` | Comma-separated skill refs to install, e.g. `hr/payroll,customer/triage`. |
+| `--list-skills` | List the hub's skills and exit without creating anything. |
+| `--hub` | Path to a local skills-hub checkout. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` created (or listed); `1` `hermes` fails.
+
+```console
+$ nuvel bots create demo-bot --description "Answers billing questions"
+Created bot 'demo-bot'.
+```
+
+### `nuvel bots delete`
+
+Delete a bot.
+
+```bash
+nuvel bots delete <name> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<name>` | Bot to delete. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` deleted; `1` no such bot or `hermes` fails.
+
+```console
+$ nuvel bots delete demo-bot
+Deleted bot 'demo-bot'.
+```
+
+### `nuvel bots chat`
+
+Send one message to a bot and print its reply. The bot needs a model and its provider key.
+
+```bash
+nuvel bots chat <name> <message> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<name>` | Bot to talk to. |
+| `<message>` | Message to send. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` replied; `1` no such bot or `hermes` fails.
+
+```console
+$ nuvel bots chat demo-bot "hello"
+Error: hermes -p demo-bot chat -Q -q hello failed:
+```
+
+(Run on a bot with no model or provider key configured, so `hermes` failed.)
+
+### `nuvel bots info`
+
+Show a bot's name, model and description.
+
+```bash
+nuvel bots info <name> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<name>` | Bot to inspect. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0`; `1` no such bot or `hermes` fails.
+
+```console
+$ nuvel bots info demo-bot
+name:        demo-bot
+model:       —
+description: Answers billing questions
+```
+
+### `nuvel bots logs`
+
+Show a bot's most recent log lines.
+
+```bash
+nuvel bots logs <name> [-n N] [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Default | Description |
 |---|---|---|
-| `--agent / -a` | *(all)* | Filter to one agent by substring. |
-| `--since` | *(all)* | Only traces at/after this date (`YYYY-MM-DD` or ISO). |
-| `--max-cost-usd` | `1.00` | Hard cap on replay + judge spend. |
-| `--concurrency` | `5` | Max simultaneous replays. |
-| `--force` | off | Re-replay even if already at this variant version. |
-| `--dry-run` | off | Replay + score but write nothing. |
+| `<name>` | *(required)* | Bot whose logs to show. |
+| `--limit`, `-n` | `10` | Number of log lines. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | | Shared flags. |
 
-### `compare`
+**Exit codes:** `0`; `1` no such bot or `hermes` fails.
 
-```bash
-nuvel eval compare <variant_name> [--agent <q>]
+```console
+$ nuvel bots logs demo-bot -n 3
+--- ~/.hermes/profiles/demo-bot/logs/agent.log (last 3) ---
 ```
 
-Diffs a variant's replays against the baseline `scored.jsonl`. Exits with code `2` on regression — defined as `Δ overall < −0.05` for any agent — so CI can catch prompt regressions before they ship.
+### `nuvel bots send`
 
-## `nuvel run`
-
-Launch the meta-agent — an interactive ADK agent that helps you scaffold, configure, and ship other agents.
+Deliver a message from one bot to another, in the receiving bot's `Agent Inbox` session, and print the reply.
 
 ```bash
-nuvel run [--dev]
+nuvel bots send <from> <to> <message> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<from>` | Sending bot. |
+| `<to>` | Receiving bot. |
+| `<message>` | Message to deliver. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` delivered; `1` no such bot or `hermes` fails.
+
+```console
+$ nuvel bots send triage-bot billing-bot "Customer 42 asks about a refund."
+Error: hermes -p billing-bot chat -c 'Agent Inbox' -Q -q 'Message from triage-bot: Customer 42 asks about a refund.' failed: No session found matching 'Agent Inbox'.
+Use 'hermes sessions list' to see available sessions, or pass --create-if-missing to start a new session with that title.
+```
+
+(Run against a receiving bot with no `Agent Inbox` session yet.)
+
+### `nuvel bots skills`
+
+Browse the Nuvel skills hub that `nuvel bots create --skills` installs from.
+
+#### `nuvel bots skills list`
+
+List the hub's skills, grouped by category.
+
+```bash
+nuvel bots skills list [--category C] [--hub DIR] [--hermes-bin PATH] [--json] [-v]
 ```
 
 | Flag | Description |
 |---|---|
-| `--dev` | Sets `DEV_MODE=true` for the meta-agent's session service (in-memory; no Postgres needed). |
+| `--category` | Only show skills in this category. |
+| `--hub` | Path to a local skills-hub checkout. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
 
-The meta-agent itself is a nuvel-scaffolded ADK agent. Its source is under `nuvel/` in the repository.
+**Exit codes:** `0`, including when there are no skills (`No skills found.`).
 
-## `nuvel-mcp serve`
-
-Standalone Skills MCP server, shipped as its own dependency-free package (`nuvel-mcp`). `nuvel mcp serve` delegates to it with the same flags.
-
-```bash
-uvx nuvel-mcp serve --skills-dir ./skills-hub
-nuvel-mcp serve [--skills-dir DIR] [--tools A,B] [--theme T] [--require CAP] [--with-org-memory DSN_OR_PATH] [--feedback-dir DIR] [--trace-store local|MODULE:FACTORY] [--transport stdio|http] [--host H] [--port P] [--allow-remote] [--no-auth] [--require-auth]
-nuvel-mcp client create --name NAME [--redirect-uri URI ...]
-nuvel-mcp client list [--json]
-nuvel-mcp client delete CLIENT_ID
-nuvel-mcp token revoke TOKEN_OR_CLIENT_ID
-nuvel-mcp clients label CLIENT_ID [--person P] [--company C] [--notes N]
-nuvel-mcp clients list [--json]
-nuvel-mcp report [--days 7] [--json]
+```console
+$ nuvel bots skills list --hub ./skills
+summarize
+  summarize  Summarize a document in three bullets.
 ```
 
-`clients` and `report` need `NUVEL_MCP_DATABASE_URL`: `clients label` records who is behind an OAuth client id (an empty value clears a field), `clients list` shows each client id with its label, last usage and events in the last 30 days, and `report` prints the usage report (clients, calls, tools, errors, latency, client apps, countries, skill runs, recipe adoption). What the usage log holds is listed in [Usage insights](../how-to/deploy-skills-mcp.md#usage-insights-what-is-collected).
+#### `nuvel bots skills search`
+
+Search the hub's skills by name, description or tag.
+
+```bash
+nuvel bots skills search <query> [--hub DIR] [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<query>` | Search text. |
+| `--hub` | Path to a local skills-hub checkout. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0`, including when nothing matches.
+
+```console
+$ nuvel bots skills search payroll
+No skills found.
+```
+
+## `nuvel fleet`
+
+Deploy and manage fleets of bots from one YAML manifest. A deploy records the fleet in `~/.hermes/fleets/<name>.json`. The manifest keys are `name`, `company`, `hub`, `default_model`, `bots`, `vision` and `manager`; each bot takes `name`, `role`, `description`, `model` and `skills`:
+
+```yaml
+name: acme-support
+company: Acme Corp
+bots:
+  - name: triage-bot
+    description: Classifies and routes incoming customer requests
+  - name: billing-bot
+    description: Answers billing questions
+```
+
+Every `fleet` command takes the shared `bots` flags `--hermes-bin`, `--json` and `--verbose` / `-v`, and exits `1` when `hermes` fails or the manifest is invalid.
+
+### `nuvel fleet deploy`
+
+Create every bot in a manifest and install its skills. A bot that already exists is left alone; a bot that fails is reported and does not stop the rest.
+
+```bash
+nuvel fleet deploy <manifest> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<manifest>` | Path to the fleet manifest (YAML). |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` every bot deployed; `1` any bot failed, or the manifest is invalid.
+
+```console
+$ nuvel fleet deploy fleet.yaml
+Fleet 'acme-support': ok
+  triage-bot: created
+  billing-bot: created
+```
+
+### `nuvel fleet list`
+
+List the deployed fleets.
+
+```bash
+nuvel fleet list [--hermes-bin PATH] [--json] [-v]
+```
+
+Takes only the shared flags: `--hermes-bin`, `--json`, `--verbose`, `-v`.
+
+**Exit codes:** `0`, including when there are none (`No fleets deployed.`).
+
+```console
+$ nuvel fleet list
+acme-support
+```
+
+### `nuvel fleet status`
+
+Show a fleet's bots and their deploy status, plus its manager, vision and routines when set.
+
+```bash
+nuvel fleet status <name> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<name>` | Fleet name. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0`; `1` no fleet by that name.
+
+```console
+$ nuvel fleet status acme-support
+Fleet 'acme-support' (Acme Corp)
+  triage-bot: created
+  billing-bot: created
+  vision:  ~/.hermes/fleets/acme-support/VISION.md
+```
+
+### `nuvel fleet destroy`
+
+Delete every bot in a manifest and its fleet record.
+
+```bash
+nuvel fleet destroy <manifest> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<manifest>` | Path to the fleet manifest (YAML). |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` destroyed; `1` `hermes` fails or the manifest is invalid.
+
+```console
+$ nuvel fleet destroy fleet.yaml
+Fleet destroyed.
+```
+
+### `nuvel fleet update-vision`
+
+Replace a fleet's `VISION.md`, its constitution.
+
+```bash
+nuvel fleet update-vision <name> <source> [--hermes-bin PATH] [--json] [-v]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<name>` | Fleet name. |
+| `<source>` | Inline markdown (starting with `#` or `---`) or a path to a file. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+
+**Exit codes:** `0` updated; `1` no such fleet, or the source cannot be read.
+
+```console
+$ nuvel fleet update-vision acme-support "# Acme support: answer within one business day."
+Updated VISION.md for fleet 'acme-support'.
+```
+
+## `nuvel evalv2`
+
+Skill-driven evaluation: a skill ships an `eval/` suite (`suite.yaml` plus `examples/`), and runs are saved under the evalv2 results directory so they can be compared against a baseline. Every subcommand takes `--skills-dir`, the skills directory `<skill>` is resolved against (default: the configured skills directory).
+
+### `nuvel evalv2 init`
+
+Create an `eval/` suite in a skill: a `suite.yaml` with an LLM judge and a length check, and an empty `examples/` directory.
+
+```bash
+nuvel evalv2 init <skill> [--skills-dir DIR] [--name NAME] [--description TEXT] [--force]
+```
+
+| Argument / flag | Default | Description |
+|---|---|---|
+| `<skill>` | *(required)* | Skill name under the skills directory, or a path. |
+| `--skills-dir` | configured | Skills directory. |
+| `--name` | `<skill>-eval` | Suite name. |
+| `--description` | `""` | One-line suite description. |
+| `--force` | off | Overwrite an existing `eval/` directory. |
+
+**Exit codes:** `0` created; `1` the skill directory does not exist, or it already has `eval/` and `--force` was not given.
+
+```console
+$ nuvel evalv2 init summarize --skills-dir ./skills
+Initialized eval suite in skills/summarize
+  skills/summarize/eval/suite.yaml
+  skills/summarize/eval/examples/
+
+Add examples under skills/summarize/eval/examples/, then run `nuvel evalv2 run summarize`.
+```
+
+### `nuvel evalv2 list`
+
+List the skills that ship an `eval/` suite, with the suite name, example count and evaluators.
+
+```bash
+nuvel evalv2 list [--skills-dir DIR]
+```
 
 | Flag | Description |
 |---|---|
-| `--skills-dir DIR` | Skills hub to serve. Optional: without it the server starts in feedback-only mode and exposes just the feedback tools (`record_feedback`, `check_skill_health`, `propose_improvement`, `record_run_trace`). `nuvel mcp serve` used to serve the current directory when it was omitted; pass `--skills-dir .` to keep that. |
-| `--tools A,B` | Comma-separated allow-list of tool names to expose. Default: every tool on stdio; over HTTP `search_skills`, `list_skills`, `list_themes`, `get_skill`, `fence_value`, `record_run_trace` and `check_skill_health`. `record_feedback`, `propose_improvement` and `install_skill` are exposed over HTTP only when named here. |
-| `--trace-store` | Where `record_run_trace` keeps traces: `local` (JSONL under `<feedback-dir>/_runs/`, the default) or `module:factory`, a zero-argument callable returning a `TraceStore`. See [Skill run traces](skill-run-traces.md). |
-| `--transport stdio\|http` | `stdio` (default) or `http`: Streamable HTTP on `/mcp`, legacy HTTP+SSE on `/sse` + `/messages`, and `GET /healthz`. Both need only the standard library. |
-| `--host H`, `--port P` | HTTP bind address. Default `127.0.0.1:8080` (`--port 0` picks a free port). |
-| `--allow-remote` | Allow a non-loopback `--host`. Requires `NUVEL_MCP_PUBLIC_URL` and GitHub OAuth credentials. |
-| `--no-auth` | HTTP only: disable OAuth for local development. Refused unless `--host` is loopback. There is then no principal, so traces carry no `tenant` and `check_skill_health` aggregates all tenants, as over stdio. |
-| `--require-auth` | stdio only: gate every request on the access token in `$NUVEL_MCP_ACCESS_TOKEN`. HTTP is always gated unless `--no-auth`. |
+| `--skills-dir` | Skills directory. |
 
-HTTP requires an OAuth 2.1 access token by default. The tenant of each run trace is the token's OAuth `client_id` (for an interactive login, the `client_id` plus a hash of the user). Operators create clients with `client create` (the secret is printed once) and revoke access with `client delete` or `token revoke`. Tuning and deployment settings (`NUVEL_MCP_PUBLIC_URL`, `NUVEL_OAUTH_*`, `NUVEL_MCP_REQUEST_DEADLINE`, `NUVEL_MCP_READ_TIMEOUT`, `NUVEL_MCP_MAX_CONNECTIONS`, ...) are listed in [Deploy the Skills MCP server over HTTP](../how-to/deploy-skills-mcp.md).
+**Exit codes:** `0`, including when there are none.
 
-`nuvel-mcp` has no runtime dependencies and no extras. The old `nuvel.mcp` import path is deprecated; import `nuvel_mcp` instead.
+```console
+$ nuvel evalv2 list --skills-dir ./skills
+  summarize  summarize-eval  (0 examples; llm-judge,deterministic)
+```
+
+### `nuvel evalv2 run`
+
+Run a skill's suite, print the per-example scores and save the run.
+
+```bash
+nuvel evalv2 run <skill> [--skills-dir DIR] [--model M] [--json] [--save-baseline]
+```
+
+| Argument / flag | Description |
+|---|---|
+| `<skill>` | Skill name (directory under the skills directory). |
+| `--skills-dir` | Skills directory. |
+| `--model` | Model override for the run. |
+| `--json` | Emit the result as JSON on stdout. |
+| `--save-baseline` | Also save this run as the baseline `nuvel evalv2 compare` diffs against. |
+
+**Exit codes:** `0` the run completed; `1` the skill has no `eval/suite.yaml`, the suite is invalid, the run failed, or the result cannot be written.
+
+```console
+$ nuvel evalv2 run summarize --skills-dir ./skills --save-baseline
+suite: summarize-eval  (skill: summarize)
+model: default
+
+id                             score  verdict
+------------------------------------  --------
+
+overall:   —     pass=0 warn=0 fail=0 unscored=0 (total 0)
+```
+
+### `nuvel evalv2 compare`
+
+Diff a skill's latest run against its baseline.
+
+```bash
+nuvel evalv2 compare <skill> [--skills-dir DIR] [--json] [--threshold T]
+```
+
+| Argument / flag | Default | Description |
+|---|---|---|
+| `<skill>` | *(required)* | Skill name (directory under the skills directory). |
+| `--skills-dir` | configured | Skills directory. |
+| `--json` | off | Emit the comparison as JSON on stdout. |
+| `--threshold` | `-0.05` | Regression threshold on the overall delta. |
+
+**Exit codes:** `0` no regression; `2` regression, so CI can fail on it; `1` no baseline or no run recorded yet.
+
+```console
+$ nuvel evalv2 compare summarize
+baseline: 2026-11-05T11:40:05.295340+00:00
+current:  2026-11-05T11:40:05.295340+00:00
+
+id                              base    curr    delta  verdict
+-----------------------------------------------------  --------
+
+overall delta: —   wins=0 losses=0 ties=0
+warning: no overlapping example ids — nothing to compare
+no regression
+```
 
 ## Programmatic API
 
