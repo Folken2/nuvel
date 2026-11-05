@@ -270,20 +270,21 @@ Then describe the agent you want; nuvel will scaffold, generate, and validate an
 | `nuvel agent create <name> --with-eval` | *(adk only)* Stamp a starter evalv2 suite into the agent (`skills/default/eval/suite.yaml` + a sample example) |
 | `nuvel agent create <name> --with-litellm` | *(adk only)* Generate a ready-to-run LiteLLM proxy alongside the agent |
 | `nuvel agent create <name> --output-dir ./agents` | Override the output directory |
-| `nuvel skills list [--framework <fw>]` | List bundled knowledge skills for a framework |
-| `nuvel skills search <term> [--framework <fw>]` | Search skills by keyword |
+| `nuvel agent list [--output-dir <dir>] [--json]` | List the agents already scaffolded, with their framework |
+| `nuvel skills list [--framework <fw>] [--json]` | List bundled knowledge skills for a framework |
+| `nuvel skills search <term> [--framework <fw>] [--json]` | Search skills by keyword |
 | `nuvel doctor [--path <dir>] [--json]` | Diagnose the install and the agent in cwd (deps, config, keys, state, network, caches) |
-| `nuvel traces list \| show \| stats \| errors` | Inspect JSONL trace logs across all local agents |
-| `nuvel pricing list \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
+| `nuvel traces list \| show \| stats \| errors \| recipes [--json]` | Inspect JSONL trace logs across all local agents |
+| `nuvel pricing list [--json] \| sync \| add <model>` | Sync `pricing.json` against OpenRouter |
 | `nuvel dashboard [--demo]` | Open a local web dashboard over your trace logs (also shows `nuvel.skill_run/1` skill runs and per-step error rates) |
-| `nuvel eval score \| report \| worst \| drift` | **Production trace scoring** — score traces (heuristics + LLM judge), surface worst runs, detect drift |
+| `nuvel eval score \| report \| worst \| drift` (`--json` on `report`, `worst`, `drift`) | **Production trace scoring** — score traces (heuristics + LLM judge), surface worst runs, detect drift |
 | `nuvel evalv2 init <skill> [--name <n>] [--description <d>] [--force]` | **Skill evaluation** — stamp a starter `eval/` suite into a skill |
-| `nuvel evalv2 list` | List skills that ship an `eval/` suite |
+| `nuvel evalv2 list [--json]` | List skills that ship an `eval/` suite |
 | `nuvel evalv2 run <skill> [--model <m>] [--json] [--save-baseline]` | Run a skill's eval suite against a fresh executor and save the result |
 | `nuvel evalv2 compare <skill> [--json] [--threshold N]` | Diff a skill's latest run against its baseline; exits 2 on regression |
-| `nuvel plugins list` | Discover [Agent Plugins](https://agent-plugins.org/) in the configured `plugin_dirs` (`NUVEL_PLUGIN_DIRS`, default `./plugins`), listing each plugin's skills and MCP servers |
-| `nuvel plugins load <dir>` | Load and inspect a single plugin directory |
-| `nuvel plugins config` | Show the current plugin directory configuration |
+| `nuvel plugins list [--json]` | Discover [Agent Plugins](https://agent-plugins.org/) in the configured `plugin_dirs` (`NUVEL_PLUGIN_DIRS`, default `./plugins`), listing each plugin's skills and MCP servers |
+| `nuvel plugins load <dir> [--json]` | Load and inspect a single plugin directory |
+| `nuvel plugins config [--json]` | Show the current plugin directory configuration |
 | `nuvel-mcp serve [--skills-dir <dir>]` | Standalone, dependency-free Skills MCP server (`uvx nuvel-mcp serve --skills-dir …`); `nuvel mcp serve` delegates to it, and the old `nuvel.mcp` import is a deprecated shim for `nuvel_mcp` |
 | `nuvel run` | Run the meta-agent (production-style server) |
 | `nuvel run --dev` | Same, with in-memory sessions for dev |

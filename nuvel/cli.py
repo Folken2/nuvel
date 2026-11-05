@@ -3,6 +3,8 @@
 Subcommands:
     nuvel agent create <name> --framework <fw>
         Scaffold a new agent. Default framework: adk.
+    nuvel agent list [--output-dir <dir>]
+        List the agents in the output directory.
     nuvel skills list [--framework <fw>]
         List bundled knowledge skills for a framework.
     nuvel skills search <q> [--framework <fw>]
@@ -185,6 +187,34 @@ def _cmd_new(args: argparse.Namespace) -> int:
     # Not every backend's refusal says which backend is refusing.
     print(f"Error: {args.framework} backend: {result['message']}", file=sys.stderr)
     return 1
+
+
+def _cmd_agent_list(args: argparse.Namespace) -> int:
+    from nuvel.doctor import detect_agent
+
+    output_dir = Path(
+        args.output_dir or os.environ.get("AGENTS_OUTPUT_DIR", "./generated-agents")
+    )
+    agents = []
+    if output_dir.is_dir():
+        for entry in sorted(output_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            info = detect_agent(entry)
+            if info.is_agent:
+                agents.append(
+                    {"name": entry.name, "framework": info.framework, "path": str(entry)}
+                )
+    if args.json:
+        _print_json({"output_dir": str(output_dir), "agents": agents})
+        return 0
+    if not agents:
+        print(f"No agents found in {output_dir}.")
+        return 0
+    width = max(len(a["name"]) for a in agents)
+    for a in agents:
+        print(f"  {a['name']:<{width}}  {a['framework'] or '-'}")
+    return 0
 
 
 def _load_skills(framework: str) -> list[dict]:
@@ -499,6 +529,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_create = agent_sub.add_parser("create", help="Scaffold a new agent.")
     _add_new_agent_args(p_create)
     p_create.set_defaults(func=_cmd_new)
+
+    p_agent_list = agent_sub.add_parser("list", help="List the agents in the output directory.")
+    p_agent_list.add_argument(
+        "--output-dir", default=None,
+        help="Directory holding the agents (default: $AGENTS_OUTPUT_DIR or ./generated-agents).",
+    )
+    _add_json_flag(p_agent_list)
+    p_agent_list.set_defaults(func=_cmd_agent_list)
 
     # ── new (deprecated alias for `agent create`) ───────────────────────
     p_new = sub.add_parser("new", help="[Deprecated] Use `nuvel agent create` instead.")

@@ -32,9 +32,9 @@ nuvel: error: the following arguments are required: command
 
 ## JSON output
 
-Every command that reads state takes `--json`: `skills list`, `skills search`, `plugins list`, `plugins load`, `plugins config`, `doctor`, `traces list`, `traces show`, `traces stats`, `traces errors`, `traces recipes`, `pricing list`, `eval report`, `eval worst`, `eval drift`, `evalv2 list`, the `bots` and `fleet` commands, and the `mcp client list`, `mcp clients list`, `mcp db status` and `mcp report` commands.
+Every command that reads state takes `--json`: `agent list`, `skills list`, `skills search`, `plugins list`, `plugins load`, `plugins config`, `doctor`, `traces list`, `traces show`, `traces stats`, `traces errors`, `traces recipes`, `pricing list`, `eval report`, `eval worst`, `eval drift`, `evalv2 list`, `evalv2 compare`, `bots list`, `bots info`, `bots logs`, `bots skills list`, `bots skills search`, `fleet list`, `fleet status`, `mcp client list`, `mcp clients list`, `mcp db status` and `mcp report`. `evalv2 run` and the `bots` and `fleet` commands that change state take it too.
 
-With `--json` a command prints exactly one JSON document on stdout and nothing else; warnings and errors still go to stderr. The flag changes only how the result is rendered, never what is computed: filters, limits and exit codes are the same as in the text view. When there is nothing to show you get the same document with empty lists, not the text view's `No … found.` line. Key names are `snake_case` and stable; each command's section lists its keys. Durations are milliseconds, costs US dollars, and a value the text view prints as `-` is `null`. A command that fails (exit `1`, error on stderr) prints nothing on stdout.
+With `--json` a command prints exactly one JSON document on stdout and nothing else; warnings and errors still go to stderr. The flag changes only how the result is rendered, never what is computed: filters, limits and, with one exception below, exit codes are the same as in the text view. When there is nothing to show you get the same document with empty lists, not the text view's `No … found.` line. Key names are `snake_case` and stable; each read command's section lists its keys. Durations are milliseconds, costs US dollars, and a value the text view prints as `-` is `null`. Most documents are objects; `mcp client list`, `mcp clients list`, `bots list`, `bots skills list`, `bots skills search` and `fleet list` print a bare array. A command that fails with an error on stderr prints nothing on stdout, with two exceptions: `doctor --json` still prints its findings when a check fails (exit `1`), and `fleet status --json` prints `null` for an unknown fleet (exit `1`). One exit code differs from the text view: `mcp db status --json` exits `0` when migrations are pending.
 
 ```console
 $ nuvel skills search workflow --json
@@ -55,7 +55,7 @@ $ nuvel skills search workflow --json
 
 ## `nuvel agent`
 
-Manage agents. Its only subcommand is `create`.
+Manage agents: `create` scaffolds one, `list` shows the ones already scaffolded.
 
 ### `nuvel agent create`
 
@@ -119,6 +119,44 @@ More invocations:
 nuvel agent create my-agent --with-slack          # ADK agent with Composio tools and a Slack channel
 nuvel agent create triage-bot --workflow --description "triage issues, route to the right team"
 nuvel agent create soulful-bot --persona --with-composio --with-telegram
+```
+
+### `nuvel agent list`
+
+List the agents in the output directory: each subdirectory that `nuvel doctor` recognises as an agent, with its framework. Other directories are skipped.
+
+```bash
+nuvel agent list [--output-dir <dir>] [--json]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--output-dir` | `./generated-agents` (or `$AGENTS_OUTPUT_DIR`) | Directory holding the agents, as for `nuvel agent create`. |
+| `--json` | off | Print `{output_dir, agents[]}`, each agent `{name, framework, path}`; `framework` is `adk`, `hermes`, `claude-agent-sdk`, or `null` when it cannot be told. |
+
+**Exit codes:** `0`, including when the directory is missing or holds no agents (`No agents found in <dir>.`).
+
+```console
+$ nuvel agent list
+  my-adk     adk
+  my-hermes  hermes
+
+$ nuvel agent list --json
+{
+  "output_dir": "generated-agents",
+  "agents": [
+    {
+      "name": "my-adk",
+      "framework": "adk",
+      "path": "generated-agents/my-adk"
+    },
+    {
+      "name": "my-hermes",
+      "framework": "hermes",
+      "path": "generated-agents/my-hermes"
+    }
+  ]
+}
 ```
 
 ## `nuvel new`
@@ -706,7 +744,7 @@ nuvel mcp client list [--json]
 
 | Flag | Description |
 |---|---|
-| `--json` | Print JSON. |
+| `--json` | Print a bare array of clients, oldest first, each the stored client record without its secret hash: `{client_id, client_id_issued_at, client_name, grant_types, redirect_uris, response_types, source, token_endpoint_auth_method, confidential, active_access_tokens}`, plus `url_key: true` (and `url_key_expires_at`, Unix seconds, when it expires) on URL-key clients. `client_id_issued_at` is Unix seconds. |
 
 **Exit codes:** `0`, including when there are no clients; `1` the OAuth store cannot be read.
 
@@ -799,9 +837,9 @@ nuvel mcp db status [--json]
 
 | Flag | Description |
 |---|---|
-| `--json` | Print JSON. |
+| `--json` | Print `{schema, applied[], pending[], rows}`: `applied` and `pending` hold migration numbers, `rows` maps each table to its row count. |
 
-**Exit codes:** `0` up to date; `1` migrations are pending (or a database error); `2` no database configured.
+**Exit codes:** `0` up to date; `1` migrations are pending (or a database error); `2` no database configured. With `--json`, pending migrations exit `0`: read `pending` instead.
 
 ```console
 $ nuvel mcp db status
@@ -885,7 +923,7 @@ nuvel mcp clients list [--json]
 
 | Flag | Description |
 |---|---|
-| `--json` | Print JSON. |
+| `--json` | Print a bare array, most recently seen first, each `{client_id, name, person, company, notes, last_seen, events_30d}`; `last_seen` is an ISO timestamp or `null`. |
 
 **Exit codes:** `0`, including when there are no clients; `1` database error; `2` no database configured.
 
@@ -906,7 +944,7 @@ nuvel mcp report [--days N] [--json]
 | Flag | Default | Description |
 |---|---|---|
 | `--days` | `7` | Window in days, ending now; 1 to 366. |
-| `--json` | off | Print JSON. |
+| `--json` | off | Print `{window, totals, active_clients[], calls_per_day[], methods[], tools[], client_apps[], countries[], skill_runs[], tools_never_called[], recipes[]}`. `window` is `{days, since, until}`; `totals` is `{calls, errors, error_rate, active_clients}`; each tool is `{tool, calls, errors, error_rate, p50_ms, p95_ms, top_errors[]}`; each skill run row is `{plugin, skill, runs, success, partial, failure, not_run, corrected, correction_rate}`; each recipe row is `{category, signals, recipes, installs, statuses}`. Rates run from `0` to `1`. |
 
 **Exit codes:** `0`; `1` database error; `2` `--days` out of range, or no database configured.
 
@@ -1091,7 +1129,7 @@ Every `bots` command takes these flags:
 | Flag | Description |
 |---|---|
 | `--hermes-bin` | Path to the `hermes` executable. Default: found on `PATH`. |
-| `--json` | Emit machine-readable JSON on stdout. |
+| `--json` | Print one JSON document on stdout instead of the text view; each command lists its keys. |
 | `--verbose`, `-v` | Show the full traceback on error. |
 
 Shared **exit codes** of the `bots` commands: `0` on success; `1` when the bot does not exist or `hermes` fails, with the error on stderr.
@@ -1104,7 +1142,7 @@ List all bots with their default model.
 nuvel bots list [--hermes-bin PATH] [--json] [-v]
 ```
 
-Takes only the shared flags: `--hermes-bin`, `--json`, `--verbose`, `-v`.
+Takes only the shared flags: `--hermes-bin`, `--json`, `--verbose`, `-v`. With `--json` it prints a bare array of bots, each `{name, title, description, model, skills[], toolsets[]}`.
 
 **Exit codes:** `0`; `1` `hermes` fails.
 
@@ -1194,7 +1232,7 @@ nuvel bots info <name> [--hermes-bin PATH] [--json] [-v]
 | Argument / flag | Description |
 |---|---|
 | `<name>` | Bot to inspect. |
-| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. `--json` prints the bot as `{name, title, description, model, skills[], toolsets[]}`. |
 
 **Exit codes:** `0`; `1` no such bot or `hermes` fails.
 
@@ -1217,7 +1255,7 @@ nuvel bots logs <name> [-n N] [--hermes-bin PATH] [--json] [-v]
 |---|---|---|
 | `<name>` | *(required)* | Bot whose logs to show. |
 | `--limit`, `-n` | `10` | Number of log lines. |
-| `--hermes-bin`, `--json`, `--verbose`, `-v` | | Shared flags. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | | Shared flags. `--json` prints `{name, logs[]}`, `logs` the lines as `hermes` prints them. |
 
 **Exit codes:** `0`; `1` no such bot or `hermes` fails.
 
@@ -1267,7 +1305,7 @@ nuvel bots skills list [--category C] [--hub DIR] [--hermes-bin PATH] [--json] [
 |---|---|
 | `--category` | Only show skills in this category. |
 | `--hub` | Path to a local skills-hub checkout. |
-| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. `--json` prints a bare array of skills, each `{name, category, description, tags[], version}`. |
 
 **Exit codes:** `0`, including when there are no skills (`No skills found.`).
 
@@ -1289,7 +1327,7 @@ nuvel bots skills search <query> [--hub DIR] [--hermes-bin PATH] [--json] [-v]
 |---|---|
 | `<query>` | Search text. |
 | `--hub` | Path to a local skills-hub checkout. |
-| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. `--json` prints matches as `nuvel bots skills list --json` does. |
 
 **Exit codes:** `0`, including when nothing matches.
 
@@ -1344,7 +1382,7 @@ List the deployed fleets.
 nuvel fleet list [--hermes-bin PATH] [--json] [-v]
 ```
 
-Takes only the shared flags: `--hermes-bin`, `--json`, `--verbose`, `-v`.
+Takes only the shared flags: `--hermes-bin`, `--json`, `--verbose`, `-v`. With `--json` it prints a bare array of fleet names.
 
 **Exit codes:** `0`, including when there are none (`No fleets deployed.`).
 
@@ -1364,9 +1402,9 @@ nuvel fleet status <name> [--hermes-bin PATH] [--json] [-v]
 | Argument / flag | Description |
 |---|---|
 | `<name>` | Fleet name. |
-| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. |
+| `--hermes-bin`, `--json`, `--verbose`, `-v` | Shared flags. `--json` prints `{fleet_name, company, bots[], success, started_at, completed_at, has_vision, vision_path, manager, routines[]}`, each bot `{name, status, skills_installed[], error}` and each routine `{bot, schedule, task}` plus `error` when it failed; the timestamps are `YYYY-MM-DD HH:MM:SS…` strings. |
 
-**Exit codes:** `0`; `1` no fleet by that name.
+**Exit codes:** `0`; `1` no fleet by that name, which with `--json` prints `null`.
 
 ```console
 $ nuvel fleet status acme-support
@@ -1481,7 +1519,7 @@ nuvel evalv2 run <skill> [--skills-dir DIR] [--model M] [--json] [--save-baselin
 | `<skill>` | Skill name (directory under the skills directory). |
 | `--skills-dir` | Skills directory. |
 | `--model` | Model override for the run. |
-| `--json` | Emit the result as JSON on stdout. |
+| `--json` | Print the saved result: `{schema_version, skill, suite, timestamp, model, summary, examples[], flags[], cost}`. `summary` is `{total, passed, warn, failed, unscored, overall, baseline_overall, delta, regression}`; each example is `{id, input, score, passed, evaluator_results[], cache_hit, cost, notes[]}`, each evaluator result `{evaluator, name, score, passed, details}`. |
 | `--save-baseline` | Also save this run as the baseline `nuvel evalv2 compare` diffs against. |
 
 **Exit codes:** `0` the run completed; `1` the skill has no `eval/suite.yaml`, the suite is invalid, the run failed, or the result cannot be written.
@@ -1509,7 +1547,7 @@ nuvel evalv2 compare <skill> [--skills-dir DIR] [--json] [--threshold T]
 |---|---|---|
 | `<skill>` | *(required)* | Skill name (directory under the skills directory). |
 | `--skills-dir` | configured | Skills directory. |
-| `--json` | off | Emit the comparison as JSON on stdout. |
+| `--json` | off | Print `{baseline_id, current_id, summary, examples[], regression_count, improvement_count, regressed}`. The ids are the runs' timestamps; `summary` is `{baseline_overall, current_overall, overall_delta, wins, losses, ties, matched, only_in_baseline[], only_in_current[], regression_threshold, warnings[]}`; each example is `{id, baseline_score, current_score, delta, verdict}`, `verdict` being `win`, `loss` or `tie`. |
 | `--threshold` | `-0.05` | Regression threshold on the overall delta. |
 
 **Exit codes:** `0` no regression; `2` regression, so CI can fail on it; `1` no baseline or no run recorded yet.
