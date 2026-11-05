@@ -2,8 +2,7 @@
 
 Runs the real CLI, so a backend that cannot create an agent fails CI. Also pins
 the dispatcher: no kwarg reaches a backend blind, and a flag a backend does not
-support fails naming the flag and the backend. Frozen backends are only required
-to import; see test_cli_surface.py.
+support fails naming the flag and the backend.
 """
 
 from __future__ import annotations
@@ -35,10 +34,10 @@ EXPECTED_OUTPUT = {
 # Each flag a backend other than ADK refuses, per backend.
 REFUSED = {
     "hermes": ("--persona", "--with-composio", "--with-slack", "--with-teams",
-               "--workflow", "--with-eval", "--with-litellm", "--with-acp"),
+               "--workflow", "--with-eval", "--with-litellm"),
     "claude-agent-sdk": ("--persona", "--with-composio", "--with-slack",
                          "--with-telegram", "--with-teams", "--workflow",
-                         "--with-eval", "--with-litellm", "--with-acp"),
+                         "--with-eval", "--with-litellm"),
 }
 
 
@@ -88,10 +87,12 @@ def test_refused_flag_names_the_flag_and_backend(tmp_path, framework, flag):
     assert not list(tmp_path.iterdir())
 
 
-def test_refusing_with_acp_does_not_offer_a_frozen_framework(tmp_path):
-    result = _create(tmp_path, "hermes", "--with-acp")
-    assert result.returncode == 1
-    assert "buzz" not in result.stderr
+@pytest.mark.parametrize("framework", SUPPORTED_FRAMEWORKS)
+def test_removed_with_acp_flag_is_unknown(tmp_path, framework):
+    result = _create(tmp_path, framework, "--with-acp")
+    assert result.returncode == 2
+    assert "unrecognized arguments: --with-acp" in result.stderr
+    assert not list(tmp_path.iterdir())
 
 
 def test_hermes_keeps_its_telegram_overlay(tmp_path):

@@ -16,14 +16,9 @@ overlays from nuvel/backends/adk/templates_overlays/<bundle>/:
                       a single hosted MCP endpoint). Independent of
                       --persona.
 
-    --with-acp        Agent Client Protocol adapter (stdio JSON-RPC, per
-                      agentclientprotocol.com) plus a local terminal CLI,
-                      so the agent is runnable as an editor subprocess and
-                      from the command line. Independent of the others.
-
 Usage:
     python scaffold.py <agent-name> [--output-dir DIR] [--description DESC]
-                                    [--persona] [--with-composio] [--with-acp]
+                                    [--persona] [--with-composio]
 """
 
 from __future__ import annotations
@@ -327,83 +322,6 @@ _TEAMS_README_BLOCK = (
 )
 
 
-_ACP_ENV_BLOCK = (
-    "# ── ACP adapter / local CLI ──────────────────────────────────────\n"
-    "# Both entrypoints run the agent outside the HTTP server:\n"
-    "#   python -m {{agent_package}}.acp     ACP subprocess (stdio JSON-RPC)\n"
-    "#   python -m {{agent_package}}.cli      terminal one-shot / REPL\n"
-    "# Set DEV_MODE=true above for in-memory sessions (no Postgres needed).\n"
-    "# Optional: user id these entrypoints attribute sessions to.\n"
-    "# ACP_USER_ID=acp-user\n"
-    "# ACP tool-approval (HITL) — the agent asks the editor to approve tool\n"
-    "# calls via session/request_permission. Mode: off | sensitive | all\n"
-    "# (default: sensitive — gates destructive tools + filesystem writes).\n"
-    "# ACP_PERMISSION_MODE=sensitive\n"
-    "# Comma-separated tool names to gate (overrides the built-in sensitive set).\n"
-    "# ACP_PERMISSION_TOOLS=delete_record,send_email\n"
-    "\n"
-)
-
-_ACP_README_BLOCK = (
-    "\n## ACP adapter & local CLI\n"
-    "\n"
-    "This agent is runnable outside the FastAPI server two ways. Both reuse\n"
-    "the same `AgentHarness`-wired Runner, so tools, plugins, memory, and\n"
-    "cost tracking behave identically to the server. Use `DEV_MODE=true` for\n"
-    "in-memory sessions locally.\n"
-    "\n"
-    "### Agent Client Protocol (editor integration)\n"
-    "\n"
-    "[ACP](https://agentclientprotocol.com) is the JSON-RPC-over-stdio protocol\n"
-    "code editors (e.g. Zed) use to talk to agents. Launch the adapter with:\n"
-    "\n"
-    "```\n"
-    "python -m {{agent_package}}.acp\n"
-    "```\n"
-    "\n"
-    "The client drives it over the pipe: `initialize` → `session/new` →\n"
-    "`session/prompt`. The agent streams `session/update` notifications\n"
-    "(`agent_message_chunk`, `agent_thought_chunk`, `tool_call`,\n"
-    "`tool_call_update`) and returns a `stopReason` per turn; `session/cancel`\n"
-    "interrupts an in-flight turn. stdout is reserved for protocol traffic —\n"
-    "all logging goes to stderr.\n"
-    "\n"
-    "**Editor integration.** The adapter honors the capabilities an editor\n"
-    "brings to the session:\n"
-    "\n"
-    "- **MCP servers** — any `mcpServers` the client passes in `session/new`\n"
-    "  (stdio, plus Streamable HTTP / SSE) are wired into that session's agent\n"
-    "  as tools, so the editor can inject filesystem, git, etc. at connect time.\n"
-    "- **Filesystem bridge** — when the client advertises `fs.readTextFile` /\n"
-    "  `fs.writeTextFile`, the agent gets `read_text_file` / `write_text_file`\n"
-    "  tools that operate on the editor's view of the workspace (unsaved\n"
-    "  buffers included) instead of its own copy on disk.\n"
-    "- **Tool approval (HITL)** — before running a sensitive tool the agent\n"
-    "  asks the editor via `session/request_permission`, giving the user an\n"
-    "  Allow / Reject (once or always) gate. Tune with `ACP_PERMISSION_MODE`\n"
-    "  (`off` / `sensitive` / `all`, default `sensitive`) and\n"
-    "  `ACP_PERMISSION_TOOLS`; a rejected call never runs and the agent is\n"
-    "  told to ask how to proceed.\n"
-    "- **Multimodal prompts** — `image` blocks and embedded `resource` context\n"
-    "  (text or image blob) in `session/prompt` are decoded and passed to the\n"
-    "  agent alongside text, so an editor can attach screenshots or file\n"
-    "  context to a turn.\n"
-    "\n"
-    "To register it in Zed, add an entry under `agent_servers` in your Zed\n"
-    "settings pointing `command` at `python` and `args` at\n"
-    "`[\"-m\", \"{{agent_package}}.acp\"]` (with `cwd` set to this project).\n"
-    "Run `nuvel doctor` from this directory to smoke-test the stdio handshake\n"
-    "and print a ready-to-paste Zed `agent_servers` snippet.\n"
-    "\n"
-    "### Terminal CLI\n"
-    "\n"
-    "```\n"
-    "python -m {{agent_package}}.cli \"summarize today's incidents\"   # one-shot\n"
-    "python -m {{agent_package}}.cli                                  # interactive REPL\n"
-    "```\n"
-)
-
-
 _LITELLM_ENV_BLOCK = (
     "# ── LiteLLM Model Gateway ──────────────────────────────────────\n"
     "# When using the LiteLLM overlay, the agent routes LLM calls\n"
@@ -482,7 +400,6 @@ def _build_replacements(
     with_slack: bool = False,
     with_telegram: bool = False,
     with_teams: bool = False,
-    with_acp: bool = False,
     with_litellm: bool = False,
 ) -> dict[str, str]:
     # Frame priority: user's --system-prompt wins, else persona-aware default.
@@ -582,14 +499,6 @@ def _build_replacements(
         "{{gateway_requirements}}": gateway_requirements,
         "{{gateway_env_block}}": gateway_env_block,
         "{{gateway_readme_section}}": gateway_readme_section,
-        # ACP adapter / local CLI. The blocks embed "{{agent_package}}", which
-        # _substitute won't re-expand once injected, so pre-substitute here.
-        "{{acp_env_block}}": (
-            _ACP_ENV_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
-        ),
-        "{{acp_readme_section}}": (
-            _ACP_README_BLOCK.replace("{{agent_package}}", package) if with_acp else ""
-        ),
         # LiteLLM model gateway. The blocks embed "{{agent_package}}" and
         # "{{agent_name}}", which are pre-substituted here since _substitute
         # won't re-process values injected into the replacements dict.
@@ -699,7 +608,6 @@ def scaffold_agent(
     with_telegram: bool = False,
     with_teams: bool = False,
     workflow: bool = False,
-    with_acp: bool = False,
     with_eval: bool = False,
     with_litellm: bool = False,
 ) -> dict:
@@ -722,10 +630,6 @@ def scaffold_agent(
                   ADK 2.0 `Workflow` graph (agent_workflow.py) with task-mode
                   nodes and typed contracts, and agent.py becomes a shim
                   re-exporting it. Default is a single LlmAgent root.
-        with_acp: Add the Agent Client Protocol adapter (stdio JSON-RPC) plus
-                  a local terminal CLI, so the agent is runnable as an editor
-                  subprocess (`python -m <pkg>.acp`) and from the command line
-                  (`python -m <pkg>.cli`). Independent of the other flags.
         with_eval: Stamp a starter evalv2 suite into the agent's default skill
                    (skills/default/eval/suite.yaml + examples/welcome.json).
 
@@ -758,7 +662,7 @@ def scaffold_agent(
 
     replacements = _build_replacements(
         name, package, description, system_prompt, persona, with_composio,
-        with_slack, with_telegram, with_teams, with_acp, with_litellm,
+        with_slack, with_telegram, with_teams, with_litellm,
     )
     files_created: list[str] = []
 
@@ -791,8 +695,6 @@ def scaffold_agent(
             _stamp_tree(OVERLAYS_DIR / "gateway-slack", target, replacements, files_created)
         if with_teams:
             _stamp_tree(OVERLAYS_DIR / "gateway-teams", target, replacements, files_created)
-        if with_acp:
-            _stamp_tree(OVERLAYS_DIR / "acp", target, replacements, files_created)
         if with_eval:
             _stamp_tree(OVERLAYS_DIR / "eval", target, replacements, files_created)
         if with_litellm:
@@ -812,7 +714,6 @@ def scaffold_agent(
             "with_telegram": with_telegram,
             "with_teams": with_teams,
             "workflow": workflow,
-            "with_acp": with_acp,
             "with_eval": with_eval,
             "with_litellm": with_litellm,
         }
@@ -849,12 +750,6 @@ def main() -> None:
              "Workflow graph with task-mode nodes and typed contracts.",
     )
     parser.add_argument(
-        "--with-acp", action="store_true",
-        help="Add the Agent Client Protocol adapter (stdio JSON-RPC) plus a "
-             "local terminal CLI, so the agent is runnable as an editor "
-             "subprocess and from the command line.",
-    )
-    parser.add_argument(
         "--with-litellm", action="store_true",
         help="Generate a ready-to-run LiteLLM proxy alongside the agent "
              "for model gateway supervision: virtual keys, budgets, "
@@ -870,7 +765,6 @@ def main() -> None:
         persona=args.persona,
         with_composio=args.with_composio,
         workflow=args.workflow,
-        with_acp=args.with_acp,
         with_litellm=args.with_litellm,
     )
 
@@ -882,8 +776,6 @@ def main() -> None:
             flags.append("persona")
         if result.get("with_composio"):
             flags.append("composio")
-        if result.get("with_acp"):
-            flags.append("acp")
         if result.get("with_litellm"):
             flags.append("litellm")
         if flags:

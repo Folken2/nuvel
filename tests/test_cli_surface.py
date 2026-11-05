@@ -1,13 +1,12 @@
 """The CLI's advertised surface: real ``--help`` output, parsed from stdout.
 
 Support for v1 is adk, hermes and claude-agent-sdk. ACP, buzz and
-anthropic_managed_agents are frozen. Frozen code stays importable but must not
-be offered.
+anthropic_managed_agents were frozen, then removed (see docs/experimental.md):
+they must not be offered, and their modules must not import.
 """
 
 from __future__ import annotations
 
-import importlib
 import os
 import re
 import subprocess
@@ -21,7 +20,7 @@ from nuvel.cli import SUPPORTED_FRAMEWORKS
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_FRAMEWORKS = {"adk", "hermes", "claude-agent-sdk"}
 
-_FROZEN = re.compile(
+_REMOVED = re.compile(
     r"\bacp\b|agent client protocol|\bbuzz\b|anthropic[-_ ]*managed",
     re.IGNORECASE,
 )
@@ -63,11 +62,11 @@ def test_walk_covers_the_real_command_tree(help_pages):
         assert command in help_pages
 
 
-def test_no_frozen_name_in_any_help_page(help_pages):
+def test_no_removed_name_in_any_help_page(help_pages):
     leaks = {
-        command or "<root>": _FROZEN.findall(text)
+        command or "<root>": _REMOVED.findall(text)
         for command, text in help_pages.items()
-        if _FROZEN.search(text)
+        if _REMOVED.search(text)
     }
     assert not leaks
 
@@ -77,13 +76,13 @@ def test_no_frozen_name_in_any_help_page(help_pages):
     ["acp", "acp serve", "--with-acp", "python -m pkg.acp", "ACP v2", "buzz",
      "anthropic-managed", "anthropic-managed-agents", "anthropic_managed_agents"],
 )
-def test_frozen_pattern_catches_every_spelling(text):
-    assert _FROZEN.search(text)
+def test_removed_pattern_catches_every_spelling(text):
+    assert _REMOVED.search(text)
 
 
 @pytest.mark.parametrize("text", ["space", "workspace", "buzzword", "Claude model"])
-def test_frozen_pattern_ignores_innocent_words(text):
-    assert not _FROZEN.search(text)
+def test_removed_pattern_ignores_innocent_words(text):
+    assert not _REMOVED.search(text)
 
 
 @pytest.mark.parametrize(
@@ -115,36 +114,42 @@ def test_unsupported_framework_error_lists_only_supported(framework, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_unknown_command_error_does_not_list_frozen_commands():
+def test_unknown_command_error_does_not_list_removed_commands():
     result = _nuvel("no-such-command")
     assert result.returncode == 2
     assert "invalid choice" in result.stderr
     assert "agent" in result.stderr
-    assert not _FROZEN.search(result.stderr)
+    assert not _REMOVED.search(result.stderr)
 
 
 @pytest.mark.parametrize("path", [("acp",), ("acp", "serve")])
-def test_frozen_acp_stays_reachable_and_says_it_is_unsupported(path):
-    assert "experimental and unsupported" in " ".join(_help(*path).lower().split())
+def test_removed_acp_command_is_unknown(path):
+    result = _nuvel(*path)
+    assert result.returncode == 2
+    assert "invalid choice: 'acp'" in result.stderr
 
 
-def test_with_acp_flag_warns_it_is_unsupported(tmp_path):
+def test_removed_with_acp_flag_is_unknown(tmp_path):
     result = _nuvel(
         "agent", "create", "my-agent", "--with-acp", "--output-dir", str(tmp_path),
     )
-    assert result.returncode == 0, result.stderr
-    assert "--with-acp is experimental and unsupported" in result.stderr
+    assert result.returncode == 2
+    assert "unrecognized arguments: --with-acp" in result.stderr
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(
     "module",
-    ["nuvel.backends.buzz.scaffold",
-     "nuvel.backends.anthropic_managed_agents.scaffold",
-     "nuvel.acp.server",
+    ["nuvel.backends.buzz",
+     "nuvel.backends.anthropic_managed_agents",
+     "nuvel.acp",
      "nuvel.commands.acp_serve"],
 )
-def test_frozen_modules_stay_importable(module):
-    importlib.import_module(module)
+def test_removed_modules_are_gone(module):
+    # Checked on disk, not by importing: an editable install of another checkout
+    # can still satisfy the import.
+    path = REPO_ROOT.joinpath(*module.split("."))
+    assert not path.exists() and not path.with_suffix(".py").exists()
 
 
 def test_version_flag_prints_the_installed_distribution_version():

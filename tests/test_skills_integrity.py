@@ -35,10 +35,9 @@ BACKENDS = REPO_ROOT / "nuvel" / "backends"
 FRAMEWORK_DIRS = {
     "adk": BACKENDS / "adk" / "skills",
     "claude_agent_sdk": BACKENDS / "claude_agent_sdk" / "skills",
-    "anthropic_managed_agents": BACKENDS / "anthropic_managed_agents" / "skills",
 }
 
-EXPECTED_SKILL_COUNTS = {"adk": 15, "claude_agent_sdk": 6, "anthropic_managed_agents": 5}
+EXPECTED_SKILL_COUNTS = {"adk": 15, "claude_agent_sdk": 6}
 
 REFERENCE_RE = re.compile(r"references/([a-z0-9][a-z0-9-]*\.md)")
 

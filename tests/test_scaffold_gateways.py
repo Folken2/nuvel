@@ -7,7 +7,6 @@ from pathlib import Path
 
 from nuvel.backends.adk.scaffold import scaffold_agent as adk_scaffold
 from nuvel.backends.claude_agent_sdk.scaffold import scaffold_agent as cas_scaffold
-from nuvel.backends.anthropic_managed_agents.scaffold import scaffold_agent as ama_scaffold
 
 
 class TestADKAcceptsChannelFlags(unittest.TestCase):
@@ -60,11 +59,6 @@ class TestNonAdkBackendsRejectChannelFlags(unittest.TestCase):
     def test_claude_agent_sdk_rejects_with_teams(self):
         result = cas_scaffold("agent-g", output_dir=self.tmpdir, with_teams=True)
         self.assertEqual(result["status"], "error")
-
-    def test_anthropic_managed_rejects_all_channel_flags(self):
-        for kw in ("with_slack", "with_telegram", "with_teams"):
-            result = ama_scaffold("agent-x", output_dir=self.tmpdir, **{kw: True})
-            self.assertEqual(result["status"], "error", f"{kw} should be rejected")
 
 
 class TestCLIParsing(unittest.TestCase):

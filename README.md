@@ -98,7 +98,7 @@ The skills follow the [Anthropic skills format](https://www.anthropic.com/news/s
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | `--framework hermes` | 1 skill (profile shape, model and turn-budget config, Telegram gateway) | The Hermes runtime (provider set in `config.yaml`, OpenRouter by default) |
 | [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview) | `--framework claude-agent-sdk` | 6 skills (tool creation, hooks, permissions, MCP integration, system prompt, deployment) | Your server (Anthropic API) |
 
-These are the supported backends. Anything else in the source tree is frozen; see [docs/experimental.md](docs/experimental.md). Which flags each backend honours is listed in [one table](docs/how-to/pick-a-backend.md#nuvel-feature-support).
+These are the supported backends. Capabilities that were frozen and then removed are listed in [docs/experimental.md](docs/experimental.md). Which flags each backend honours is listed in [one table](docs/how-to/pick-a-backend.md#nuvel-feature-support).
 
 ## Features
 

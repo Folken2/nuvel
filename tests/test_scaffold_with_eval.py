@@ -93,13 +93,6 @@ class TestWithEvalRejectedByOtherBackends(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("with-eval", result["message"])
 
-    def test_anthropic_managed_rejects(self):
-        from nuvel.backends.anthropic_managed_agents.scaffold import scaffold_agent as ma_scaffold
-
-        result = ma_scaffold(name="x-agent", with_eval=True)
-        self.assertEqual(result["status"], "error")
-        self.assertIn("with-eval", result["message"])
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,7 +22,7 @@ moving the stamped package directory into `<hermes_home>/profiles/<name>/`
 `nuvel bots` manages through the `hermes` CLI.
 
 There is no server, no model loop, and no requirements.txt in a Hermes agent.
-If you find yourself writing one, you're building an ADK or Buzz agent and
+If you find yourself writing one, you're building an ADK agent and
 should switch frameworks rather than fight this one.
 
 ## SOUL.md vs config.yaml
@@ -111,14 +111,11 @@ platforms:
   finds the bot can spend your model budget. Start restricted; widen once you
   know what traffic looks like.
 - **`mention_only: true` in groups.** A bot answering every message in a busy
-  group is expensive and socially exhausting — the same lesson the Buzz
-  backend encodes as `BUZZ_REPLY_POLICY=mention`.
+  group is expensive and socially exhausting.
 
 Slack and Teams are ADK-only. `--with-slack` / `--with-teams` are rejected here
 rather than silently ignored, as are `--persona` (a Hermes profile already has
-a SOUL.md), `--with-composio`, `--workflow`, `--with-eval`, and `--with-acp`
-(Hermes owns the runtime, so there's no process to hand an ACP adapter to —
-use `--framework buzz` if ACP is what you want).
+a SOUL.md), `--with-composio`, `--workflow`, and `--with-eval`.
 
 ## Debugging
 

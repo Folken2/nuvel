@@ -1,6 +1,6 @@
 """The docs surface tells the truth about backends.
 
-Frozen capabilities are named only on docs/experimental.md, the framework list
+Removed capabilities are named only on docs/experimental.md, the framework list
 comes from nuvel.cli, and every page agrees with the real scaffolders on which
 flags work where.
 """
@@ -20,13 +20,13 @@ from nuvel.cli import SUPPORTED_FRAMEWORKS, _add_new_agent_args, main
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTAL = ROOT / "docs/experimental.md"
 
-# The only places under docs/ that may name a frozen capability.
+# The only places under docs/ that may name a removed capability.
 EXCLUDED = ("docs/experimental.md", "docs/superpowers/**")
 # Not text, so there is nothing to scan. Any other file that fails to decode is
 # an error rather than a silent gap in coverage.
 BINARY_SUFFIXES = {".png", ".gif", ".jpg", ".jpeg", ".webp", ".ico"}
 
-FROZEN = {
+REMOVED = {
     "acp": re.compile(r"(?<![a-z0-9])acp(?![a-z0-9])|agent\s*client\s*protocol", re.I),
     "buzz": re.compile(r"(?<![a-z0-9])buzz(?![a-z0-9])", re.I),
     "anthropic_managed_agents": re.compile(r"anthropic[\s_-]*managed|managed[\s_-]*agents?\b", re.I),
@@ -91,36 +91,36 @@ def test_surface_picks_up_new_files_by_default(tmp_path):
     [("acp", "the agent client\nprotocol"), ("anthropic_managed_agents", "Anthropic\nManaged Agents")],
 )
 def test_name_split_across_lines_is_caught(capability, text):
-    assert _hits(FROZEN[capability], text) == [1]
+    assert _hits(REMOVED[capability], text) == [1]
 
 
-@pytest.mark.parametrize("capability", FROZEN)
-def test_frozen_capability_absent_from_surface(capability):
+@pytest.mark.parametrize("capability", REMOVED)
+def test_removed_capability_absent_from_surface(capability):
     bad = []
     for path in _surface():
         text = path.read_text(encoding="utf-8")
-        bad += [f"{path.relative_to(ROOT)}:{number}" for number in _hits(FROZEN[capability], text)]
+        bad += [f"{path.relative_to(ROOT)}:{number}" for number in _hits(REMOVED[capability], text)]
     assert not bad, "\n".join(bad)
 
 
 def test_package_description_names_only_supported_backends():
     with (ROOT / "pyproject.toml").open("rb") as f:
         description = tomllib.load(f)["project"]["description"]
-    assert not [name for name, pattern in FROZEN.items() if pattern.search(description)]
+    assert not [name for name, pattern in REMOVED.items() if pattern.search(description)]
     for backend in ("Google ADK", "Hermes Agent", "Claude Agent SDK"):
         assert backend in description
 
 
-@pytest.mark.parametrize("capability", FROZEN)
-def test_experimental_names_frozen_capability(capability):
-    assert FROZEN[capability].search(EXPERIMENTAL.read_text(encoding="utf-8"))
+@pytest.mark.parametrize("capability", REMOVED)
+def test_experimental_names_removed_capability(capability):
+    assert REMOVED[capability].search(EXPERIMENTAL.read_text(encoding="utf-8"))
 
 
-def test_experimental_states_the_freeze_and_supported_set():
+def test_experimental_states_the_removal_and_supported_set():
     text = EXPERIMENTAL.read_text(encoding="utf-8")
     for framework in SUPPORTED_FRAMEWORKS:
         assert f"`{framework}`" in text or f"--framework {framework}" in text
-    for term in ("frozen since", "no new work", "no support", "closed"):
+    for term in ("frozen on 2026-11-03", "removed on 2026-11-05"):
         assert term in text.lower()
 
 

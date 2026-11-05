@@ -32,7 +32,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -403,8 +402,6 @@ def detect_agent(cwd: Path) -> AgentInfo:
         info.framework = "adk"
     elif "claude-agent-sdk" in text:
         info.framework = "claude-agent-sdk"
-    elif "anthropic" in text:
-        info.framework = "anthropic-managed-agents"
     return info
 
 
@@ -458,7 +455,6 @@ _BARE_MODEL_PREFIXES = {
 # Frameworks pinned to one provider; ADK and Hermes read theirs from config.
 _FIXED_PROVIDERS: dict[str, str] = {
     "claude-agent-sdk": "anthropic",
-    "anthropic-managed-agents": "anthropic",
 }
 
 _COMPOSIO_KEYS_PAGE = "https://composio.dev"
@@ -1149,131 +1145,6 @@ def run_agent_checks(cwd: Path, info: AgentInfo, config: Optional[_AgentConfig] 
     return checks
 
 
-# ── ACP adapter (--with-acp) ────────────────────────────────────────
-
-
-def detect_acp_package(cwd: Path) -> Optional[str]:
-    """Return the package name of a --with-acp agent (has ``<pkg>/acp/__main__.py``)."""
-    try:
-        subdirs = sorted(cwd.iterdir())
-    except OSError:
-        return None
-    for sub in subdirs:
-        if os.path.isdir(sub) and os.path.isfile(sub / "acp" / "__main__.py"):
-            return sub.name
-    return None
-
-
-def zed_config_snippet(cwd: Path, pkg: str, *, python: str | None = None) -> str:
-    """A ready-to-paste Zed ``agent_servers`` entry for this ACP agent."""
-    snippet = {
-        "agent_servers": {
-            pkg.replace("_", "-"): {
-                "command": python or sys.executable,
-                "args": ["-m", f"{pkg}.acp"],
-                "cwd": str(cwd),
-            }
-        }
-    }
-    return json.dumps(snippet, indent=2)
-
-
-def check_acp_handshake(cwd: Path, pkg: str, timeout: float = 20.0) -> Check:
-    """Smoke-test the ACP stdio protocol: send ``initialize``, expect a reply.
-
-    Runs the adapter with ``DEV_MODE=true`` so it uses in-memory services and
-    doesn't need a database — this checks the JSON-RPC handshake, not config.
-    """
-    name = "ACP stdio handshake"
-    cmd = [sys.executable, "-m", f"{pkg}.acp"]
-    deps_fix = f"Install the agent's deps: {_pip_install('-r', f'{cwd}/requirements.txt')}"
-    debug_fix = f"Run it directly to see the error: cd {shlex.quote(str(cwd))} && {shlex.join(cmd)}"
-    env = {**os.environ, "DEV_MODE": "true", "LOG_LEVEL": "ERROR"}
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(cwd),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            env=env,
-        )
-    except OSError as exc:
-        return Check(name, FAIL, f"could not launch: {exc}", debug_fix)
-
-    request = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {"protocolVersion": 2, "clientCapabilities": {}},
-        }
-    )
-    holder: dict[str, str] = {}
-
-    def _read_line() -> None:
-        try:
-            holder["line"] = proc.stdout.readline() if proc.stdout else ""
-        except Exception as exc:  # noqa: BLE001
-            holder["error"] = str(exc)
-
-    try:
-        if proc.stdin:
-            proc.stdin.write(request + "\n")
-            proc.stdin.flush()
-    except OSError:
-        pass  # process may have died on import; handled via readline/EOF below
-
-    reader = threading.Thread(target=_read_line, daemon=True)
-    reader.start()
-    reader.join(timeout)
-
-    def _stop() -> None:
-        try:
-            proc.kill()
-        except Exception:  # noqa: BLE001
-            pass
-
-    if reader.is_alive():
-        _stop()
-        return Check(
-            name, WARN, f"no response within {timeout:.0f}s (are agent deps installed?)", deps_fix,
-        )
-
-    line = holder.get("line", "")
-    stderr_tail = ""
-    if not line and proc.stderr:
-        try:
-            stderr_tail = (proc.stderr.read() or "")[-300:]
-        except Exception:  # noqa: BLE001
-            stderr_tail = ""
-    _stop()
-
-    if not line:
-        low = stderr_tail.lower()
-        if "modulenotfound" in low or "importerror" in low or "no module named" in low:
-            return Check(name, WARN, "agent deps not installed (pip install -r requirements.txt)", deps_fix)
-        lines = stderr_tail.strip().splitlines()
-        detail = lines[-1][:120] if lines else "no output"
-        return Check(name, FAIL, f"no initialize response — {detail}", debug_fix)
-
-    try:
-        msg = json.loads(line)
-    except json.JSONDecodeError:
-        return Check(name, FAIL, f"invalid JSON-RPC line: {line.strip()[:80]}", debug_fix)
-
-    result = msg.get("result") or {}
-    if "protocolVersion" in result and "agentCapabilities" in result:
-        return Check(name, OK, f"initialize → protocolVersion {result['protocolVersion']}")
-    return Check(name, FAIL, f"unexpected initialize response: {line.strip()[:80]}", debug_fix)
-
-
-def run_acp_checks(cwd: Path, pkg: str) -> list[Check]:
-    return [_safe(check_acp_handshake, "ACP stdio handshake", cwd, pkg)]
-
-
 # ── orchestration ───────────────────────────────────────────────────
 
 
@@ -1301,7 +1172,7 @@ def check_target(cwd: Optional[Path]) -> Optional[Check]:
     return None if os.access(cwd, os.X_OK) else unreadable
 
 
-def _collect_target_sections(cwd: Path, acp_pkg: Optional[str]) -> list[tuple[str, list[Check]]]:
+def _collect_target_sections(cwd: Path) -> list[tuple[str, list[Check]]]:
     sections: list[tuple[str, list[Check]]] = []
     info = detect_agent(cwd)
     if info.is_agent:
@@ -1323,14 +1194,10 @@ def _collect_target_sections(cwd: Path, acp_pkg: Optional[str]) -> list[tuple[st
     sections.append(("State", _safe_many(run_state_checks, "state dirs", cwd, info, env)))
     sections.append(("Network", _safe_many(run_network_checks, "provider network", providers, env)))
     sections.append(("Caches", _safe_many(run_cache_checks, "caches")))
-    if acp_pkg:
-        sections.append(("ACP adapter", run_acp_checks(cwd, acp_pkg)))
     return sections
 
 
-def collect_sections(
-    cwd: Optional[Path], acp_pkg: Optional[str] = None,
-) -> list[tuple[str, list[Check]]]:
+def collect_sections(cwd: Optional[Path]) -> list[tuple[str, list[Check]]]:
     """Run every check. Output is captured so a chatty import can't corrupt --json."""
     with contextlib.redirect_stdout(sys.stderr):
         sections = [("Install", run_install_checks())]
@@ -1338,7 +1205,7 @@ def collect_sections(
         if problem:
             return [*sections, ("Target", [problem])]
         try:
-            return [*sections, *_collect_target_sections(cwd, acp_pkg)]
+            return [*sections, *_collect_target_sections(cwd)]
         except Exception as exc:  # noqa: BLE001 - never crash doctor
             return [*sections, ("Target", [_crashed("agent detection", exc)])]
 
@@ -1352,9 +1219,7 @@ def _summarize(sections: list[tuple[str, list[Check]]]) -> dict[str, int]:
     }
 
 
-def _print_json(
-    cwd: Optional[Path], sections: list[tuple[str, list[Check]]], code: int, acp_pkg: Optional[str],
-) -> None:
+def _print_json(cwd: Optional[Path], sections: list[tuple[str, list[Check]]], code: int) -> None:
     report: dict = {
         "ok": code == 0,
         "exit_code": code,
@@ -1365,8 +1230,6 @@ def _print_json(
             for title, checks in sections for c in checks
         ],
     }
-    if acp_pkg:
-        report["zed_config"] = json.loads(zed_config_snippet(cwd, acp_pkg))
     print(json.dumps(report, indent=2))
 
 
@@ -1380,9 +1243,7 @@ def _print_line(line: str = "") -> None:
     print(line)
 
 
-def _print_text(
-    cwd: Optional[Path], sections: list[tuple[str, list[Check]]], acp_pkg: Optional[str],
-) -> None:
+def _print_text(cwd: Optional[Path], sections: list[tuple[str, list[Check]]]) -> None:
     _print_line("nuvel doctor")
     _print_line(f"cwd: {cwd or '(no longer exists)'}")
     _print_line()
@@ -1390,11 +1251,6 @@ def _print_text(
         _print_line(title)
         for c in checks:
             _print_line(c.format())
-        _print_line()
-    if acp_pkg:
-        _print_line("  Zed — add to settings.json (agent_servers):")
-        for line in zed_config_snippet(cwd, acp_pkg).splitlines():
-            _print_line(f"    {line}")
         _print_line()
     summary = _summarize(sections)
     _print_line("Summary")
@@ -1408,11 +1264,10 @@ def run_doctor(cwd: Path | None = None, *, as_json: bool = False) -> int:
         target = None
     except RuntimeError:  # A symlink loop, before Python 3.13. check_target reports it.
         target = Path(os.path.abspath(cwd or "."))
-    acp_pkg = detect_acp_package(target) if target else None
-    sections = collect_sections(target, acp_pkg)
+    sections = collect_sections(target)
     code = 1 if _summarize(sections)["fail"] else 0
     if as_json:
-        _print_json(target, sections, code, acp_pkg)
+        _print_json(target, sections, code)
     else:
-        _print_text(target, sections, acp_pkg)
+        _print_text(target, sections)
     return code
