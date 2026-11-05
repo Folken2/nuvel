@@ -283,6 +283,19 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print(f"pricing.json not found: {path}", file=sys.stderr)
         return 1
     pf = load(path)
+    if args.json:
+        print(json.dumps({
+            "file": str(path),
+            "models": [
+                {
+                    "model": k,
+                    "input_usd_per_token": pf.entries[k]["input"],
+                    "output_usd_per_token": pf.entries[k]["output"],
+                }
+                for k in sorted(pf.entries)
+            ],
+        }, indent=2, ensure_ascii=False))
+        return 0
     print(f"file: {path}")
     print(f"models: {len(pf.entries)}")
     if not pf.entries:
@@ -393,6 +406,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_list = sub.add_parser("list", help="Show entries in the resolved pricing.json.")
     _add_target_flag(p_list)
+    p_list.add_argument("--json", action="store_true",
+                        help="Print one JSON document on stdout instead of the text view.")
     p_list.set_defaults(func=_cmd_list)
 
     p_sync = sub.add_parser(

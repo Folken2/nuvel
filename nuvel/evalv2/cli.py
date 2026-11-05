@@ -352,6 +352,9 @@ def _render_compare(report: ComparisonReport) -> str:
 def _cmd_list(args: argparse.Namespace) -> int:
     skills_dir = _skills_root(args)
     skills = find_eval_skills(skills_dir)
+    if getattr(args, "json", False):
+        print(json.dumps({"skills_dir": str(skills_dir), "skills": skills}, indent=2))
+        return 0
     if not skills:
         print("No skills with eval suites found.")
         return 0
@@ -428,6 +431,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_list = sub.add_parser("list", help="List skills that ship an eval/ suite.")
     _add_skills_dir_flag(p_list)
+    p_list.add_argument(
+        "--json", action="store_true", help="Emit the list as JSON on stdout."
+    )
     p_list.set_defaults(func=_cmd_list)
 
     p_run = sub.add_parser("run", help="Run a skill's eval suite.")

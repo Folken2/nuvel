@@ -3,6 +3,8 @@
 Subcommands:
     nuvel agent create <name> --framework <fw>
         Scaffold a new agent. Default framework: adk.
+    nuvel agent list [--output-dir <dir>]
+        List the agents in the output directory.
     nuvel skills list [--framework <fw>]
         List bundled knowledge skills for a framework.
     nuvel skills search <q> [--framework <fw>]
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import os
 import subprocess
 import sys
@@ -186,6 +189,34 @@ def _cmd_new(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_agent_list(args: argparse.Namespace) -> int:
+    from nuvel.doctor import detect_agent
+
+    output_dir = Path(
+        args.output_dir or os.environ.get("AGENTS_OUTPUT_DIR", "./generated-agents")
+    )
+    agents = []
+    if output_dir.is_dir():
+        for entry in sorted(output_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            info = detect_agent(entry)
+            if info.is_agent:
+                agents.append(
+                    {"name": entry.name, "framework": info.framework, "path": str(entry)}
+                )
+    if args.json:
+        _print_json({"output_dir": str(output_dir), "agents": agents})
+        return 0
+    if not agents:
+        print(f"No agents found in {output_dir}.")
+        return 0
+    width = max(len(a["name"]) for a in agents)
+    for a in agents:
+        print(f"  {a['name']:<{width}}  {a['framework'] or '-'}")
+    return 0
+
+
 def _load_skills(framework: str) -> list[dict]:
     import yaml  # local import: keeps the dependency-light commands import-free
 
@@ -219,6 +250,11 @@ def _load_skills(framework: str) -> list[dict]:
     return skills
 
 
+def _print_json(payload) -> None:
+    """The whole `--json` view: one document on stdout."""
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
 def _print_skills(skills: list[dict]) -> None:
     if not skills:
         print("No skills found.")
@@ -232,7 +268,11 @@ def _print_skills(skills: list[dict]) -> None:
 
 
 def _cmd_skills_list(args: argparse.Namespace) -> int:
-    _print_skills(_load_skills(args.framework))
+    skills = _load_skills(args.framework)
+    if args.json:
+        _print_json({"framework": args.framework, "skills": skills})
+    else:
+        _print_skills(skills)
     return 0
 
 
@@ -245,7 +285,10 @@ def _cmd_skills_search(args: argparse.Namespace) -> int:
         or query in s["name"].lower()
         or query in s["description"].lower()
     ]
-    _print_skills(matches)
+    if args.json:
+        _print_json({"framework": args.framework, "query": args.query, "skills": matches})
+    else:
+        _print_skills(matches)
     return 0
 
 
@@ -275,13 +318,48 @@ def _print_plugins(registry) -> None:
         )
 
 
+def _plugins_payload(registry) -> dict:
+    """The `--json` view of what `_print_plugins` shows."""
+    return {
+        "plugins": [
+            {
+                "name": info.manifest.name,
+                "version": info.manifest.version,
+                "description": info.manifest.description,
+                "root": str(info.root),
+                "skills": [s.name for s in info.skills],
+                "mcp_servers": [
+                    {"name": name, "transport": entry.transport}
+                    for name, entry in info.mcp_servers.items()
+                ],
+                "errors": [
+                    {"component": err.component, "message": err.message}
+                    for err in info.errors
+                ],
+            }
+            for info in registry.get_all_plugins()
+        ],
+        "errors": [
+            {"plugin": err.plugin_name, "component": err.component, "message": err.message}
+            for err in registry.errors
+        ],
+    }
+
+
+def _show_plugins(registry, args: argparse.Namespace) -> None:
+    if args.json:
+        _print_json(_plugins_payload(registry))
+    else:
+        _print_plugins(registry)
+
+
 def _cmd_plugins_list(args: argparse.Namespace) -> int:
     from nuvel.agent_plugins import PluginRegistry
     from nuvel.config import get_plugin_dirs
 
     registry = PluginRegistry(get_plugin_dirs())
     registry.discover_plugins()
-    _print_plugins(registry)
+    _show_plugins(registry, args)
     return 0
 
 
@@ -300,7 +378,7 @@ def _cmd_plugins_load(args: argparse.Namespace) -> int:
     except ManifestError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    _print_plugins(registry)
+    _show_plugins(registry, args)
     return 0
 
 
@@ -308,6 +386,11 @@ def _cmd_plugins_config(args: argparse.Namespace) -> int:
     from nuvel.config import get_plugin_dirs
 
     dirs = get_plugin_dirs()
+    if args.json:
+        _print_json({
+            "plugin_dirs": [{"path": str(d), "exists": d.is_dir()} for d in dirs],
+        })
+        return 0
     print("Plugin directories (set NUVEL_PLUGIN_DIRS to override):")
     for d in dirs:
         state = "exists" if d.is_dir() else "missing"
@@ -354,6 +437,13 @@ def _add_framework_flag(parser: argparse.ArgumentParser) -> None:
             f"Agent framework (default: {DEFAULT_FRAMEWORK}). "
             f"Supported: {', '.join(SUPPORTED_FRAMEWORKS)}."
         ),
+    )
+
+
+def _add_json_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Print one JSON document on stdout instead of the text view.",
     )
 
 
@@ -440,6 +530,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_new_agent_args(p_create)
     p_create.set_defaults(func=_cmd_new)
 
+    p_agent_list = agent_sub.add_parser("list", help="List the agents in the output directory.")
+    p_agent_list.add_argument(
+        "--output-dir", default=None,
+        help="Directory holding the agents (default: $AGENTS_OUTPUT_DIR or ./generated-agents).",
+    )
+    _add_json_flag(p_agent_list)
+    p_agent_list.set_defaults(func=_cmd_agent_list)
+
     # ── new (deprecated alias for `agent create`) ───────────────────────
     p_new = sub.add_parser("new", help="[Deprecated] Use `nuvel agent create` instead.")
     _add_new_agent_args(p_new)
@@ -450,11 +548,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_list = skills_sub.add_parser("list", help="List all bundled skills.")
     _add_framework_flag(p_list)
+    _add_json_flag(p_list)
     p_list.set_defaults(func=_cmd_skills_list)
 
     p_search = skills_sub.add_parser("search", help="Search skills by keyword.")
     _add_framework_flag(p_search)
     p_search.add_argument("query", help="Substring to match against skill name/description.")
+    _add_json_flag(p_search)
     p_search.set_defaults(func=_cmd_skills_search)
 
     p_plugins = sub.add_parser("plugins", help="Discover and inspect Agent Plugins.")
@@ -463,17 +563,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_pl_list = plugins_sub.add_parser(
         "list", help="List all plugins found in the configured plugin_dirs."
     )
+    _add_json_flag(p_pl_list)
     p_pl_list.set_defaults(func=_cmd_plugins_list)
 
     p_pl_load = plugins_sub.add_parser(
         "load", help="Load and inspect a single plugin directory."
     )
     p_pl_load.add_argument("dir", help="Path to a plugin directory (with plugin.json).")
+    _add_json_flag(p_pl_load)
     p_pl_load.set_defaults(func=_cmd_plugins_load)
 
     p_pl_config = plugins_sub.add_parser(
         "config", help="Show the current plugin directory configuration."
     )
+    _add_json_flag(p_pl_config)
     p_pl_config.set_defaults(func=_cmd_plugins_config)
 
     p_run = sub.add_parser("run", help="Launch the meta-agent server.")
