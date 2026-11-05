@@ -1,46 +1,43 @@
-# Nuvel Roadmap — October 2026
+# Nuvel Roadmap
 
-> **Thin harness, thick skills.** The leverage is not in the model weights — it's in how you wire the work.
+> **Thin harness, thick skills.**
 >
-> Strategy and layer ownership: see [VISION.md](VISION.md).
+> Layers, ownership and non-goals: see [VISION.md](VISION.md).
+
+The roadmap is organised into technical phases. Each phase lists its deliverables.
 
 ---
 
-## Near-term (this sprint)
+## Phase 1 — Gateway integration
 
-| Priority | What | Why |
-|---|---|---|
-| 1 | **Stand up the LiteLLM gateway** | Own instance, Postgres, virtual keys per runtime. It governs every agent we run, so it comes first. |
-| 2 | **Point Hermes at the gateway** | Config, not code — a custom OpenAI-compatible endpoint. Gets our own calls traced and attributed from day one. |
-| 3 | **Land the `--with-litellm` overlay** | The two-tier `Agent → LiteLLM → Provider` architecture is written and CI-green. It was an open question last week; it is now the critical path. |
-| 4 | **Evaluate Moyai for background coding** | Self-hosted, six harnesses including Hermes, all inference through LiteLLM. Replaces the "build our own runtime" ambition. |
-
-## Medium-term
-
-| What | Why |
+| Deliverable | Detail |
 |---|---|
-| **Skill feedback loop** | Skills should improve from use. Agent hits an edge case → proposes a skill patch → PR to the hub. The skill gets better every time it's used. |
-| **Gateway-backed cost attribution** | Spend per customer, per agent, per skill — from the gateway, not from our own instrumentation. Makes "what did this agent cost me" a number we can hand a customer. |
-| **Cross-harness skill portability** | Every skill must work in the harnesses that matter. Know which are portable and which carry harness-specific code. Scoped to real customer need, not breadth for its own sake. |
-| **Company Brain** | `OrgMemoryService` is built. Wire it so every agent reads and writes the same organisational memory. "The fleet remembers." |
+| **`--with-litellm` overlay** | Two-tier `Agent → LiteLLM → Provider` architecture for generated ADK agents: a LiteLLM proxy config, Dockerfile and compose file stamped alongside the agent. |
+| **Gateway deployment** | A standalone LiteLLM instance backed by Postgres, with a virtual key per runtime, a restart policy and a documented bypass. |
+| **Hermes through the gateway** | Hermes configured against the gateway as a custom OpenAI-compatible endpoint — configuration, not code. |
+| **Execution-layer integration** | Background coding agents run in an external cloud-workspace runtime with all inference routed through the gateway, instead of a nuvel-built runtime. |
 
-## Long-term
+## Phase 2 — Skills and memory
 
-| What | Why |
+| Deliverable | Detail |
 |---|---|
-| **Skill marketplace** | Users share and discover skills across companies. Network effects. |
-| **Agent Directory** | `agentdirectory.folch.ai` — showcase live fleets and their skills |
-| **Enterprise compliance** | Audit trails, RBAC, SOC2 — the things that make procurement say yes. Agent-layer evidence, which infrastructure vendors structurally cannot supply. |
+| **Skill feedback loop** | An agent that hits an edge case proposes a skill patch as a pull request against the skill source, so skills improve from use. |
+| **Gateway-backed cost attribution** | Spend per agent and per skill read from the gateway's spend logs, not from nuvel's own instrumentation. |
+| **Cross-harness skill portability** | Every bundled skill is classified as portable or harness-specific, and portable skills are verified in each supported harness. |
+| **Shared organisational memory** | Wire the existing `OrgMemoryService` (`nuvel/memory/org_memory_service.py`) so agents read and write one shared memory store. |
 
-## Explicitly not building
+## Phase 3 — Distribution and auditability
 
-Held here so the decision is visible rather than repeated:
+| Deliverable | Detail |
+|---|---|
+| **Skill sharing and discovery** | Publish, version and discover skills from shared sources beyond the bundled set. |
+| **Audit and access control** | Agent-layer audit trails and role-based access control, built on the trace stack. |
 
-- **Our own agent runtime / cloud workspaces** — adopted (Moyai or equivalent)
-- **Our own model routing and provider abstraction** — adopted (LiteLLM)
-- **Our own model-layer telemetry** — cost, tokens, latency and key attribution belong at the gateway
-- **Breadth-first harness packaging** — if a harness is not a customer requirement, it is not our surface
+## Not on the roadmap
 
-## Ship mantra
+Recorded here so the decision is visible rather than repeated (see [VISION.md](VISION.md#non-goals)):
 
-> *"Abundance is not a policy paper. It is shipped software."*
+- **An agent runtime or cloud workspaces** — provided by the execution layer
+- **Model routing and a provider abstraction** — provided by LiteLLM
+- **Model-layer telemetry** — cost, tokens, latency and key attribution belong at the gateway
+- **Breadth-first harness packaging** — a harness is added for a concrete technical need

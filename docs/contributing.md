@@ -34,6 +34,14 @@ mkdocs build
 
 The site is published to GitHub Pages on every push to `main` via `.github/workflows/docs.yml`.
 
+### Public docs carry technical truth only
+
+This repository is public. Its docs — including `VISION.md`, `ROADMAP.md` and everything under
+`docs/` — describe what the software is, how it is built and what it will do next: architecture,
+layers, ownership boundaries, deployment topology, technical phases and non-goals. They contain no
+commercial framing (pricing, customers, business sequencing, positioning) and link only to public
+resources. Commercial planning is tracked outside this repository.
+
 ## Adding a new bundled skill
 
 Drop the skill at `nuvel/backends/<framework>/skills/<slug>/SKILL.md` with the standard frontmatter:
