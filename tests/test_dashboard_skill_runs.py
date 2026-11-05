@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -27,6 +28,17 @@ def _skill_run(outcome: str, step_status: str) -> dict:
         "tools": [{"name": "gmail.search_threads", "calls": 2, "errors": 1}],
         "errors": [],
     }
+
+
+def _bump_mtime(path: Path) -> None:
+    """Push `path`'s mtime a second forward.
+
+    The kernel stamps mtimes from a coarse clock, so a dir changed right after
+    the skill-run index stamped it can keep the same mtime; bump it so the
+    index's change signal does not depend on timestamp granularity.
+    """
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
 
 
 def _loader(root: Path) -> TraceLoader:
@@ -143,21 +155,31 @@ def test_loader_and_watcher_pick_up_new_plugin_skill_dir(tmp_path: Path) -> None
     rec["run_id"] = "late"
     new.mkdir()
     (new / "2026-10-21.jsonl").write_text(json.dumps(rec) + "\n")
+    _bump_mtime(new.parent)
     assert [r.session_id for r in loader.runs()] == ["late"]
 
     async def go() -> str:
         w = RunWatcher(sources, poll_seconds=0.1, skill_roots=[root])
         q: asyncio.Queue = asyncio.Queue()
         task = asyncio.create_task(w.run(q))
-        await asyncio.sleep(0.3)
-        late = root / "_runs" / "chief-of-staff.later"
-        late.mkdir()
-        r2 = _skill_run("success", "ok")
-        r2["run_id"] = "after-start"
-        (late / "2026-10-21.jsonl").write_text(json.dumps(r2) + "\n")
-        got = await asyncio.wait_for(q.get(), timeout=3.0)
-        w.stop()
-        await asyncio.wait_for(task, timeout=2.0)
+        try:
+            # Bounded wait for the baseline walk, so the new dir is not in it.
+            for _ in range(300):
+                if root in w._skill_dirs._walks:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("watcher never took its baseline")
+            late = root / "_runs" / "chief-of-staff.later"
+            late.mkdir()
+            r2 = _skill_run("success", "ok")
+            r2["run_id"] = "after-start"
+            (late / "2026-10-21.jsonl").write_text(json.dumps(r2) + "\n")
+            _bump_mtime(late.parent)
+            got = await asyncio.wait_for(q.get(), timeout=3.0)
+        finally:
+            w.stop()
+            await asyncio.wait_for(task, timeout=2.0)
         return got.session_id
 
     assert asyncio.run(go()) == "after-start"
