@@ -26,7 +26,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -476,6 +476,38 @@ def _short(value: str | None, n: int) -> str:
     return value if len(value) <= n else value[: n - 1] + "…"
 
 
+def _print_json(payload) -> None:
+    """The whole `--json` view: one document on stdout."""
+    print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+
+
+def _run_dict(r: Run, *, with_events: bool = False) -> dict:
+    """A Run as `--json` shows it; `events` and `steps` only for `show`."""
+    out = {
+        "agent": r.agent,
+        "trace_id": r.trace_id,
+        "session_id": r.session_id,
+        "schema": r.schema,
+        "file": str(r.file),
+        "started_at": r.started_at,
+        "ended_at": r.ended_at,
+        "duration_ms": r.duration_ms,
+        "llm_calls": r.llm_calls,
+        "tool_calls": r.tool_calls,
+        "prompt_tokens": r.prompt_tokens,
+        "completion_tokens": r.completion_tokens,
+        "total_tokens": r.total_tokens,
+        "cost_usd": r.cost_usd,
+        "user_input": r.user_input,
+        "subtype": r.subtype,
+        "tenant": r.tenant,
+    }
+    if with_events:
+        out["steps"] = r.steps
+        out["events"] = r.events
+    return out
+
+
 # ── Commands ─────────────────────────────────────────────────────────
 
 
@@ -484,6 +516,10 @@ def _cmd_list(args: argparse.Namespace) -> int:
     runs = _sort_runs(runs)
     if args.limit:
         runs = runs[: args.limit]
+
+    if args.json:
+        _print_json({"runs": [_run_dict(r) for r in runs]})
+        return 0
 
     if not runs:
         print("No runs found.")
@@ -532,6 +568,9 @@ def _cmd_show(args: argparse.Namespace) -> int:
             print(f"  {r.trace_id or r.session_id}  ({r.agent})", file=sys.stderr)
         return 1
 
+    if args.json:
+        _print_json({"runs": [_run_dict(r, with_events=True) for r in matches]})
+        return 0
     for r in matches:
         _print_run(r)
     return 0
@@ -619,7 +658,7 @@ def _event_detail(ev: dict) -> str:
 
 def _cmd_stats(args: argparse.Namespace) -> int:
     runs = _apply_filters(_collect_runs(args.source), args)
-    if not runs:
+    if not runs and not args.json:
         print("No runs found.")
         return 0
 
@@ -643,6 +682,54 @@ def _cmd_stats(args: argparse.Namespace) -> int:
             bucket["any_cost"] = True
             bucket["runs_with_cost"] += 1
 
+    total_runs = sum(b["runs"] for b in by_agent.values())
+    total_tokens = sum(b["tokens"] for b in by_agent.values())
+    total_cost = sum(b["cost"] for b in by_agent.values() if b["any_cost"])
+    step_rows = step_error_rates(runs)
+    # Cost-coverage warning: runs that have token usage but no cost mean
+    # pricing.json is missing the model that actually ran. Surfacing this
+    # at the bottom of `stats` is the cheapest way to catch silent gaps.
+    missing = [
+        (agent, b) for agent, b in by_agent.items()
+        if b["runs_with_tokens"] and b["runs_with_cost"] < b["runs_with_tokens"]
+    ]
+
+    if args.json:
+        _print_json({
+            "agents": [
+                {
+                    "agent": agent,
+                    "runs": b["runs"],
+                    "llm_calls": b["llm"],
+                    "tool_calls": b["tools"],
+                    "total_tokens": b["tokens"],
+                    "duration_ms": b["duration_ms"],
+                    "cost_usd": b["cost"] if b["any_cost"] else None,
+                    "runs_with_tokens": b["runs_with_tokens"],
+                    "runs_with_cost": b["runs_with_cost"],
+                }
+                for agent, b in sorted(by_agent.items())
+            ],
+            "total": {
+                "runs": total_runs,
+                "total_tokens": total_tokens,
+                "cost_usd": total_cost if total_cost else None,
+            },
+            "skill_steps": [
+                {"step": sid, "runs": n, "errored": e, "error_rate": e / n}
+                for sid, n, e in step_rows
+            ],
+            "missing_cost": [
+                {
+                    "agent": agent,
+                    "runs_missing_cost": b["runs_with_tokens"] - b["runs_with_cost"],
+                    "runs_with_tokens": b["runs_with_tokens"],
+                }
+                for agent, b in missing
+            ],
+        })
+        return 0
+
     header = ("AGENT", "RUNS", "LLM", "TOOLS", "TOKENS", "DUR", "COST")
     rows = []
     for agent, b in sorted(by_agent.items()):
@@ -663,13 +750,9 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     for row in rows:
         print(fmt.format(*row))
 
-    total_runs = sum(b["runs"] for b in by_agent.values())
-    total_tokens = sum(b["tokens"] for b in by_agent.values())
-    total_cost = sum(b["cost"] for b in by_agent.values() if b["any_cost"])
     print(f"\nTotal: {total_runs} run(s), {_fmt_tokens(total_tokens)} tokens"
           + (f", ${total_cost:.4f}" if total_cost else ""))
 
-    step_rows = step_error_rates(runs)
     if step_rows:
         print("\nSkill steps")
         _print_table(
@@ -677,13 +760,6 @@ def _cmd_stats(args: argparse.Namespace) -> int:
             [(sid, str(n), str(e), f"{e / n:.0%}") for sid, n, e in step_rows],
         )
 
-    # Cost-coverage warning: runs that have token usage but no cost mean
-    # pricing.json is missing the model that actually ran. Surfacing this
-    # at the bottom of `stats` is the cheapest way to catch silent gaps.
-    missing = [
-        (agent, b) for agent, b in by_agent.items()
-        if b["runs_with_tokens"] and b["runs_with_cost"] < b["runs_with_tokens"]
-    ]
     if missing:
         print("\nwarning: cost missing on some runs (pricing.json likely "
               "lacks the active model). Run `nuvel doctor` to verify.")
@@ -767,7 +843,33 @@ def _cmd_errors(args: argparse.Namespace) -> int:
             model_errors[model] = model_errors.get(model, 0) + 1
 
     if args.recent:
+        if args.json:
+            _print_json({"recent": [_error_dict(f, rec) for f, rec in _newest(recent, args.recent)]})
+            return 0
         return _print_recent_errors(recent, args.recent)
+
+    if args.json:
+        _print_json({
+            "total_errors": total_errors,
+            "by_tool": [
+                {
+                    "tool": tool,
+                    "errors": errs,
+                    "calls": tool_totals.get(tool, errs),
+                    "error_rate": errs / tool_totals.get(tool, errs),
+                }
+                for tool, errs in sorted(tool_errors.items(), key=lambda t: t[1], reverse=True)
+            ],
+            "by_model": [
+                {"model": m, "errors": n}
+                for m, n in sorted(model_errors.items(), key=lambda t: t[1], reverse=True)
+            ],
+            "by_error_type": [
+                {"error_type": t, "count": n}
+                for t, n in sorted(type_counts.items(), key=lambda t: t[1], reverse=True)
+            ],
+        })
+        return 0
 
     if total_errors == 0:
         print("No errors found.")
@@ -819,27 +921,51 @@ def _print_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
         print(fmt.format(*row))
 
 
+def _newest(records: list[tuple[Path, dict]], n: int) -> list[tuple[Path, dict]]:
+    """The newest `n` error records, newest first by timestamp."""
+    return sorted(records, key=lambda fr: fr[1].get("timestamp", ""), reverse=True)[:n]
+
+
+def _error_body(rec: dict) -> str:
+    if rec.get("event") in _ERROR_EVENTS:
+        return rec.get("error_message") or ""
+    result = rec.get("result") or {}  # tool_end status=error
+    return (result.get("error") or result.get("message") or "") if isinstance(result, dict) else ""
+
+
+def _error_dict(f: Path, rec: dict) -> dict:
+    """One recent error event as `errors --recent --json` shows it."""
+    ev = rec.get("event")
+    return {
+        "timestamp": rec.get("timestamp"),
+        "agent": _agent_label_for(f),
+        "trace_id": rec.get("trace_id") or rec.get("session_id"),
+        "kind": ev if ev in _ERROR_EVENTS else "tool_error",
+        "tool": rec.get("tool"),
+        "model": rec.get("model"),
+        "error_type": rec.get("error_type"),
+        "duration_ms": rec.get("duration_ms"),
+        "message": str(_error_body(rec)),
+        "file": str(f),
+    }
+
+
 def _print_recent_errors(records: list[tuple[Path, dict]], n: int) -> int:
     if not records:
         print("No errors found.")
         return 0
-    # Sort newest first by timestamp.
-    records.sort(key=lambda fr: fr[1].get("timestamp", ""), reverse=True)
-    for f, rec in records[:n]:
+    for f, rec in _newest(records, n):
         ev = rec.get("event")
         ts = (rec.get("timestamp") or "")[:19].replace("T", " ")
         agent = _agent_label_for(f)
         tid = (rec.get("trace_id") or rec.get("session_id") or "?")[:12]
         if ev == "llm_error":
             head = f"llm_error  model={rec.get('model')}  type={rec.get('error_type')}"
-            body = rec.get("error_message") or ""
         elif ev == "tool_exception":
             head = f"tool_exception  tool={rec.get('tool')}  type={rec.get('error_type')}"
-            body = rec.get("error_message") or ""
         else:  # tool_end status=error
             head = f"tool_error  tool={rec.get('tool')}  dur={rec.get('duration_ms')}ms"
-            result = rec.get("result") or {}
-            body = (result.get("error") or result.get("message") or "") if isinstance(result, dict) else ""
+        body = _error_body(rec)
         print(f"{ts}  {agent}  {tid}  {head}")
         if body:
             print(f"    {_short(str(body), 200)}")
@@ -860,6 +986,12 @@ def _cmd_recipes(args: argparse.Namespace) -> int:
 
     roots = [resolve_feedback_dir()] + [Path(s) for s in args.source or []]
     cands = load_recipe_candidates(roots)
+    if args.json:
+        _print_json({
+            "candidates": [asdict(c) for c in cands],
+            "skipped_old": getattr(cands, "skipped_old", 0),
+        })
+        return 0
     if not cands:
         print("No recipe signals found.")
         return 0
@@ -906,6 +1038,11 @@ def _add_filters(p: argparse.ArgumentParser) -> None:
                    help="Only runs at/after this date (YYYY-MM-DD or ISO).")
 
 
+def _add_json_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--json", action="store_true",
+                   help="Print one JSON document on stdout instead of the text view.")
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     """Register the `traces` subcommand tree on an existing argparse subparsers."""
     p = subparsers.add_parser("traces", help="Inspect agent trace logs.")
@@ -916,6 +1053,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     _add_filters(p_list)
     p_list.add_argument("--limit", "-n", type=int, default=50,
                         help="Max rows to show (default 50, 0 for all).")
+    _add_json_flag(p_list)
     p_list.set_defaults(func=_cmd_list)
 
     p_show = sub.add_parser("show", help="Show full event timeline for one run.")
@@ -923,11 +1061,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_show.add_argument("id", help="trace_id or session_id (prefix is OK).")
     p_show.add_argument("--all", action="store_true",
                         help="If the id prefix matches multiple runs, show all.")
+    _add_json_flag(p_show)
     p_show.set_defaults(func=_cmd_show)
 
     p_stats = sub.add_parser("stats", help="Aggregate stats per agent.")
     _add_source_flag(p_stats)
     _add_filters(p_stats)
+    _add_json_flag(p_stats)
     p_stats.set_defaults(func=_cmd_stats)
 
     p_errors = sub.add_parser(
@@ -940,6 +1080,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--recent", "-r", type=int, default=0,
         help="Instead of the summary, print the last N error events with messages.",
     )
+    _add_json_flag(p_errors)
     p_errors.set_defaults(func=_cmd_errors)
 
     p_recipes = sub.add_parser(
@@ -951,4 +1092,5 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Extra directory to search for a `_recipes` tree (repeatable). "
              "The feedback directory is always searched.",
     )
+    _add_json_flag(p_recipes)
     p_recipes.set_defaults(func=_cmd_recipes)

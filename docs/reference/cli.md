@@ -30,6 +30,29 @@ usage: nuvel [-h] [--version]
 nuvel: error: the following arguments are required: command
 ```
 
+## JSON output
+
+Every command that reads state takes `--json`: `skills list`, `skills search`, `plugins list`, `plugins load`, `plugins config`, `doctor`, `traces list`, `traces show`, `traces stats`, `traces errors`, `traces recipes`, `pricing list`, `eval report`, `eval worst`, `eval drift`, `evalv2 list`, the `bots` and `fleet` commands, and the `mcp client list`, `mcp clients list`, `mcp db status` and `mcp report` commands.
+
+With `--json` a command prints exactly one JSON document on stdout and nothing else; warnings and errors still go to stderr. The flag changes only how the result is rendered, never what is computed: filters, limits and exit codes are the same as in the text view. When there is nothing to show you get the same document with empty lists, not the text view's `No … found.` line. Key names are `snake_case` and stable; each command's section lists its keys. Durations are milliseconds, costs US dollars, and a value the text view prints as `-` is `null`. A command that fails (exit `1`, error on stderr) prints nothing on stdout.
+
+```console
+$ nuvel skills search workflow --json
+{
+  "framework": "adk",
+  "query": "workflow",
+  "skills": [
+    {
+      "slug": "adk-agent-patterns",
+      "name": "adk-agent-patterns",
+      "description": "Agent architecture patterns for Google ADK 2.x — …",
+      "path": "…/nuvel/backends/adk/skills/adk-agent-patterns/SKILL.md"
+    },
+    …
+  ]
+}
+```
+
 ## `nuvel agent`
 
 Manage agents. Its only subcommand is `create`.
@@ -120,12 +143,13 @@ Inspect the knowledge skills bundled with each backend.
 List every bundled skill for a framework, one line per skill: its slug and the start of its description.
 
 ```bash
-nuvel skills list [--framework <fw>]
+nuvel skills list [--framework <fw>] [--json]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--framework`, `-f` | `adk` | Whose skills to list: `adk`, `hermes` or `claude-agent-sdk`. |
+| `--json` | off | Print `{framework, skills[]}`, each skill `{slug, name, description, path}`, with the full description. |
 
 **Exit codes:** `0`, including when there are no skills (`No skills found.`).
 
@@ -139,13 +163,14 @@ $ nuvel skills list -f hermes
 Case-insensitive substring match against each skill's slug, name and description.
 
 ```bash
-nuvel skills search <query> [--framework <fw>]
+nuvel skills search <query> [--framework <fw>] [--json]
 ```
 
 | Argument / flag | Default | Description |
 |---|---|---|
 | `<query>` | *(required)* | Text to look for. |
 | `--framework`, `-f` | `adk` | Whose skills to search. |
+| `--json` | off | Print `{framework, query, skills[]}`, skills as in `nuvel skills list --json`. |
 
 **Exit codes:** `0`, including when nothing matches (`No skills found.`).
 
@@ -164,10 +189,14 @@ Discover and inspect Agent Plugins: directories with a `plugin.json` manifest th
 Load every plugin found in the configured plugin directories and print each one's name, version, description, skills and MCP servers. Errors in a plugin are printed under it; registry errors go to stderr.
 
 ```bash
-nuvel plugins list
+nuvel plugins list [--json]
 ```
 
-Takes no arguments. The directories come from `NUVEL_PLUGIN_DIRS` (comma-separated), else `./plugins`; see `nuvel plugins config`.
+| Flag | Description |
+|---|---|
+| `--json` | Print `{plugins[], errors[]}`. Each plugin is `{name, version, description, root, skills[], mcp_servers[], errors[]}`: `skills` holds skill names, `mcp_servers` holds `{name, transport}`, a plugin's `errors` hold `{component, message}`. The top-level `errors` are the registry errors, `{plugin, component, message}`, which the text view prints on stderr. |
+
+The directories come from `NUVEL_PLUGIN_DIRS` (comma-separated), else `./plugins`; see `nuvel plugins config`.
 
 **Exit codes:** `0`, including when no plugins are found.
 
@@ -181,12 +210,13 @@ No plugins found.
 Load a single plugin directory and print it as `nuvel plugins list` would.
 
 ```bash
-nuvel plugins load <dir>
+nuvel plugins load <dir> [--json]
 ```
 
-| Argument | Description |
+| Argument / flag | Description |
 |---|---|
 | `<dir>` | Path to a plugin directory, the one holding `plugin.json`. |
+| `--json` | Print the plugin as `nuvel plugins list --json` does. |
 
 **Exit codes:** `0` loaded; `1` not a directory, or the manifest is invalid.
 
@@ -203,10 +233,12 @@ $ nuvel plugins load ./claude-code-plugin
 Print the plugin directories `nuvel plugins list` searches, and whether each exists.
 
 ```bash
-nuvel plugins config
+nuvel plugins config [--json]
 ```
 
-Takes no arguments.
+| Flag | Description |
+|---|---|
+| `--json` | Print `{plugin_dirs[]}`, each `{path, exists}`. |
 
 **Exit codes:** `0`.
 
@@ -335,7 +367,7 @@ The filters these subcommands share:
 One row per run, newest first: when, agent, trace_id prefix, duration, LLM/tool counts, tokens, cost, input snippet.
 
 ```bash
-nuvel traces list [--limit N] [--agent <q>] [--since <date>] [-s <dir>]
+nuvel traces list [--limit N] [--agent <q>] [--since <date>] [-s <dir>] [--json]
 ```
 
 | Flag | Default | Description |
@@ -344,6 +376,7 @@ nuvel traces list [--limit N] [--agent <q>] [--since <date>] [-s <dir>]
 | `--agent`, `-a` | all | Agent name substring. |
 | `--since` | all | Only runs at or after this date. |
 | `--limit`, `-n` | `50` | Max rows; `0` for all. |
+| `--json` | off | Print `{runs[]}`, newest first. Each run is `{agent, trace_id, session_id, schema, file, started_at, ended_at, duration_ms, llm_calls, tool_calls, prompt_tokens, completion_tokens, total_tokens, cost_usd, user_input, subtype, tenant}`, untruncated. `schema` is `adk`, `casdk` or `skill_run`; `tenant` is set only on skill runs. |
 
 **Exit codes:** `0`, including when no run is found (`No runs found.`).
 
@@ -363,7 +396,7 @@ WHEN                 AGENT                 ID            DUR    LLM  TOOLS  TOK 
 Full event timeline for one run, indented by `agent_depth` so sub-agent transfers and nested calls are visible.
 
 ```bash
-nuvel traces show <id> [--all] [-s <dir>]
+nuvel traces show <id> [--all] [-s <dir>] [--json]
 ```
 
 | Argument / flag | Description |
@@ -371,6 +404,7 @@ nuvel traces show <id> [--all] [-s <dir>]
 | `<id>` | A `trace_id` or `session_id`, or a prefix of one. |
 | `--all` | When the prefix matches several runs, show every one instead of refusing. |
 | `--source`, `-s` | Extra trace directory to scan. Repeatable. |
+| `--json` | Print `{runs[]}`, each run as in `nuvel traces list --json` plus `steps` (skill runs) and `events`, the raw trace records in file order. |
 
 **Exit codes:** `0` shown; `1` no run matches, or several match and `--all` was not given.
 
@@ -404,7 +438,7 @@ $ nuvel traces show c3d4
 Per-agent aggregates: runs, LLM calls, tool calls, tokens, total duration, total cost. Prints a cost-coverage warning at the bottom when runs have token usage but no cost — the symptom of a model missing from `pricing.json`. Run `nuvel doctor` to verify.
 
 ```bash
-nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>]
+nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>] [--json]
 ```
 
 | Flag | Description |
@@ -412,6 +446,7 @@ nuvel traces stats [--agent <q>] [--since <date>] [-s <dir>]
 | `--source`, `-s` | Extra trace directory to scan. Repeatable. |
 | `--agent`, `-a` | Agent name substring. |
 | `--since` | Only runs at or after this date. |
+| `--json` | Print `{agents[], total, skill_steps[], missing_cost[]}`. Each agent is `{agent, runs, llm_calls, tool_calls, total_tokens, duration_ms, cost_usd, runs_with_tokens, runs_with_cost}`; `total` is `{runs, total_tokens, cost_usd}`; each skill step is `{step, runs, errored, error_rate}` (`error_rate` from `0` to `1`); `missing_cost` holds the cost-coverage warning as `{agent, runs_missing_cost, runs_with_tokens}`. |
 
 **Exit codes:** `0`, including when no run is found.
 
@@ -433,7 +468,7 @@ Surfaces failure rate across agents. Three error shapes are kept distinct:
 - `tool_end{status=error}` — tool returned a structured error result (often user-facing: bad input, auth).
 
 ```bash
-nuvel traces errors [--recent N] [--agent <q>] [--since <date>] [-s <dir>]
+nuvel traces errors [--recent N] [--agent <q>] [--since <date>] [-s <dir>] [--json]
 ```
 
 | Flag | Description |
@@ -442,6 +477,7 @@ nuvel traces errors [--recent N] [--agent <q>] [--since <date>] [-s <dir>]
 | `--agent`, `-a` | Agent name substring. |
 | `--since` | Only runs at or after this date. |
 | `--recent`, `-r` | Instead of the summary, print the last N error events, newest first, with timestamps, agent labels and message previews. |
+| `--json` | Print the summary as `{total_errors, by_tool[], by_model[], by_error_type[]}`: `{tool, errors, calls, error_rate}`, `{model, errors}` and `{error_type, count}`, each sorted by count. With `--recent`, print `{recent[]}` instead, each `{timestamp, agent, trace_id, kind, tool, model, error_type, duration_ms, message, file}`, where `kind` is `llm_error`, `tool_exception` or `tool_error` and `message` is not cut short. |
 
 The default view is a three-pane summary: by tool (with error rate against total invocations), by model (`llm_error` only), and by `error_type`.
 
@@ -460,12 +496,13 @@ $ nuvel traces errors --recent 2
 Lists recipe candidates by category from the `_recipes/` tree written by the Skills MCP server (`record_recipe_signal`, `share_recipe`): recipes, tenants, uses, success rate, corrections, and the title of the latest shared version (`(structure only)` when the user did not share text). Counters come from each recipe's latest weekly snapshot (`nuvel.recipe_signal/2`) per tenant. Tenant values are never printed. See [Skill run traces](skill-run-traces.md#recipe-signals-and-shared-recipes).
 
 ```bash
-nuvel traces recipes [-s <dir>]
+nuvel traces recipes [-s <dir>] [--json]
 ```
 
 | Flag | Description |
 |---|---|
 | `--source`, `-s` | Extra directory to search for a `_recipes` tree. Repeatable. The feedback directory is always searched. |
+| `--json` | Print `{candidates[], skipped_old}`. Each candidate is `{category, recipes, tenants, uses, successes, corrections, days_used, statuses, success_rate, latest}`, `success_rate` from `0` to `1` and `latest` the newest shared recipe (or `null`). Tenant values are left out here too. |
 
 **Exit codes:** `0`, including when there is nothing to list.
 
@@ -485,12 +522,13 @@ Every subcommand takes `--target`/`-t {template|agent|<path>}`. Default: the act
 Print the resolved file path plus every entry with input/output prices in `$/Mtok`, sorted so diffs stay readable.
 
 ```bash
-nuvel pricing list [-t {template|agent|<path>}]
+nuvel pricing list [-t {template|agent|<path>}] [--json]
 ```
 
 | Flag | Description |
 |---|---|
 | `--target`, `-t` | Which pricing.json: `template`, `agent`, or a path. |
+| `--json` | Print `{file, models[]}`, each `{model, input_usd_per_token, output_usd_per_token}`: the raw per-token prices from the file, not `$/Mtok`. |
 
 **Exit codes:** `0`; `1` when the file is missing or unreadable.
 
@@ -974,7 +1012,7 @@ Per directory:
 Per-agent summary table: run count, mean overall, mean per component, most common flag.
 
 ```bash
-nuvel eval report [--agent <q>] [--since <date>] [-s <dir>]
+nuvel eval report [--agent <q>] [--since <date>] [-s <dir>] [--json]
 ```
 
 | Flag | Description |
@@ -982,6 +1020,7 @@ nuvel eval report [--agent <q>] [--since <date>] [-s <dir>]
 | `--source`, `-s` | Extra trace directory to scan. Repeatable. |
 | `--agent`, `-a` | Agent name substring. |
 | `--since` | Only scored rows at or after this date (`YYYY-MM-DD` or ISO; no offset means UTC). |
+| `--json` | Print `{agents[]}`, each `{agent, runs, overall, components, top_flag}`: `components` maps `success`, `quality`, `efficiency` and `reliability` to a mean or `null`, and `top_flag` is `{flag, count}` or `null`. |
 
 **Exit codes:** `0`, including when nothing is scored (`No scored runs.`).
 
@@ -997,7 +1036,7 @@ AGENT    RUNS  OVERALL  SUCC  QUAL  EFFI  RELI  TOP FLAG
 The N worst-scoring runs ranked by `overall`, with judge notes inline. The triage entry point: start your day with `nuvel eval worst -n 10`.
 
 ```bash
-nuvel eval worst [-n 10] [--agent <q>] [--since <date>] [-s <dir>]
+nuvel eval worst [-n 10] [--agent <q>] [--since <date>] [-s <dir>] [--json]
 ```
 
 | Flag | Default | Description |
@@ -1006,6 +1045,7 @@ nuvel eval worst [-n 10] [--agent <q>] [--since <date>] [-s <dir>]
 | `--agent`, `-a` | all | Agent name substring. |
 | `--since` | all | Only scored rows at or after this date. |
 | `-n` | `10` | Max rows. |
+| `--json` | off | Print `{runs[]}`, worst first, each the full `scored.jsonl` row: `{trace_id, agent, scored_at, scorer_version, rubric_version, overall, components, flags, judge, skipped_judge}`. |
 
 **Exit codes:** `0`, including when nothing is scored.
 
@@ -1022,7 +1062,7 @@ SCORE  AGENT                    TRACE_ID       FLAGS / NOTE
 Rolling-window comparison per agent. Computes mean `overall` for the last `--window-days` and compares it against the same-length window before it.
 
 ```bash
-nuvel eval drift [--window-days 7] [--threshold 0.1] [--agent <q>] [-s <dir>]
+nuvel eval drift [--window-days 7] [--threshold 0.1] [--agent <q>] [-s <dir>] [--json]
 ```
 
 | Flag | Default | Description |
@@ -1031,6 +1071,7 @@ nuvel eval drift [--window-days 7] [--threshold 0.1] [--agent <q>] [-s <dir>]
 | `--agent`, `-a` | all | Agent name substring. |
 | `--window-days` | `7` | Length of each rolling window. |
 | `--threshold` | `0.1` | Flag drift when `|delta| >= threshold`. |
+| `--json` | off | Print `{window_days, threshold, agents[]}`, each `{agent, current_mean, baseline_mean, delta, current_n, baseline_n, drifted, status}`; `status` is `ok`, `drift`, `insufficient` or `no_data`. The exit code is unchanged. |
 
 **Exit codes:** `0` no drift; `2` any agent crosses `--threshold`, so a CI or webhook layer can react without parsing.
 
@@ -1412,12 +1453,13 @@ Add examples under skills/summarize/eval/examples/, then run `nuvel evalv2 run s
 List the skills that ship an `eval/` suite, with the suite name, example count and evaluators.
 
 ```bash
-nuvel evalv2 list [--skills-dir DIR]
+nuvel evalv2 list [--skills-dir DIR] [--json]
 ```
 
 | Flag | Description |
 |---|---|
 | `--skills-dir` | Skills directory. |
+| `--json` | Print `{skills_dir, skills[]}`, each `{skill, suite, examples, evaluators}`, or `{skill, error}` for a suite that fails to load. |
 
 **Exit codes:** `0`, including when there are none.
 

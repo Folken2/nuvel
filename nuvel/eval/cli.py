@@ -21,12 +21,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from nuvel.eval.drift import detect_drift
-from nuvel.eval.report import render_drift, render_report, render_worst
+from nuvel.eval.report import (
+    drift_status,
+    render_drift,
+    render_report,
+    render_worst,
+    summarize_report,
+    worst_runs,
+)
 from nuvel.eval.scorer import ScoreSession
 from nuvel.eval.writer import load_scored_index
 from nuvel.traces_cli import _discover_trace_dirs, _parse_since
@@ -89,15 +98,26 @@ def _cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_json(payload) -> None:
+    """The whole `--json` view: one document on stdout."""
+    print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     scored = _apply_filters(_load_all_scored(args.source), args)
-    print(render_report(scored))
+    if args.json:
+        _print_json({"agents": summarize_report(scored)})
+    else:
+        print(render_report(scored))
     return 0
 
 
 def _cmd_worst(args: argparse.Namespace) -> int:
     scored = _apply_filters(_load_all_scored(args.source), args)
-    print(render_worst(scored, n=args.n))
+    if args.json:
+        _print_json({"runs": [asdict(s) for s in worst_runs(scored, n=args.n)]})
+    else:
+        print(render_worst(scored, n=args.n))
     return 0
 
 
@@ -106,7 +126,14 @@ def _cmd_drift(args: argparse.Namespace) -> int:
     if args.agent:
         scored = [s for s in scored if args.agent.lower() in s.agent.lower()]
     reports = detect_drift(scored, window_days=args.window_days, threshold=args.threshold)
-    print(render_drift(reports))
+    if args.json:
+        _print_json({
+            "window_days": args.window_days,
+            "threshold": args.threshold,
+            "agents": [{**asdict(r), "status": drift_status(r)} for r in reports],
+        })
+    else:
+        print(render_drift(reports))
     any_drift = any(r.drifted for r in reports)
     return 2 if any_drift else 0
 
@@ -122,6 +149,11 @@ def _add_common_filters(p: argparse.ArgumentParser) -> None:
     p.add_argument("--agent", "-a", default=None, help="Filter by agent name (substring).")
     p.add_argument("--since", default=None,
                    help="Only scored rows at/after this date (YYYY-MM-DD or ISO).")
+
+
+def _add_json_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--json", action="store_true",
+                   help="Print one JSON document on stdout instead of the text view.")
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -147,12 +179,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_report = sub.add_parser("report", help="Per-agent summary of scored runs.")
     _add_source_flag(p_report)
     _add_common_filters(p_report)
+    _add_json_flag(p_report)
     p_report.set_defaults(func=_cmd_report)
 
     p_worst = sub.add_parser("worst", help="N worst-scoring runs.")
     _add_source_flag(p_worst)
     _add_common_filters(p_worst)
     p_worst.add_argument("-n", type=int, default=10, help="Max rows (default 10).")
+    _add_json_flag(p_worst)
     p_worst.set_defaults(func=_cmd_worst)
 
     p_drift = sub.add_parser("drift", help="Rolling-window drift detection per agent.")
@@ -162,4 +196,5 @@ def register(subparsers: argparse._SubParsersAction) -> None:
                          help="Window length (default 7).")
     p_drift.add_argument("--threshold", type=float, default=0.1,
                          help="Flag drift when |delta| >= this (default 0.1).")
+    _add_json_flag(p_drift)
     p_drift.set_defaults(func=_cmd_drift)

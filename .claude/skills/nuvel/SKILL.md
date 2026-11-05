@@ -85,6 +85,7 @@ Verify: `ls generated-agents/<name>/` should show `<snake_name>/`, `run_adk.py`,
 ```bash
 nuvel skills list                    # see what's available
 nuvel skills search <topic>          # narrow by keyword
+nuvel skills list --json             # same list as one JSON document (every read command takes --json)
 ```
 
 Available skills (all live in `nuvel/backends/adk/skills/<slug>/SKILL.md` inside the nuvel repo):
