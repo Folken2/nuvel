@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `record_ui_event` tool on the Skills MCP server (in `nuvel-mcp`, [Folken2/nuvel-mcp#5](https://github.com/Folken2/nuvel-mcp/pull/5)): records one content-free `nuvel.ui_event/1` page visit on a plugin surface (the chief-of-staff `dashboard`), with catalogued event ids mapped to counts, and is on by default over HTTP. `check_skill_health` with `skill_name: "dashboard"` and `plugin` adds a `ui` block (visits and summed event counts, last 30 days). Schema and privacy argument: `docs/reference/ui-events.md`. Ships with the next `nuvel-mcp` release; the pin here is bumped then.
 - `nuvel --version`. CI now builds the `nuvel-cli` wheel and installs it into a fresh venv (`wheel-install`), and installs the published `nuvel-cli` from PyPI (`published-install`), so packaging breakage fails CI.
 - `nuvel doctor --json`, and new doctor checks: install integrity, `.env` and Hermes `config.yaml` validity, writable state dirs, provider reachability, stale caches. Every `[WARN]` and `[FAIL]` now prints one next step.
 - `platform_sync`: with `NUVEL_PLATFORM_SYNC=1` and `NUVEL_PLATFORM_DATABASE_URL`, the meta-agent writes each completed run to Postgres (`runs`, `trace_events`), `nuvel evalv2 run` writes `eval_results` and `nuvel pricing sync|add` writes `model_prices`. Re-syncing never duplicates rows; with the database unconfigured or unreachable the run completes normally and logs one warning. Schema and row shapes: `docs/reference/platform-sync.md`.
