@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `nuvel-mcp` is pinned to v0.6.0 (was v0.5.0), which adds the `record_ui_event` tool and a `ui` block in `check_skill_health` for plugin dashboards.
 - **Breaking:** `nuvel doctor` now exits non-zero in more cases: with no API key for the configured provider (including a provider it doesn't recognise, which is expected to use `<PROVIDER>_API_KEY`), offline, or with a placeholder still in a required key. An API key that isn't shaped like one now fails too (spaces or non-ASCII characters, too short, too repetitive, or the wrong prefix for its provider). Scripts relying on its old exit code should expect this.
 - `claude-agent-sdk` is a supported `--framework` choice again, alongside `adk` and `hermes`, and `nuvel agent create`, `nuvel skills list` and `nuvel skills search` offer exactly those three.
 - **Breaking:** `record_recipe_signal` takes `nuvel.recipe_signal/2`, a weekly content-free snapshot (`status` of `draft`, `active` or `retired`, plus `uses`, `successes`, `corrections`, `days_used`), and `nuvel.recipe_signal/1` (per-event signals with an `event` field) is removed. `nuvel traces recipes` and the dashboard `/recipes` page read the latest `/2` snapshot per recipe and `nuvel.recipe/3` recipes; a recipe without text shows its steps only.

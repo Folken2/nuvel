@@ -11,4 +11,4 @@ croniter>=2.0.0,<7.0.0
 asyncpg>=0.29,<1.0
 pgvector>=0.3,<1.0
 # nuvel-mcp will come from PyPI once it is published there; until then the release is its git tag (no PyPI credential yet).
-nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@v0.5.0
+nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@v0.6.0

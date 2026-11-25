@@ -11,6 +11,6 @@
 # Never add a local path to either file: requirements.txt would carry it into the published
 # metadata and break every consumer of the released package.
 # nuvel-mcp will come from PyPI once it is published there; until then the release is its git tag (no PyPI credential yet).
-nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@v0.5.0
+nuvel-mcp @ git+https://github.com/Folken2/nuvel-mcp@v0.6.0
 -r requirements.txt
 -e .[test]
